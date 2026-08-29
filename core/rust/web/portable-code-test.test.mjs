@@ -41,22 +41,20 @@ test("portable code.test runs through the browser wasm runtime", () => {
   assert.equal(result, "[:passed 1 2 :timeout 25]");
 });
 
-test("canonical component and context libraries run through browser wasm", () => {
+test("canonical context libraries run through browser wasm", () => {
   const runtime = new Runtime();
   const result = runtime.eval(
     "(ns std-context-browser-probe" +
-      " (:require [std.foundation.component :as component]" +
-      "           [std.context :as context]" +
+      " (:require [std.context :as context]" +
       "           [std.lib.context :as legacy]))" +
       " (let [runtime (context/runtime-null)" +
       "       legacy-runtime (legacy/runtime-null)]" +
-      " [(component/started? runtime)" +
-      "  (context/call runtime :a :b)" +
+      " [(context/call runtime :a :b)" +
       "  (instance? context/runtime-null-type legacy-runtime)" +
       "  (legacy/call legacy-runtime :c)])",
   );
 
-  assert.equal(result, "[true [:a :b] true [:c]]");
+  assert.equal(result, "[[:a :b] true [:c]]");
 });
 
 test("portable command templates emit structured reports through browser wasm", () => {

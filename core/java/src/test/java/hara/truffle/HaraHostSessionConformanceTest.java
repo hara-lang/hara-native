@@ -32,14 +32,6 @@ public class HaraHostSessionConformanceTest {
     try (SessionKernel kernel = new SessionKernel(false, false)) {
       SessionKernel.Session alpha = kernel.create(SessionModel.SessionId.parse("alpha"));
       SessionKernel.Session beta = kernel.create(SessionModel.SessionId.parse("beta"));
-      assertTrue(
-          alpha
-              .eval("(= Host std.native.Host std.foundation/Host)")
-              .asBoolean());
-      assertTrue(
-          beta
-              .eval("(= Host std.native.Host std.foundation/Host)")
-              .asBoolean());
       Value alphaHost = alpha.eval("Host");
       Value betaHost = beta.eval("Host");
       assertFalse(alphaHost.equals(betaHost));

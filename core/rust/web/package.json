@@ -18,6 +18,7 @@
     "test:provider-hosts": "node --test ../../../providers/github/hta/host.test.mjs ../../../providers/webdav/hta/host.test.mjs ../../../providers/s3/hta/host.test.mjs ../../../providers/google-drive/hta/host.test.mjs ../../../providers/sftp/hta/host.test.mjs ../../../providers/indexeddb/hta/host.test.mjs",
     "test:hta-provider-browser": "node --test packages/hta/provider-browser.test.mjs",
     "test:hta": "node --test hta.test.js hta.test.mjs hta-sandbox.test.mjs",
+    "test:bytecode-conformance": "node --test bytecode-conformance.test.mjs",
     "test:hta:pack": "node test-packed-hta.mjs",
     "test:wasm-runtime": "node --test package-cache.test.mjs",
     "test:browser": "npm run test:browser-sdk",

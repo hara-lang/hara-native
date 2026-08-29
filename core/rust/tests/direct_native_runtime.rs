@@ -172,7 +172,7 @@ fn direct_native_compiles_async_try_finally_with_recur() {
         .expect("catch bindings must remain visible in nested functions");
     let program = runtime
         .compile_bytecode(
-            "(fn ^:async [] (try (loop [] (do (std.foundation.coroutine/yield 1) (recur))) (finally nil)))",
+            "(fn ^:async [] (try (loop [] (do (std.native.Coroutine/yield 1) (recur))) (finally nil)))",
         )
         .expect("async try/finally must compile to a direct program");
     let function = &program.functions[1];

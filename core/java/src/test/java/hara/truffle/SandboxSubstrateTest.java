@@ -42,11 +42,14 @@ public class SandboxSubstrateTest {
           42L,
           kernel.root().eval("(deref (std.lib.kernel/sandbox-eval " + id + " \"(+ 40 2)\"))").asLong());
       assertEquals(
-          6L,
+          ":std.native.Vector",
           kernel
               .root()
-              .eval("(deref (std.lib.kernel/sandbox-call " + id + " 'std.foundation/+ [1 2 3]))")
-              .asLong());
+              .eval(
+                  "(deref (std.lib.kernel/sandbox-call "
+                      + id
+                      + " 'std.native.Base/type [[1 2 3]]))")
+              .toString());
       assertFalse(
           kernel
               .root()
@@ -142,11 +145,17 @@ public class SandboxSubstrateTest {
       SandboxModel.SandboxId sandbox = kernel.openSandbox(SandboxModel.SandboxSpec.inProcess());
       assertEquals(sessionsBefore, kernel.size());
       assertEquals(41L, eval(kernel, sandbox, "(def answer 41) answer"));
-      assertEquals(42L, call(kernel, sandbox, "std.foundation/+", List.of(41L, 1L)));
-      String inertSource = "(do (def injected 99) :executed)";
       assertEquals(
-          inertSource,
-          call(kernel, sandbox, "std.foundation/identity", List.of(inertSource)));
+          ":std.native.Vector",
+          call(kernel, sandbox, "std.native.Base/type", List.of(List.of(41L, 1L))).toString());
+      assertEquals(
+          ":std.native.String",
+          call(
+                  kernel,
+                  sandbox,
+                  "std.native.Base/type",
+                  List.of("(do (def injected 99) :executed)"))
+              .toString());
       assertEquals(SandboxModel.SandboxState.OPEN, kernel.sandboxStatus(sandbox).state());
       assertFalse(kernel.cancelSandbox(sandbox));
       assertEquals(SandboxModel.SandboxState.OPEN, kernel.sandboxStatus(sandbox).state());

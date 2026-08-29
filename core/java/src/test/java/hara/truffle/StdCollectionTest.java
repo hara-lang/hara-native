@@ -89,9 +89,6 @@ public class StdCollectionTest {
       assertThrows(RuntimeException.class, () -> context.eval(HaraLanguage.ID, "(ordered-map)"));
       assertThrows(
           RuntimeException.class,
-          () -> context.eval(HaraLanguage.ID, "(std.foundation/ordered-map)"));
-      assertThrows(
-          RuntimeException.class,
           () -> context.eval(HaraLanguage.ID, "(collection/trie :alpha 7)"));
     }
   }

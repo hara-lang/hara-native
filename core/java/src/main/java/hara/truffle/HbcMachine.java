@@ -657,7 +657,7 @@ public final class HbcMachine {
           pop(stack);
           stack.add(
               invokeGlobal(
-                  context, "std.foundation.coroutine/await", new Object[] {awaitable}));
+                  context, "std.native.Coroutine/await", new Object[] {awaitable}));
         }
         case YIELD -> {
           StdFoundationCoroutine.requireYieldContext();
@@ -683,7 +683,7 @@ public final class HbcMachine {
               stack,
               new ArrayList<>(calls));
           Object resumed =
-              invokeGlobal(context, "std.foundation.coroutine/yield", new Object[] {yielded});
+              invokeGlobal(context, "std.native.Coroutine/yield", new Object[] {yielded});
           HbcBoundary.Transition resume =
               new HbcBoundary.Transition(
                   HbcBoundary.TransitionKind.MACHINE_RESUME,

@@ -84,13 +84,12 @@ fn macro_introduced_lexical_bindings_are_not_captures() {
 #[test]
 fn destructuring_lowers_across_bindings_parameters_and_recur() {
     let mut runtime = Runtime::core();
-    runtime.use_namespace("std.foundation");
     assert_eq!(
         runtime
             .eval_bytecode_native(
                 "(let [[a b & more :as all] [1 2 3 4]
                         {:keys [x] :or {x 9} :as m} {:x 5}]
-                   [a b more all x m])"
+                   [a b (std.native.Base/vec more) all x m])"
             )
             .unwrap(),
         "[1 2 [3 4] [1 2 3 4] 5 {:x 5}]"
@@ -115,9 +114,11 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
     assert_eq!(
         runtime
             .eval_bytecode_native(
-                "(map (fn [{:keys [name optional?]}]
-                        [name optional?])
-                      [{:name \"id\" :optional? true}])"
+                "(std.native.Base/vec
+                   (std.native.Iter/iter-map
+                     (fn [{:keys [name optional?]}]
+                       [name optional?])
+                     [{:name \"id\" :optional? true}]))"
             )
             .unwrap(),
         "[[\"id\" true]]"
@@ -127,12 +128,14 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
             .eval_bytecode_native(
                 "(defn parts [form]
                    (let [[_ head & tail] form]
-                     (if (symbol? head)
-                       [head (first tail) (rest tail)]
+                     (if (= (std.native.Base/type head) :std.native.Symbol)
+                       [head
+                        (std.protocol.ipeekfirst.IPeekFirst/peek-first tail)
+                        (std.protocol.ipopfirst.IPopFirst/pop-first tail)]
                        [nil head tail])))
                  (defn compatible? [form]
                    (let [[name] (parts form)]
-                     (nil? name)))
+                     (= name nil)))
                  (compatible? '(fn [x] x))"
             )
             .unwrap(),
@@ -143,7 +146,8 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
             .eval_bytecode_native(
                 "(loop [[head & tail] [1 2 3] out []]
                    (if head
-                     (recur tail (conj out head))
+                     (recur (std.native.Base/vec tail)
+                            (std.protocol.iconj.IConj/conj out head))
                      out))"
             )
             .unwrap(),
@@ -163,10 +167,11 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
         runtime
             .eval_bytecode_native(
                 "(= (let [require-fields (fn [source fields]
-                          (reduce (fn [out field]
-                                    (if (nil? (get source field)) out out))
-                                  source
-                                  fields))
+                          (std.protocol.ireduce.IReduce/reduce
+                            fields
+                            (fn [out field]
+                              (if (= nil (std.protocol.ilookup.ILookup/lookup source field)) out out))
+                            source))
                        profile (fn [value]
                                  (require-fields value
                                                  [:profile/id
@@ -186,10 +191,11 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
         runtime
             .eval_bytecode_native(
                 "(do (defn __gate-require-fields [source fields]
-                   (reduce (fn [out field]
-                             (if (nil? (get source field)) out out))
-                           source
-                           fields))
+                   (std.protocol.ireduce.IReduce/reduce
+                     fields
+                     (fn [out field]
+                       (if (= nil (std.protocol.ilookup.ILookup/lookup source field)) out out))
+                     source))
                  (defn __gate-profile [value]
                    (__gate-require-fields value
                                           [:profile/id
@@ -210,23 +216,24 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
         "__gate.grammar",
         "(ns __gate.grammar)
          (defn fail [message data]
-           (throw (ex-info message data)))
+           (throw message))
          (defn require-fields [source fields]
-           (reduce (fn [out field]
-                     (if (nil? (get source field))
+           (std.protocol.ireduce.IReduce/reduce fields
+                     (fn [out field]
+                     (if (= nil (std.protocol.ilookup.ILookup/lookup source field))
                        (fail \"Missing grammar source field\"
                              {:field field :source source})
                        out))
-                   source
-                   fields))
+                     source))
          (defn source [kind id version value]
-           (if (or (nil? id) (not (number? version)) (<= version 0))
+           (if (or (= id nil) (= false (std.native.Base/number? version)) (<= version 0))
              (fail \"Invalid grammar source identity\"
                    {:kind kind :id id :version version})
-             (assoc value
-                    :source/kind kind
-                    :source/id id
-                    :source/version version)))
+             (std.protocol.iassoc.IAssoc/assoc
+               (std.protocol.iassoc.IAssoc/assoc
+                 (std.protocol.iassoc.IAssoc/assoc value :source/kind kind)
+                 :source/id id)
+               :source/version version)))
          (defn profile [value]
            (source :profile
                    (:profile/id value)
@@ -243,23 +250,24 @@ fn destructuring_lowers_across_bindings_parameters_and_recur() {
     runtime
         .eval_bytecode_native(
             "(defn fail [message data]
-               (throw (ex-info message data)))
+               (throw message))
              (defn require-fields [source fields]
-               (reduce (fn [out field]
-                         (if (nil? (get source field))
+               (std.protocol.ireduce.IReduce/reduce fields
+                         (fn [out field]
+                         (if (= nil (std.protocol.ilookup.ILookup/lookup source field))
                            (fail \"Missing grammar source field\"
                                  {:field field :source source})
                            out))
-                       source
-                       fields))
+                         source))
              (defn source [kind id version value]
-               (if (or (nil? id) (not (number? version)) (<= version 0))
+               (if (or (= id nil) (= false (std.native.Base/number? version)) (<= version 0))
                  (fail \"Invalid grammar source identity\"
                        {:kind kind :id id :version version})
-                 (assoc value
-                        :source/kind kind
-                        :source/id id
-                        :source/version version)))
+                 (std.protocol.iassoc.IAssoc/assoc
+                   (std.protocol.iassoc.IAssoc/assoc
+                     (std.protocol.iassoc.IAssoc/assoc value :source/kind kind)
+                     :source/id id)
+                   :source/version version)))
              (defn profile [value]
                (source :profile
                        (:profile/id value)

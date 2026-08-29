@@ -96,13 +96,13 @@ public class StdLibFsTest {
                   HaraLanguage.ID,
                   "(do (std.fs/create-directory \"/src/sub\" {:parents? true})"
                       + "    (std.fs/write-bytes \"/src/one\""
-                      + "                        (std.foundation.string/encode-utf8 \"one\"))"
+                      + "                        (std.native.String/encode-utf8 \"one\"))"
                       + "    (std.fs/write-bytes \"/src/sub/two\""
-                      + "                        (std.foundation.string/encode-utf8 \"two\"))"
+                      + "                        (std.native.String/encode-utf8 \"two\"))"
                       + "    (let [mapping (std.fs/copy \"/src\" \"/dst\")"
                       + "          bytes (std.fs/read-bytes \"/dst/one\")]"
-                      + "      [(std.foundation.string/decode-utf8 bytes)"
-                      + "       (std.foundation.string/decode-utf8"
+                      + "      [(std.native.String/decode-utf8 bytes)"
+                      + "       (std.native.String/decode-utf8"
                       + "        (std.fs/read-bytes \"/dst/sub/two\"))"
                       + "       (promise? mapping)"
                       + "       (promise? bytes)]))")

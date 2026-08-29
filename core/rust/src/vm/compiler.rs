@@ -494,7 +494,7 @@ struct FnContext {
     /// Whether the function has a `& rest` parameter (occupying the slot
     /// directly above the fixed params, below the captures).
     variadic: bool,
-    /// Whether `std.foundation.coroutine/await` may be emitted in this
+    /// Whether `std.native.Coroutine/await` may be emitted in this
     /// function. Every function context resets this flag.
     suspend_allowed: bool,
     /// Whether calls to this prototype return a result promise.
@@ -728,18 +728,23 @@ impl Compiler {
     /// Resolves coroutine forms by canonical Var identity so aliases and
     /// referred names behave exactly like fully-qualified source.
     fn is_coroutine_var(&self, name: &str, member: &str) -> bool {
-        let canonical = format!("std.foundation.coroutine/{member}");
-        if name == canonical {
+        let canonical = format!("std.native.Coroutine/{member}");
+        let legacy = format!("std.foundation.coroutine/{member}");
+        if name == canonical || name == legacy {
             return true;
         }
         crate::core::namespace_registry()
             .ok()
-            .and_then(|registry| {
-                let source = registry.resolve(&crate::lang::data::Symbol::parse(name))?;
-                let target = registry.resolve(&crate::lang::data::Symbol::parse(&canonical))?;
-                Some(source.same_identity(&target))
+            .is_some_and(|registry| {
+                let Some(source) = registry.resolve(&crate::lang::data::Symbol::parse(name)) else {
+                    return false;
+                };
+                [canonical, legacy].into_iter().any(|target| {
+                    registry
+                        .resolve(&crate::lang::data::Symbol::parse(&target))
+                        .is_some_and(|target| source.same_identity(&target))
+                })
             })
-            .unwrap_or(false)
     }
 
     fn is_host_call_var(&self, name: &str) -> bool {

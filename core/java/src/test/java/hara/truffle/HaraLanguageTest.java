@@ -127,23 +127,6 @@ public class HaraLanguageTest {
   }
 
   @Test
-  public void notAndCompareAreFoundationOwned() {
-    try (Context context = context()) {
-      assertEquals(
-          "[true false -1 0 1]",
-          context
-              .eval(
-                  HaraLanguage.ID,
-                  "[(std.foundation/not nil) "
-                      + " (std.foundation/not true) "
-                      + " (std.foundation/compare 1 2) "
-                      + " (std.foundation/compare 2 2) "
-                      + " (std.foundation/compare 2 1)]")
-              .toString());
-    }
-  }
-
-  @Test
   public void foundationProtocolPredicatesUseSatisfies() {
     try (Context context = context()) {
       assertEquals(
@@ -225,7 +208,7 @@ public class HaraLanguageTest {
           context
               .eval(
                   HaraLanguage.ID,
-                  "(do (defn promised-value [] (std.foundation.promise/from 9)) "
+                  "(do (defn promised-value [] (std.native.Promise/from 9)) "
                       + "(deref (promised-value)))")
               .asLong());
     }
@@ -1993,21 +1976,6 @@ public class HaraLanguageTest {
                 .eval(HaraLanguage.ID, protocolNamespace + "." + protocol + "/" + protocol)
                 .toString()
                 .contains(protocolNamespace + "." + protocol));
-        assertTrue(
-            protocol,
-            context
-                .eval(
-                    HaraLanguage.ID,
-                    "(= std.foundation/"
-                        + protocol
-                        + " "
-                        + protocolNamespace
-                        + "."
-                        + protocol
-                        + "/"
-                        + protocol
-                        + ")")
-                .asBoolean());
       }
       assertEquals(
           3L,
@@ -2030,7 +1998,7 @@ public class HaraLanguageTest {
           context
               .eval(
                   HaraLanguage.ID,
-                  "(std.protocol.ipromise.IPromise/state (std.foundation.promise/from 7))")
+                  "(std.protocol.ipromise.IPromise/state (std.native.Promise/from 7))")
               .toString());
       assertTrue(
           context
@@ -2049,11 +2017,6 @@ public class HaraLanguageTest {
               PolyglotException.class,
               () -> context.eval(HaraLanguage.ID, "std.protocol.ipeekfirst/peek-first"));
       assertTrue(legacyProtocolMethod.getMessage().contains("Unbound symbol"));
-      PolyglotException obsoleteMethod =
-          assertThrows(
-              PolyglotException.class,
-              () -> context.eval(HaraLanguage.ID, "std.foundation/ICount/count"));
-      assertTrue(obsoleteMethod.getMessage().contains("Unbound symbol"));
       for (String unavailableProtocol : unavailableProtocols) {
         String hiddenNamespace =
             "std.protocol." + unavailableProtocol.toLowerCase(java.util.Locale.ROOT);
@@ -2065,14 +2028,6 @@ public class HaraLanguageTest {
                         HaraLanguage.ID,
                         hiddenNamespace + "." + unavailableProtocol + "/" + unavailableProtocol));
         assertTrue(hiddenCanonical.getMessage().contains("Unbound symbol"));
-        PolyglotException hiddenFoundation =
-            assertThrows(
-                PolyglotException.class,
-                () ->
-                    context.eval(
-                        HaraLanguage.ID,
-                        "std.foundation/" + unavailableProtocol));
-        assertTrue(hiddenFoundation.getMessage().contains("Unbound symbol"));
       }
     }
   }
@@ -2716,8 +2671,7 @@ public class HaraLanguageTest {
       // through the same builtin fast path as a plain Invoke node.
       context.eval(
           HaraLanguage.ID,
-          "(ns fast-path (:config {:blank true}) "
-              + "(:require [std.foundation :refer :all :exclude [get]])) (def get str)");
+          "(ns fast-path (:config {:blank true})) (def get str)");
       assertEquals("ab", context.eval(HaraLanguage.ID, "(get \"a\" \"b\")").asString());
     }
   }
@@ -2791,8 +2745,7 @@ public class HaraLanguageTest {
           context
               .eval(
                   HaraLanguage.ID,
-                  "(ns sequence-shadow (:config {:blank true}) "
-                      + "(:require [std.foundation :refer :all :exclude [first rest]])) "
+                  "(ns sequence-shadow (:config {:blank true})) "
                       + "(= :redefined (do (def first (fn [x] :redefined)) (first [1 2 3])))")
               .asBoolean());
       assertTrue(

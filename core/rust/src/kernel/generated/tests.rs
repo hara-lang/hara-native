@@ -2,30 +2,6 @@ use super::GeneratedNamespaceConfig;
 use crate::kernel::parse_forms;
 
 #[test]
-fn configures_defaults_exclusions_aliases_and_requires_without_sources() {
-    let forms = parse_forms(
-        "(:config {:rename {:exclude [bytes] :alias {string text}}}) \
-             (:require [hara.lib.string :as s :refer [trim]])",
-    )
-    .unwrap();
-    let config = GeneratedNamespaceConfig::configure(&forms).unwrap();
-    let rewritten = config.rewrite(
-        parse_forms("(trim (s/trim (text/upper \" x \")))")
-            .unwrap()
-            .remove(0),
-    );
-    let display = format!("{rewritten:?}");
-    assert!(display.contains("std.foundation.string/trim"));
-    assert!(display.contains("std.foundation.string/upper"));
-    assert!(display.contains("bytes/count") == false);
-    assert!(GeneratedNamespaceConfig::configure(
-        &parse_forms("(:require [missing.lib :as x])").unwrap()
-    )
-    .unwrap_err()
-    .contains("missing generated namespace"));
-}
-
-#[test]
 fn rejects_removed_namespace_clause_without_intrinsics_compatibility() {
     let forms = parse_forms("(:intrinsics :all)").unwrap();
     assert!(GeneratedNamespaceConfig::configure(&forms)
@@ -61,25 +37,6 @@ fn config_role_defaults_validates_and_is_retained() {
     )
     .unwrap_err()
     .contains(":config :role expects :default, :internal, or :facade"));
-}
-
-#[test]
-fn require_access_accepts_only_literal_true() {
-    let config = GeneratedNamespaceConfig::configure(
-        &parse_forms("(:require [std.foundation.string :access true])").unwrap(),
-    )
-    .unwrap();
-    assert!(config.internal_access().contains("std.foundation.string"));
-    for value in ["false", "1", ":true", "nil"] {
-        let error = GeneratedNamespaceConfig::configure(
-            &parse_forms(&format!(
-                "(:require [std.foundation.string :access {value}])"
-            ))
-            .unwrap(),
-        )
-        .unwrap_err();
-        assert!(error.contains(":require :access expects true"), "{error}");
-    }
 }
 
 #[test]
@@ -192,28 +149,24 @@ fn records_lazy_alias_without_an_eager_dependency() {
 #[test]
 fn coroutine_aliases_rewrite_to_fiber_control_forms() {
     let mut config = GeneratedNamespaceConfig::defaults();
-    config.set_global_aliases([("co".to_owned(), "std.foundation.coroutine".to_owned())]);
+    config.set_global_aliases([("co".to_owned(), "std.native.Coroutine".to_owned())]);
     assert_eq!(
         config
             .rewrite(parse_forms("co/yield").unwrap().remove(0))
             .to_string(),
-        "std.foundation.coroutine/yield"
+        "std.native.Coroutine/yield"
     );
     assert_eq!(
         config
             .rewrite(parse_forms("co/await").unwrap().remove(0))
             .to_string(),
-        "std.foundation.coroutine/await"
+        "std.native.Coroutine/await"
     );
 }
 
 #[test]
-fn foundation_aliases_are_source_declared_not_runtime_defaults() {
+fn global_aliases_are_source_declared_not_runtime_defaults() {
     let config = GeneratedNamespaceConfig::defaults();
-    assert!(config
-        .aliases()
-        .into_iter()
-        .all(|(_, namespace)| !namespace.starts_with("std.foundation.")));
     assert_eq!(config.global_alias(), None);
 
     let declared =
@@ -246,15 +199,6 @@ fn set_global_records_qualified_vars_and_rejects_unqualified_vars() {
     )
     .unwrap_err()
     .contains(":config :set-global expects qualified Vars"));
-}
-
-#[test]
-fn foundation_require_exclusions_remove_implicit_refers() {
-    let config = GeneratedNamespaceConfig::configure(
-        &parse_forms("(:require [std.foundation :refer :all :exclude [eval-in-ns]])").unwrap(),
-    )
-    .unwrap();
-    assert!(config.excluded_foundation().contains("eval-in-ns"));
 }
 
 #[test]

@@ -1804,7 +1804,7 @@ mod tests {
         let mut environment = HashMap::new();
         environment.insert("p".into(), Value::Promise(promise.clone()));
         let mut fiber = EvalFiber::start(
-            "(do (def entry [:task (fn [] (std.foundation.coroutine/await p))]) \
+            "(do (def entry [:task (fn [] (std.native.Coroutine/await p))]) \
              ((nth entry 1)))",
             environment,
         )

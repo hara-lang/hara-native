@@ -69,7 +69,7 @@ fn public_snapshot_exposes_deterministic_bounded_owned_globals() {
     assert!(snapshot.contains("\"symbol\":\"user/g000\""));
     assert!(snapshot.contains("\"symbol\":\"user/g063\""));
     assert!(!snapshot.contains("\"symbol\":\"user/g064\""));
-    assert!(!snapshot.contains("std.foundation/"));
+    assert!(!snapshot.contains("std.native.Base/"));
     assert!(snapshot.contains("\"origin\":\"source\""));
     assert!(snapshot.contains("\"display\":\":abc…\""));
     assert!(snapshot.contains("\"truncated\":true"));

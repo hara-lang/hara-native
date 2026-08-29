@@ -495,9 +495,9 @@ function expandBuiltinAliases(source) {
     if (source.startsWith("co/await", cursor) &&
         !/[A-Za-z0-9*+!?._/-]/.test(source[cursor - 1] ?? "") &&
         !/[A-Za-z0-9*+!?._/-]/.test(source[cursor + 8] ?? "")) {
-      // co/ is a builtin alias. Lower it to the raw runtime's fiber-aware
-      // special form without registering or requiring a public namespace.
-      output += "std.foundation.coroutine/await";
+      // co/ is a builtin alias. Lower it to the raw runtime's native
+      // fiber-aware special form without registering a package namespace.
+      output += "std.native.Coroutine/await";
       cursor += 8;
       continue;
     }

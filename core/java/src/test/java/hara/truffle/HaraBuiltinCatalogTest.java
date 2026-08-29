@@ -17,9 +17,7 @@ public class HaraBuiltinCatalogTest {
         Set.of("evaluation", "definitions", "namespaces", "interop"),
         HaraBuiltinCatalog.LANGUAGE_BUILTINS.keySet());
     assertTrue(HaraBuiltinCatalog.SPECIAL_SYMBOLS.contains("def"));
-    assertFalse(HaraBuiltinCatalog.SPECIAL_SYMBOLS.contains("std.foundation/def"));
-    assertEquals(
-        "std.foundation.string", HaraBuiltinCatalog.GENERATED_LIBRARIES.get("string"));
+    assertFalse(HaraBuiltinCatalog.SPECIAL_SYMBOLS.contains("std.native/def"));
     assertEquals("str", HaraBuiltinCatalog.DEFAULT_LIBRARY_ALIASES.get("string"));
     assertTrue(HaraBuiltinCatalog.MARKER_METHOD_NAMES.contains("get"));
     assertTrue(HaraNativeDeclarations.METHODS.containsKey("Kernel"));

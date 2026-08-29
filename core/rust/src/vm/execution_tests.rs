@@ -30,16 +30,16 @@ fn eval_embedded_foundation(source: &str) -> String {
 }
 
 #[test]
-fn embedded_foundation_reduce_executes_in_bytecode() {
+fn protocol_count_executes_in_bytecode() {
     let registry = crate::embedding_namespace_registry();
     let program = compile_source_with(
-        "(reduce (fn [sum values] (std.foundation/+ sum (reduce std.foundation/+ 0 values))) 0 [[1 2] [3 4]])",
+        "(std.protocol.icount.ICount/count [1 2 3 4])",
         &registry,
     )
-    .expect("reduce compiles against the embedded Foundation registry");
+    .expect("protocol count compiles against the native registry");
     assert_eq!(
         execute_program_with_globals(Rc::new(program), &registry).unwrap(),
-        Value::Number(10)
+        Value::Number(4)
     );
 }
 
@@ -234,35 +234,6 @@ fn bytecode_variadic_macro_forwards_rest_to_helper_in_order() {
         runtime.eval_bytecode_native("(choose-third nil nil (+ 19 23))"),
         Ok("42".into())
     );
-}
-
-#[test]
-fn foundation_source_compiles_to_bytecode() {
-    let source = crate::EMBEDDED_HAL_RESOURCES
-        .iter()
-        .find(|(namespace, _, _)| *namespace == "std.foundation")
-        .expect("embedded std.foundation source")
-        .2;
-    let body = source
-        .split_once("(ns std.foundation)")
-        .expect("foundation namespace declaration")
-        .1;
-    let mut runtime = Runtime::core();
-    assert!(runtime.use_namespace("std.foundation"));
-    let artifact = runtime
-        .compile_bytecode_artifact(body)
-        .unwrap_or_else(|error| panic!("foundation compile failed: {error}"));
-
-    let mut loaded = Runtime::core();
-    assert!(loaded.use_namespace("std.foundation"));
-    crate::core::with_definition_origin(crate::kernel::VarOrigin::HalFallback, || {
-        loaded
-            .eval_bytecode_artifact(&artifact)
-            .unwrap_or_else(|error| panic!("foundation execute failed: {error}"));
-    });
-    assert!(loaded.use_namespace("std.foundation"));
-    assert_eq!(loaded.eval_native("(map inc [1 2 3])").unwrap(), "[2 3 4]");
-    assert_eq!(loaded.eval_native("(if-not false 42)").unwrap(), "42");
 }
 
 #[test]
@@ -1164,7 +1135,7 @@ fn global_form_errors_issue_223() {
 
 #[test]
 fn async_metadata_and_await_lowering_are_explicit() {
-    let program = compile_source("(defn ^:async delayed [p] (std.foundation.coroutine/await p))")
+    let program = compile_source("(defn ^:async delayed [p] (std.native.Coroutine/await p))")
         .expect("async function must compile");
     let async_proto = program
         .functions
@@ -1177,7 +1148,7 @@ fn async_metadata_and_await_lowering_are_explicit() {
 
 #[test]
 fn await_infers_a_suspending_synchronous_function() {
-    let program = compile_source("(defn delayed [p] (std.foundation.coroutine/await p))")
+    let program = compile_source("(defn delayed [p] (std.native.Coroutine/await p))")
         .expect("await should infer suspension support");
     let prototype = program
         .functions
@@ -1190,7 +1161,7 @@ fn await_infers_a_suspending_synchronous_function() {
     );
     assert!(prototype.code.contains(&super::Instruction::Await));
 
-    compile_source("(defn outer [p] (fn [] (std.foundation.coroutine/await p)))")
+    compile_source("(defn outer [p] (fn [] (std.native.Coroutine/await p)))")
         .expect("nested functions infer their own suspension support");
 }
 
@@ -1202,7 +1173,7 @@ fn inferred_await_returns_directly_until_it_really_suspends() {
         .find_or_create("user")
         .intern("source", Value::Promise(source.clone()));
     let program = compile_source_with(
-        "(do (defn delayed [] (std.foundation.coroutine/await source)) (delayed))",
+        "(do (defn delayed [] (std.native.Coroutine/await source)) (delayed))",
         &registry,
     )
     .unwrap();
@@ -1222,7 +1193,7 @@ fn inferred_await_returns_directly_until_it_really_suspends() {
         .find_or_create("user")
         .intern("source", Value::Promise(ready));
     let program = compile_source_with(
-        "(do (defn immediate [] (std.foundation.coroutine/await source)) (immediate))",
+        "(do (defn immediate [] (std.native.Coroutine/await source)) (immediate))",
         &registry,
     )
     .unwrap();
@@ -1249,7 +1220,7 @@ fn pending_async_child_is_resumed_only_when_the_scheduler_is_polled() {
         .find_or_create("user")
         .intern("source", Value::Promise(source.clone()));
     let program = compile_source_with(
-        "(do (defn ^:async delayed [] (std.foundation.coroutine/await source)) (delayed))",
+        "(do (defn ^:async delayed [] (std.native.Coroutine/await source)) (delayed))",
         &registry,
     )
     .unwrap();
@@ -1273,7 +1244,7 @@ fn cancelling_async_result_propagates_to_the_pending_host_promise() {
         .find_or_create("user")
         .intern("source", Value::Promise(source));
     let program = compile_source_with(
-        "(do (defn ^:async delayed [] (std.foundation.coroutine/await source)) (delayed))",
+        "(do (defn ^:async delayed [] (std.native.Coroutine/await source)) (delayed))",
         &registry,
     )
     .unwrap();
@@ -1320,7 +1291,7 @@ fn async_calls_retain_and_resume_pending_child_fibers() {
         .current()
         .intern("pending", Value::Promise(pending.clone()));
     let program = super::compile_source_with(
-        "(do (defn ^:async delayed [] (std.foundation.coroutine/await pending)) (delayed))",
+        "(do (defn ^:async delayed [] (std.native.Coroutine/await pending)) (delayed))",
         &registry,
     )
     .expect("async source must compile");
@@ -1352,7 +1323,7 @@ fn vm_host_call_returns_a_native_promise_and_resumes_through_await() {
         },
     );
     let program = compile_source(
-        "(do (defn ^:async delayed [] (std.foundation.coroutine/await (std.native.Host/call \"nginx\" \"sleep\" [25]))) (delayed))",
+        "(do (defn ^:async delayed [] (std.native.Coroutine/await (std.native.Host/call \"nginx\" \"sleep\" [25]))) (delayed))",
     )
     .unwrap();
     let value = crate::core::with_host_calls(provider, || execute_program(Rc::new(program)))

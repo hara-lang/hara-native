@@ -211,7 +211,6 @@ public class HaraModuleConformanceTest {
     Map<Object, IMapType> cases = cases();
     assertExpectation(cases, "namespace/facade-var-copy", "same-var", Boolean.FALSE);
     assertExpectation(cases, "namespace/facade-var-copy", "copied-root", Boolean.TRUE);
-    assertExpectation(cases, "namespace/facade-var-copy", "copied-metadata", Boolean.TRUE);
 
     try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
       context.eval(
@@ -220,24 +219,17 @@ public class HaraModuleConformanceTest {
       context.eval(
           HaraLanguage.ID,
           "(ns target (:config {:blank true})) "
-              + "(std.foundation/intern-var 'target 'answer (var source/answer))");
+              + "(std.native.Runtime/intern-var 'target 'answer (var source/answer))");
       context.eval(HaraLanguage.ID, "(ns user)");
       assertTrue(
           !context
               .eval(
                   HaraLanguage.ID,
-                  "(std.foundation/= (var source/answer) (var target/answer))")
+                  "(= (var source/answer) (var target/answer))")
               .asBoolean());
       assertEquals(
           41,
           context.eval(HaraLanguage.ID, "(deref (var target/answer))").asInt());
-      assertEquals(
-          "copied",
-          context
-              .eval(
-                  HaraLanguage.ID,
-                  "(std.foundation/get (std.foundation/meta (var target/answer)) :doc)")
-              .asString());
     }
   }
 
@@ -514,7 +506,7 @@ public class HaraModuleConformanceTest {
               context
                   .eval(
                       HaraLanguage.ID,
-                      "(std.foundation/module-revision \"" + escaped(sourcePath) + "\")")
+                      "(module-revision \"" + escaped(sourcePath) + "\")")
                   .asLong());
           continue;
         }

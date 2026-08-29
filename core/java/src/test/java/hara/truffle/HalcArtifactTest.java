@@ -303,39 +303,13 @@ public class HalcArtifactTest {
   }
 
   @Test
-  public void foundationArtifactIsDeterministicAndRoundTripsForms() throws Exception {
-    Path source = Path.of("lib/src/std/foundation.hal");
-    byte[] sourceBytes = Files.readAllBytes(source);
-    Object[] forms =
-        HaraLanguage.readAll(
-            Files.readString(source, StandardCharsets.UTF_8),
-            HalcArtifact.FOUNDATION_RESOURCE);
-
-    byte[] first =
-        HalcArtifact.encode(
-            "std.foundation", HalcArtifact.FOUNDATION_RESOURCE, sourceBytes, forms);
-    byte[] second =
-        HalcArtifact.encode(
-            "std.foundation", HalcArtifact.FOUNDATION_RESOURCE, sourceBytes, forms);
-    assertArrayEquals(first, second);
-
-    HalcArtifact.Module decoded = HalcArtifact.decode(first);
-    assertEquals("std.foundation", decoded.namespace);
-    assertEquals(HalcArtifact.FOUNDATION_RESOURCE, decoded.resource);
-    assertEquals(forms.length, decoded.forms.length);
-    for (int index = 0; index < forms.length; index++) {
-      assertEquals(G.display(forms[index]), G.display(decoded.forms[index]));
-    }
-  }
-
-  @Test
   public void rejectsCorruptAndTruncatedArtifacts() throws Exception {
-    byte[] source = "(ns std.foundation)".getBytes(StandardCharsets.UTF_8);
+    byte[] source = "(ns native.fixture)".getBytes(StandardCharsets.UTF_8);
     Object[] forms =
-        HaraLanguage.readAll(new String(source, StandardCharsets.UTF_8), "foundation.hal");
+        HaraLanguage.readAll(new String(source, StandardCharsets.UTF_8), "fixture.hal");
     byte[] artifact =
         HalcArtifact.encode(
-            "std.foundation", HalcArtifact.FOUNDATION_RESOURCE, source, forms);
+            "native.fixture", "fixture.hal", source, forms);
 
     byte[] corrupt = artifact.clone();
     corrupt[corrupt.length - 1] ^= 1;
@@ -389,81 +363,4 @@ public class HalcArtifactTest {
         Files.readAllBytes(root.resolve("golden/complete.halc")), encoded);
   }
 
-  @Test
-  public void embeddedHbxSupersedesLegacyFoundationHalcMode() {
-    String previous = System.getProperty("hara.HalcMode");
-    try {
-      System.setProperty("hara.HalcMode", "strict");
-      long before = FoundationHalcLowerer.compilationCount();
-      assertFoundation();
-      assertEquals(before, FoundationHalcLowerer.compilationCount());
-      System.setProperty("hara.HalcMode", "off");
-      assertFoundation();
-      assertEquals(before, FoundationHalcLowerer.compilationCount());
-    } finally {
-      if (previous == null) System.clearProperty("hara.HalcMode");
-      else System.setProperty("hara.HalcMode", previous);
-    }
-  }
-
-  @Test
-  public void foundationHalcLowersLetfnBindings() {
-    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
-      assertEquals(-1, context.eval(HaraLanguage.ID, "(std.foundation/compare 1 2)").asLong());
-      assertEquals(
-          ":std.native.MapEntry",
-          context.eval(HaraLanguage.ID, "(type (std.foundation/pair :key 42))").toString());
-      assertEquals(
-          4,
-          context
-              .eval(
-                  HaraLanguage.ID,
-                  "(letfn [(twice [value] (+ value value))] (twice 2))")
-              .asLong());
-      assertTrue(
-          context
-              .eval(
-                  HaraLanguage.ID,
-                  "(letfn [(even? [value] (if (= value 0) true (odd? (- value 1)))) "
-                      + "(odd? [value] (if (= value 0) false (even? (- value 1))))] "
-                      + "(even? 6))")
-              .asBoolean());
-    }
-  }
-
-  private static void assertFoundation() {
-    try (Context context =
-        Context.newBuilder(HaraLanguage.ID)
-            .option("engine.WarnInterpreterOnly", "false")
-            .build()) {
-      assertEquals(
-          42,
-          context
-              .eval(HaraLanguage.ID, "((std.foundation/comp inc inc) 40)")
-              .asLong());
-      assertEquals(
-          "[2 3]",
-          context
-              .eval(HaraLanguage.ID, "(vec (std.foundation/map inc [1 2]))")
-              .toString());
-      assertEquals(
-          "[42 {:a {:b 42}} [0 1 2 3] [7 7 7] [2 3] (9 7)]",
-          context
-              .eval(
-                  HaraLanguage.ID,
-                  "[(get-in {:a {:b 42}} [:a :b])"
-                      + " (assoc-in {} [:a :b] 42)"
-                      + " (vec (range 4))"
-                      + " (vec (repeat 3 7))"
-                      + " (vec ((map inc) [1 2]))"
-                      + " ((juxt inc dec) 8)]")
-              .toString());
-      assertEquals(
-          "[[f g] [f g h] [f g h l & more]]",
-          context.eval(HaraLanguage.ID, "(:arglists (meta (var comp)))").toString());
-      assertEquals(
-          42,
-          context.eval(HaraLanguage.ID, "((comp inc inc inc inc) 38)").asLong());
-    }
-  }
 }

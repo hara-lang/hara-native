@@ -34,7 +34,7 @@ public class SftpFilesystemSessionKernelTest {
           "hello",
           session
               .eval(
-                  "(std.foundation.string/decode-utf8"
+                  "(std.native.String/decode-utf8"
                       + " (deref (File/read \"/README.md\")))")
               .asString());
       assertEquals(

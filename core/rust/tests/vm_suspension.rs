@@ -28,7 +28,7 @@ fn fulfilled_await_resumes_nested_frames_and_runs_finally() {
            (def marker 0)
            (defn inner [p]
              (try
-               (std.foundation.coroutine/await p)
+               (std.native.Coroutine/await p)
                (finally (set! marker 1))))
            (defn outer [p] [(inner p) marker])
            (outer source))",
@@ -57,7 +57,7 @@ fn rejected_await_runs_finally_before_the_outer_catch() {
            (def marker 0)
            (defn inner [p]
              (try
-               (std.foundation.coroutine/await p)
+               (std.native.Coroutine/await p)
                (finally (set! marker 1))))
            (try
              (inner source)
@@ -81,7 +81,7 @@ fn yield_parks_the_machine_and_resume_value_becomes_the_expression_result() {
     let registry = NamespaceRegistry::new("user");
     let program = compile_source_with(
         "(do
-           (defn generator [] (std.foundation.coroutine/yield 41))
+           (defn generator [] (std.native.Coroutine/yield 41))
            (generator))",
         &registry,
     )
@@ -104,7 +104,7 @@ fn async_calls_keep_a_promise_shape_on_the_settled_fast_path() {
     let (registry, program) = compile_with_source(
         "(do
            (defn ^:async delayed []
-             (std.foundation.coroutine/await source))
+             (std.native.Coroutine/await source))
            (delayed))",
         source,
     );
@@ -130,7 +130,7 @@ fn cancelling_an_async_result_notifies_the_pending_host_promise() {
     let (registry, program) = compile_with_source(
         "(do
            (defn ^:async delayed []
-             (std.foundation.coroutine/await source))
+             (std.native.Coroutine/await source))
            (delayed))",
         source,
     );

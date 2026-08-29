@@ -734,32 +734,30 @@ public class HbcCodecTest {
   }
 
   @Test
-  public void executesEveryCoreOnlySuccessResultRustProducedHbcArtifact() throws Exception {
+  public void executesEverySourceFreeSuccessResultRustProducedHbcArtifact() throws Exception {
     List<HbcConformanceCorpus.Case> cases =
         HbcConformanceCorpus.decode(
             Files.readAllBytes(Path.of("rust/assets/bytecode-conformance.hcc")));
     assertTrue(cases.size() >= 80);
     int executed = 0;
-    int packageRequired = 0;
     int failureOwnershipRequired = 0;
-    for (HbcConformanceCorpus.Case testCase : cases) {
-      HbcProgram program = HbcCodec.decode(testCase.artifact());
-      if (requiresMountedPackage(program)) {
-        packageRequired++;
-        continue;
-      }
-      if (testCase.id().startsWith("error/")) {
-        failureOwnershipRequired++;
-        continue;
-      }
-      Source source =
-          Source.newBuilder(
-                  HaraLanguage.ID,
-                  ByteSequence.create(testCase.artifact()),
-                  testCase.id() + ".hbc")
-              .mimeType(HaraLanguage.BYTECODE_MIME_TYPE)
-              .build();
-      try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      for (HbcConformanceCorpus.Case testCase : cases) {
+        if (testCase.id().startsWith("error/")) {
+          failureOwnershipRequired++;
+          continue;
+        }
+        HbcProgram program = HbcCodec.decode(testCase.artifact());
+        assertFalse(
+            testCase.id() + " must not require a Foundation package",
+            requiresMountedFoundationPackage(program));
+        Source source =
+            Source.newBuilder(
+                    HaraLanguage.ID,
+                    ByteSequence.create(testCase.artifact()),
+                    testCase.id() + ".hbc")
+                .mimeType(HaraLanguage.BYTECODE_MIME_TYPE)
+                .build();
         org.graalvm.polyglot.Value actual;
         try {
           actual = context.eval(source);
@@ -777,16 +775,18 @@ public class HbcCodecTest {
         executed++;
       }
     }
-    assertTrue("the corpus must retain core-only HBC0 vectors", executed >= 70);
-    assertTrue("the corpus must declare library-backed HBC0 separately", packageRequired > 0);
+    assertEquals(
+        "only failure-ownership vectors may be held outside the source-free success lane",
+        cases.size() - failureOwnershipRequired,
+        executed);
     assertTrue(
         "the corpus must retain failure-ownership HBC0 vectors", failureOwnershipRequired > 0);
   }
 
-  private static boolean requiresMountedPackage(HbcProgram program) {
+  private static boolean requiresMountedFoundationPackage(HbcProgram program) {
     return program.constants().stream()
         .map(Object::toString)
-        .anyMatch(value -> value.startsWith("std.foundation/"));
+        .anyMatch(value -> value.matches("std\\.foundation/[^/].*"));
   }
 
   private static byte[] takeBundleField(ByteBuffer input) {

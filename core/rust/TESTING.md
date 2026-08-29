@@ -36,11 +36,11 @@ make test-conformance
 
 This is a serial cross-host compatibility layer, run in one CI job. It proves
 three native-owned contracts: Rust executes the checked-in code-VM corpus; the
-JVM executes every checked-in, core-only HBC0 artifact with a success-result
-contract; and the browser HTA codec accepts the same canonical values,
-including `MapEntry`, while rejecting malformed frames. HBC0 artifacts that
-explicitly name `std.foundation/*` are checked as package-backed programs in
-the source/package repository, after the relevant HARP is mounted. The legacy
+JVM executes every checked-in source-free, success-result HBC0 artifact; and
+the browser executes those HCC cases serially in one native runtime. Collection
+artifacts call the stable
+`std.protocol.*` ABI over `std.native.Vector` and `std.native.MapEntry`; a
+success artifact containing `std.foundation/*` fails the JVM gate. The legacy
 `error/*` HBC0 records are intentionally held for the separate failure-ownership
 lane while Java and Rust complete its shared contract. These vectors are
 deliberately checked into this repository so a fresh native checkout needs

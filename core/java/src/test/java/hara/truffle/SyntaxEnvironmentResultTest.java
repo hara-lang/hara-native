@@ -23,7 +23,7 @@ public class SyntaxEnvironmentResultTest {
   }
 
   @Test
-  public void nativeRuntimeAndFoundationEnvironmentContractsAreAvailable() {
+  public void nativeRuntimeEnvironmentContractsAreAvailable() {
     try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
       assertEquals(
           "[user 42 42 42 true :loaded nil nil nil nil true :success nil]",
@@ -34,12 +34,13 @@ public class SyntaxEnvironmentResultTest {
                       + "(Runtime/eval-in 'user '[(+ 19 23)]) "
                       + "(Runtime/eval '(+ 19 23)) "
                       + "(Runtime/load-string \"(+ 19 23)\") "
-                      + "(map? (std.foundation/env-snapshot)) "
-                      + "(get (Runtime/namespace 'std.native.Runtime) :namespace/state) "
+                      + "(map? (Runtime/snapshot)) "
+                      + "(std.protocol.ilookup.ILookup/lookup "
+                      + "  (Runtime/namespace 'std.native.Runtime) :namespace/state) "
                       + "(Runtime/namespace 'std.native.Env) "
-                      + "(std.foundation/resolve 'std.native.Env/current) "
-                      + "(std.foundation/resolve 'std.native.Runtime/resolve) "
-                      + "(std.foundation/resolve 'std.native.Base/eval) "
+                      + "(std.native.Base/resolve 'std.native.Env/current) "
+                      + "(std.native.Base/resolve 'std.native.Runtime/resolve) "
+                      + "(std.native.Base/resolve 'std.native.Base/eval) "
                       + "(result? (Result/create :success 1)) "
                       + "(Result/status (Result/create :success 1)) "
                       + "(Result/context (Result/create :success 1))]")

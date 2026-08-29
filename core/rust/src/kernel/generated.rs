@@ -259,6 +259,11 @@ impl GeneratedNamespaceConfig {
         if alias == "-" {
             return Err("Namespace alias is reserved: -".into());
         }
+        if let Some(native_namespace) = crate::core::canonical_native_symbol(alias) {
+            return Err(format!(
+                "Namespace alias already refers to {native_namespace}: {alias}"
+            ));
+        }
         if let Some(previous) = self.aliases.get(alias) {
             if previous != namespace {
                 return Err(format!(

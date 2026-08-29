@@ -344,7 +344,7 @@ test("document compiler resolves built-in co/ without changing strings or commen
     '(ns+)\n; co/await stays documentation\n(def label "co/await")\n(co/await (node/in "x"))',
     { documentId: "document/co", nodeId: "node/co" }
   );
-  assert.ok(compiled.source.includes("(std.foundation.coroutine/await (node/in"));
+  assert.ok(compiled.source.includes("(std.native.Coroutine/await (node/in"));
   assert.ok(compiled.source.includes('"co/await"'));
   assert.ok(compiled.source.includes("; co/await stays documentation"));
 });

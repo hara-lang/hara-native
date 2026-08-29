@@ -19,9 +19,9 @@ fn native_sandbox_surface_uses_the_broker_kernel() {
     );
     assert_eq!(
         runtime
-            .eval_native("(deref (Sandbox/call 1 'std.foundation/+ [1 2 3]))")
+            .eval_native("(deref (Sandbox/call 1 'std.native.Base/type [[1 2 3]]))")
             .unwrap(),
-        "6"
+        ":std.native.Vector"
     );
     assert_eq!(
         runtime

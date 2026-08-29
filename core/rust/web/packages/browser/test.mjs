@@ -78,14 +78,7 @@ test("browser SDK starts isolated core runtimes", async () => {
 });
 
 test("browser SDK executes the generic memory.v1 bytes binding", async () => {
-  const hara = await startVm({
-    resources: {
-      "std.foundation":
-        "(ns std.foundation) "
-        + "(defn bytes [a b c d] (std.native.Bytes/new a b c d))"
-    }
-  });
-  hara.require("std.foundation");
+  const hara = await startVm();
   hara.installMemoryWasmBinding(
     MEMORY_MANIFEST,
     MEMORY_INTERFACE,
@@ -96,7 +89,7 @@ test("browser SDK executes the generic memory.v1 bytes binding", async () => {
   assert.equal(
     hara.eval(
       "(ns browser.memory (:require [codec.bytes :as cb])) " +
-        "(cb/echo (bytes 1 2 3 4))"
+        "(cb/echo (std.native.Bytes/new 1 2 3 4))"
     ),
     "#bytes[1 2 3 4]"
   );

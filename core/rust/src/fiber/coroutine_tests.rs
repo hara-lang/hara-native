@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn protocol_resume_path_uses_the_coroutine_evaluator() {
     let fiber = EvalFiber::start(
-        "(let [c (std.foundation.coroutine/create (fn [] 42))] \
+        "(let [c (std.native.Coroutine/create (fn [] 42))] \
            (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
@@ -29,14 +29,14 @@ fn status_of(env: &HashMap<String, Value>, name: &str) -> Value {
 #[test]
 fn create_makes_suspended_coroutine() {
     let mut f = EvalFiber::start(
-        "(std.foundation.coroutine/coroutine? (std.foundation.coroutine/create (fn [x] x)))",
+        "(std.native.Base/satisfies? std.protocol.icoroutine.ICoroutine (std.native.Coroutine/create (fn [x] x)))",
         HashMap::new(),
     )
     .unwrap();
     assert_eq!(f.state(), EvalFiberState::Completed(Value::Bool(true)));
 
     let mut f = EvalFiber::start(
-        "(std.foundation.coroutine/status (std.foundation.coroutine/create (fn [x] x)))",
+        "(std.protocol.icoroutine.ICoroutine/status (std.native.Coroutine/create (fn [x] x)))",
         HashMap::new(),
     )
     .unwrap();
@@ -46,9 +46,9 @@ fn create_makes_suspended_coroutine() {
 #[test]
 fn resume_runs_body_to_completion() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create (fn [x] (* x 2)))) \
-         (std.foundation.coroutine/resume c 21) \
-         (std.foundation.coroutine/status c))",
+        "(do (def c (std.native.Coroutine/create (fn [x] (* x 2)))) \
+         (std.protocol.icoroutine.ICoroutine/resume c 21) \
+         (std.protocol.icoroutine.ICoroutine/status c))",
         HashMap::new(),
     )
     .unwrap();
@@ -58,9 +58,9 @@ fn resume_runs_body_to_completion() {
 #[test]
 fn resume_on_dead_throws() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create (fn [] 1))) \
-         (std.foundation.coroutine/resume c) \
-         (std.foundation.coroutine/resume c))",
+        "(do (def c (std.native.Coroutine/create (fn [] 1))) \
+         (std.protocol.icoroutine.ICoroutine/resume c) \
+         (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
     .unwrap();
@@ -70,8 +70,8 @@ fn resume_on_dead_throws() {
 #[test]
 fn body_error_rethrows_at_resume_and_kills_coroutine() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create (fn [] (/ 1 0)))) \
-         (std.foundation.coroutine/resume c))",
+        "(do (def c (std.native.Coroutine/create (fn [] (/ 1 0)))) \
+         (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
     .unwrap();
@@ -82,15 +82,15 @@ fn body_error_rethrows_at_resume_and_kills_coroutine() {
 #[test]
 fn yield_exchanges_values_both_ways() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create \
+        "(do (def c (std.native.Coroutine/create \
          (fn [start] \
-           (let [a (std.foundation.coroutine/yield (* start start))] \
-             (let [b (std.foundation.coroutine/yield :second)] \
+           (let [a (std.native.Coroutine/yield (* start start))] \
+             (let [b (std.native.Coroutine/yield :second)] \
                [a b]))))) \
-         [(std.foundation.coroutine/resume c 10) \
-          (std.foundation.coroutine/resume c :got-a) \
-          (std.foundation.coroutine/resume c :got-b) \
-          (std.foundation.coroutine/status c)])",
+         [(std.protocol.icoroutine.ICoroutine/resume c 10) \
+          (std.protocol.icoroutine.ICoroutine/resume c :got-a) \
+          (std.protocol.icoroutine.ICoroutine/resume c :got-b) \
+          (std.protocol.icoroutine.ICoroutine/status c)])",
         HashMap::new(),
     )
     .unwrap();
@@ -111,11 +111,11 @@ fn yield_exchanges_values_both_ways() {
 #[test]
 fn multi_arg_resume_delivers_vector_to_yield() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create \
-         (fn [] (let [v (std.foundation.coroutine/yield :first)] v)))) \
-         [(std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/resume c 9 8) \
-          (std.foundation.coroutine/status c)])",
+        "(do (def c (std.native.Coroutine/create \
+         (fn [] (let [v (std.native.Coroutine/yield :first)] v)))) \
+         [(std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/resume c 9 8) \
+          (std.protocol.icoroutine.ICoroutine/status c)])",
         HashMap::new(),
     )
     .unwrap();
@@ -135,9 +135,9 @@ fn multi_arg_resume_delivers_vector_to_yield() {
 #[test]
 fn close_on_never_resumed_coroutine() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create (fn [] :never-runs))) \
-         (std.foundation.coroutine/coroutine? (std.foundation.coroutine/close c)) \
-         (std.foundation.coroutine/status c))",
+        "(do (def c (std.native.Coroutine/create (fn [] :never-runs))) \
+         (std.native.Base/satisfies? std.protocol.icoroutine.ICoroutine (std.protocol.iclose.IClose/close c)) \
+         (std.protocol.icoroutine.ICoroutine/status c))",
         HashMap::new(),
     )
     .unwrap();
@@ -146,7 +146,7 @@ fn close_on_never_resumed_coroutine() {
 
 #[test]
 fn yield_requires_one_argument() {
-    let mut f = EvalFiber::start("(std.foundation.coroutine/yield 1 2 3)", HashMap::new()).unwrap();
+    let mut f = EvalFiber::start("(std.native.Coroutine/yield 1 2 3)", HashMap::new()).unwrap();
     assert_eq!(
         f.state(),
         EvalFiberState::Failed("function expects 1 arguments".into())
@@ -156,11 +156,11 @@ fn yield_requires_one_argument() {
 #[test]
 fn yield_works_from_nested_helper() {
     let mut f = EvalFiber::start(
-        "(do (defn helper-n [x] (std.foundation.coroutine/yield (* x 10))) \
-         (def c (std.foundation.coroutine/create (fn [] (helper-n 3) :end))) \
-         [(std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/status c)])",
+        "(do (defn helper-n [x] (std.native.Coroutine/yield (* x 10))) \
+         (def c (std.native.Coroutine/create (fn [] (helper-n 3) :end))) \
+         [(std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/status c)])",
         HashMap::new(),
     )
     .unwrap();
@@ -174,7 +174,7 @@ fn yield_works_from_nested_helper() {
 
 #[test]
 fn yield_outside_coroutine_throws() {
-    let mut f = EvalFiber::start("(std.foundation.coroutine/yield 1)", HashMap::new()).unwrap();
+    let mut f = EvalFiber::start("(std.native.Coroutine/yield 1)", HashMap::new()).unwrap();
     assert!(matches!(f.state(), EvalFiberState::Failed(e) if e.contains("outside")));
 }
 
@@ -182,8 +182,8 @@ fn yield_outside_coroutine_throws() {
 fn reentrant_resume_throws() {
     let mut f = EvalFiber::start(
         "(do (def c nil) \
-         (set! c (std.foundation.coroutine/create (fn [] (std.foundation.coroutine/resume c)))) \
-         (std.foundation.coroutine/resume c))",
+         (set! c (std.native.Coroutine/create (fn [] (std.protocol.icoroutine.ICoroutine/resume c)))) \
+         (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
     .unwrap();
@@ -193,17 +193,17 @@ fn reentrant_resume_throws() {
 #[test]
 fn nested_coroutines_resume_each_other() {
     let mut f = EvalFiber::start(
-        "(do (def c-inner (std.foundation.coroutine/create \
-         (fn [] (std.foundation.coroutine/yield :inner-yield) :inner-end))) \
-         (def c-outer (std.foundation.coroutine/create \
+        "(do (def c-inner (std.native.Coroutine/create \
+         (fn [] (std.native.Coroutine/yield :inner-yield) :inner-end))) \
+         (def c-outer (std.native.Coroutine/create \
          (fn [] \
-           (std.foundation.coroutine/yield (std.foundation.coroutine/resume c-inner)) \
-           (std.foundation.coroutine/yield (std.foundation.coroutine/resume c-inner :x)) \
+           (std.native.Coroutine/yield (std.protocol.icoroutine.ICoroutine/resume c-inner)) \
+           (std.native.Coroutine/yield (std.protocol.icoroutine.ICoroutine/resume c-inner :x)) \
            :outer-end))) \
-         [(std.foundation.coroutine/resume c-outer) \
-          (std.foundation.coroutine/resume c-outer) \
-          (std.foundation.coroutine/resume c-outer) \
-          (std.foundation.coroutine/status c-outer)])",
+         [(std.protocol.icoroutine.ICoroutine/resume c-outer) \
+          (std.protocol.icoroutine.ICoroutine/resume c-outer) \
+          (std.protocol.icoroutine.ICoroutine/resume c-outer) \
+          (std.protocol.icoroutine.ICoroutine/status c-outer)])",
         HashMap::new(),
     )
     .unwrap();
@@ -224,16 +224,16 @@ fn nested_coroutines_resume_each_other() {
 #[test]
 fn generator_pipeline_produces_lazily() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create \
+        "(do (def c (std.native.Coroutine/create \
          (fn [n] (loop [i 0] \
            (if (< i n) \
-             (do (std.foundation.coroutine/yield (* i i)) (recur (inc i))) \
+             (do (std.native.Coroutine/yield (* i i)) (recur (+ i 1))) \
              :done))))) \
-         [(std.foundation.coroutine/resume c 3) \
-          (std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/status c)])",
+         [(std.protocol.icoroutine.ICoroutine/resume c 3) \
+          (std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/status c)])",
         HashMap::new(),
     )
     .unwrap();
@@ -255,9 +255,9 @@ fn generator_pipeline_produces_lazily() {
 #[test]
 fn await_returns_settled_promise_value() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create \
-         (fn [] (std.foundation.coroutine/await (promise/delay 50 (fn [] :delayed-value)))))) \
-         (std.foundation.coroutine/resume c))",
+        "(do (def c (std.native.Coroutine/create \
+         (fn [] (std.native.Coroutine/await (std.native.Promise/delay 50 (fn [] :delayed-value)))))) \
+         (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
     .unwrap();
@@ -275,9 +275,9 @@ fn await_returns_settled_promise_value() {
 #[test]
 fn await_rethrows_promise_rejection() {
     let mut f = EvalFiber::start(
-        "(do (def c (std.foundation.coroutine/create \
-         (fn [] (std.foundation.coroutine/await (promise (fn [] (/ 1 0))))))) \
-         (std.foundation.coroutine/resume c))",
+        "(do (def c (std.native.Coroutine/create \
+         (fn [] (std.native.Coroutine/await (std.native.Promise/run (fn [] (/ 1 0))))))) \
+         (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
     .unwrap();
@@ -290,11 +290,11 @@ fn await_rethrows_promise_rejection() {
 #[test]
 fn yield_passes_promise_object_without_awaiting() {
     let mut f = EvalFiber::start(
-        "(do (def p (promise/new (fn [resolve reject] nil))) \
-         (def c (std.foundation.coroutine/create \
-           (fn [] (std.foundation.coroutine/yield p)))) \
-         [(std.foundation.coroutine/resume c) \
-          (std.foundation.coroutine/status c)])",
+        "(do (def p (std.native.Promise/new (fn [resolve reject] nil))) \
+         (def c (std.native.Coroutine/create \
+           (fn [] (std.native.Coroutine/yield p)))) \
+         [(std.protocol.icoroutine.ICoroutine/resume c) \
+          (std.protocol.icoroutine.ICoroutine/status c)])",
         HashMap::new(),
     )
     .unwrap();
@@ -317,10 +317,10 @@ fn yield_passes_promise_object_without_awaiting() {
 #[test]
 fn yield_awaits_promise_when_composed_with_await() {
     let mut f = EvalFiber::start(
-        "(do (def p (promise/new (fn [resolve reject] nil))) \
-         (def c (std.foundation.coroutine/create \
-           (fn [] (std.foundation.coroutine/yield (std.foundation.coroutine/await p))))) \
-         (std.foundation.coroutine/resume c))",
+        "(do (def p (std.native.Promise/new (fn [resolve reject] nil))) \
+         (def c (std.native.Coroutine/create \
+           (fn [] (std.native.Coroutine/yield (std.native.Coroutine/await p))))) \
+         (std.protocol.icoroutine.ICoroutine/resume c))",
         HashMap::new(),
     )
     .unwrap();

@@ -54,10 +54,11 @@ package composition, registry publication policy, and end-user documentation.
 ## Conformance boundary
 
 `make test-conformance` runs the native compatibility vectors serially: the
-Rust code-VM corpus, core-only success-result Rust-produced HBC0 artifacts on
-the JVM, and browser HTA canonical-value frames. HBC0 artifacts that name
-`std.foundation/*` are package-backed and run with the corresponding HARP in
-the source/package repository; legacy `error/*` HBC0 records await the shared
+Rust code-VM corpus, every source-free success-result Rust-produced HBC0
+artifact on the JVM, and the same HCC corpus in one browser runtime. Collection
+HBC0 calls target the stable `std.protocol.*` ABI over `std.native.Vector` and
+`std.native.MapEntry`; `std.foundation/*` remains package-owned and is absent
+from this host-core corpus. Legacy `error/*` HBC0 records await the shared
 Rust/JVM failure-ownership contract. Language and standard-library conformance
 is therefore intentionally not a prerequisite of a standalone native-host
 checkout.
