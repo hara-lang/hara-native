@@ -1,0 +1,10 @@
+hara.truffle.StringLibraryProvider
+hara.truffle.BytesLibraryProvider
+hara.truffle.PromiseLibraryProvider
+hara.truffle.NativeFileLibraryProvider
+hara.truffle.CoroutineLibraryProvider
+hara.truffle.NativeSocketLibraryProvider
+hara.truffle.NativeOsLibraryProvider
+hara.truffle.NativeJsonLibraryProvider
+hara.truffle.ToolVmLibraryProvider
+hara.truffle.ToolPackageLibraryProvider

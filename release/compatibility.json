@@ -1,0 +1,28 @@
+{
+  "format": "hara-native/compatibility-v1",
+  "nativeVersion": "0.1.0",
+  "harpFormat": "0.0.0-alpha",
+  "hosts": {
+    "rust": {
+      "binary": "hara-native",
+      "commands": ["eval", "run", "repl", "test", "bundle verify", "bundle install", "bundle run"]
+    },
+    "jvm": {
+      "artifact": "org.hara-lang:hara-native-jvm",
+      "jvmFlavorAbi": "hara.provider.jvm.v1"
+    },
+    "browser": {
+      "package": "@hara-lang/native-browser",
+      "activation": "activateLockedPackages"
+    }
+  },
+  "sourceOwnership": {
+    "canonicalHal": "hara-lang/hara",
+    "packageRegistry": {
+      "harp": "https://packages.hara-lang.org",
+      "maven": "https://packages.hara-lang.org/maven/releases",
+      "npm": "https://packages.hara-lang.org/npm/"
+    },
+    "fullCli": "hara-lang/hara"
+  }
+}

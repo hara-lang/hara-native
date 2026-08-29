@@ -1,0 +1,217 @@
+name: Native release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    uses: ./.github/workflows/native-host.yml
+
+  release-version:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require the tag and every distributable version to agree
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          test "${tag#v}" != "$tag"
+          expected="${tag#v}"
+          rust="$(cargo metadata --manifest-path core/rust/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hara-native") | .version')"
+          jvm="$(xmllint --xpath '/*[local-name()="project"]/*[local-name()="version"][1]/text()' core/java/pom.xml)"
+          browser="$(node -p 'require("./core/rust/web/packages/browser/package.json").version')"
+          hta="$(node -p 'require("./core/rust/web/packages/hta/package.json").version')"
+          test "$rust" = "$expected"
+          test "$jvm" = "$expected"
+          test "$browser" = "$expected"
+          test "$hta" = "$expected"
+
+  rust-cli:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x86_64
+            os: ubuntu-22.04
+          - id: macos-x86_64
+            os: macos-13
+          - id: macos-aarch64
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --manifest-path core/rust/Cargo.toml --release --bin hara-native
+      - run: |
+          mkdir -p dist
+          tar -C core/rust/target/release -czf dist/hara-native-${{ matrix.id }}.tar.gz hara-native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hara-native-${{ matrix.id }}
+          path: dist/hara-native-${{ matrix.id }}.tar.gz
+          if-no-files-found: error
+
+  jvm:
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
+      - run: |
+          mkdir -p dist
+          cp core/java/target/hara-native-jvm-0.1.0.jar dist/hara-native-jvm-0.1.0.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hara-native-jvm
+          path: dist/hara-native-jvm-0.1.0.jar
+          if-no-files-found: error
+
+  browser:
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: core/rust/web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+      - name: Build both browser host profiles
+        run: make build-browser-profiles
+      - name: Pack browser host packages
+        working-directory: core/rust/web
+        run: |
+          mkdir -p dist
+          (cd packages/browser && npm pack --pack-destination ../../dist)
+          (cd packages/hta && npm pack --pack-destination ../../dist)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hara-native-browser
+          path: core/rust/web/dist/*.tgz
+          if-no-files-found: error
+
+  publish-maven:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [validate, jvm, release-version]
+    runs-on: ubuntu-22.04
+    environment: packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: hara-packages
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+      - name: Verify the JAR before registry publication
+        run: |
+          set -euo pipefail
+          mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
+          ! jar tf core/java/target/hara-native-jvm-0.1.0.jar | rg -n '\\.hal$|(^|/)hal-src/|std/foundation|tool/'
+      - run: mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests deploy
+        env:
+          MAVEN_USERNAME: ${{ secrets.PACKAGES_MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.PACKAGES_MAVEN_PASSWORD }}
+
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [validate, browser, release-version]
+    runs-on: ubuntu-22.04
+    environment: packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: core/rust/web/package-lock.json
+          registry-url: https://packages.hara-lang.org/npm/
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+      - name: Build both browser host profiles
+        run: make build-browser-profiles
+      - name: Publish browser host packages
+        working-directory: core/rust/web
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (cd packages/browser && npm pack --pack-destination ../../dist)
+          (cd packages/hta && npm pack --pack-destination ../../dist)
+          for archive in dist/*.tgz; do
+            ! tar -tzf "$archive" | rg -n '\\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'
+          done
+          npm publish --workspace @hara-lang/native-browser
+          npm publish --workspace @hara-lang/hta
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_NPM_TOKEN }}
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [rust-cli, jvm, browser, release-version, publish-maven, publish-npm]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify release payload and write checksums
+        run: |
+          set -euo pipefail
+          test -z "$(find . -type f -name '*.hal' -print -quit)"
+          for archive in dist/*.tar.gz dist/*.tgz; do
+            ! tar -tzf "$archive" | rg -n '\\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'
+          done
+          ! jar tf dist/hara-native-jvm-0.1.0.jar | rg -n '\\.hal$|(^|/)hal-src/|std/foundation|tool/'
+          (cd dist && sha256sum * > SHA256SUMS)
+          assets="$({
+            while read -r checksum name; do
+              size="$(wc -c < "dist/$name")"
+              jq -n --arg name "$name" --arg sha256 "sha256:$checksum" --argjson size "$size" \
+                '{name: $name, sha256: $sha256, size: $size}'
+            done < dist/SHA256SUMS
+          } | jq -s .)"
+          tag="${{ inputs.tag || github.ref_name }}"
+          jq --arg tag "$tag" --argjson artifacts "$assets" \
+            '. + {releaseTag: $tag, artifacts: $artifacts}' \
+            release/compatibility.json > dist/release-manifest.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*

@@ -1,0 +1,18 @@
+# Build products and local package stores
+**/target/
+**/node_modules/
+core/rust/web/dist/
+core/rust/web/dist-*/
+*.class
+*.jar
+*.log
+.hara/
+
+# Editor and operating-system state
+.DS_Store
+.idea/
+.settings/
+.classpath
+.project
+.clj-kondo/
+*~

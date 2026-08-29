@@ -1,0 +1,9 @@
+{
+  "name": "@hara-lang/native-fs-sftp-host",
+  "version": "0.1.0",
+  "description": "SFTP filesystem host adapter for verified Hara packages",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "exports": { "./host": "./host.mjs" }
+}

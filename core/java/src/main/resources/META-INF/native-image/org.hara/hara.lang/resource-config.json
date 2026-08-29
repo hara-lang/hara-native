@@ -1,0 +1,15 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "META-INF/hara/extensions/.*\\.edn"
+      },
+      {
+        "pattern": "META-INF/hara/extensions/.*\\.wasm"
+      },
+      {
+        "pattern": "META-INF/services/.*"
+      }
+    ]
+  }
+}

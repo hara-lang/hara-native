@@ -1,0 +1,41 @@
+{
+  "name": "@hara-lang/hta",
+  "version": "0.1.0",
+  "description": "HTA codecs, browser hosts, and provider transports for Hara",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hara-lang/hara-native.git",
+    "directory": "core/rust/web/packages/hta"
+  },
+  "homepage": "https://github.com/hara-lang/hara-native/tree/main/core/rust/web/packages/hta#readme",
+  "bugs": {
+    "url": "https://github.com/hara-lang/hara-native/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./provider/browser": "./provider-browser.mjs",
+    "./provider/node": "./provider-node.mjs",
+    "./sandbox": "./sandbox.js",
+    "./shared-worker": "./shared-worker.js",
+    "./worker": "./worker.mjs"
+  },
+  "files": [
+    "index.js",
+    "provider-browser.mjs",
+    "provider-common.mjs",
+    "provider-node.mjs",
+    "sandbox.js",
+    "shared-worker.js",
+    "worker.mjs",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://packages.hara-lang.org/npm/"
+  }
+}

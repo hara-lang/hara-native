@@ -1,0 +1,67 @@
+{:corpus/schema "hal.code-vm-production-corpus/0-alpha"
+ :corpus/id :code.vm/production
+ :corpus/upstream "hara-specs-registry/01-lang/010-bytecode/draft/conformance/bytecode-vm.edn"
+ :cases
+ [{:id :literal/integer
+   :upstream-id :literal/integer
+   :source "42"
+   :expect {:display "42"}
+   :browser-safe true}
+  {:id :arith/nested
+   :upstream-id :arith/nested
+   :source "(+ 1 (* 2 3))"
+   :expect {:display "7"}
+   :browser-safe true}
+  {:id :let/basic
+   :upstream-id :let/basic
+   :source "(let [x 19 y 23] (+ x y))"
+   :expect {:display "42"}}
+  {:id :loop/many-iterations
+   :upstream-id :loop/many-iterations
+   :source "(loop [i 0 acc 1] (if (< i 10) (recur (+ i 1) (* acc 2)) acc))"
+   :expect {:display "1024"}
+   :steps 2048
+   :trace-limit 8
+   :expect-dropped true}
+  {:id :fn/capture
+   :upstream-id :fn/capture
+   :source "(let [x 10 f (fn [y] (+ x y))] (f 32))"
+   :expect {:display "42"}}
+  {:id :fn/nested-closure
+   :upstream-id :fn/nested-closure
+   :source "(((fn [x] (fn [y] (+ x y))) 19) 23)"
+   :expect {:display "42"}}
+  {:id :def/readback
+   :upstream-id :def/readback
+   :source "(do (def answer 42) answer)"
+   :expect {:display "42"}}
+  {:id :def/set-readback
+   :upstream-id :def/set-readback
+   :source "(do (def counter 1) (set! counter 42) counter)"
+   :expect {:display "42"}}
+  {:id :error/divide-by-zero
+   :upstream-id :error/divide-by-zero
+   :source "(/ 1 0)"
+   :expect {:error-category "division by zero"}}
+  {:id :error/string-arithmetic
+   :upstream-id :error/string-arithmetic
+   :source "(+ \"a\" 1)"
+   :expect {:error-category "expects numbers"}}
+  {:id :error/reader-eof
+   :upstream-id :error/reader-eof
+   :source "(+ 1"
+   :expect {:error-category "reader"}}
+  {:id :compile/recur-outside-loop
+   :upstream-id :compile/recur-outside-loop
+   :source "(recur 1)"
+   :expect {:compile-error "recur must be inside loop"}
+   :interpreter-required false}
+  {:id :compile/unbound-symbol
+   :upstream-id :compile/unbound-symbol
+   :source "unknown"
+   :expect {:compile-error "unbound symbol"}
+   :interpreter-required false}
+  {:id :compile/fn-multi-arity
+   :upstream-id :compile/fn-multi-arity
+   :source "((fn ([x] x) ([x y] (+ x y))) 20 22)"
+   :expect {:display "42"}}]}

@@ -1,0 +1,11 @@
+{
+  "name": "@hara-lang/native-fs-webdav-host",
+  "version": "0.2.0",
+  "description": "WebDAV filesystem host adapter for verified Hara packages",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./host": "./host.mjs"
+  }
+}
