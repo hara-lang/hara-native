@@ -6,7 +6,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.hara-lang</groupId>
 	<artifactId>hara-native-jvm</artifactId>
-	<version>0.1.6</version>
+	<version>0.1.7</version>
 	<packaging>jar</packaging>
 	<name>Hara Native JVM Host</name>
 	<description>HAL-free JVM and GraalVM Truffle host runtime for Hara packages.</description>
@@ -32,14 +32,14 @@
 	</scm>
 	<distributionManagement>
 		<repository>
-			<id>hara-packages</id>
-			<name>Hara Packages Maven Releases</name>
-			<url>https://packages.hara-lang.org/maven/releases</url>
+			<id>central</id>
+			<name>Maven Central</name>
+			<url>https://central.sonatype.com</url>
 		</repository>
 		<snapshotRepository>
-			<id>hara-packages-snapshots</id>
-			<name>Hara Packages Maven Snapshots</name>
-			<url>https://packages.hara-lang.org/maven/snapshots</url>
+			<id>central-snapshots</id>
+			<name>Maven Central Snapshots</name>
+			<url>https://central.sonatype.com</url>
 		</snapshotRepository>
 	</distributionManagement>
 	<properties>
@@ -208,7 +208,37 @@
 						<id>attach-sources</id>
 						<goals><goal>jar-no-fork</goal></goals>
 					</execution>
-					</executions>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-gpg-plugin</artifactId>
+				<version>3.2.7</version>
+				<executions>
+					<execution>
+						<id>sign-central-artifacts</id>
+						<phase>verify</phase>
+						<goals><goal>sign</goal></goals>
+						<configuration>
+							<passphrase>${env.MAVEN_GPG_PASSPHRASE}</passphrase>
+							<gpgArguments>
+								<arg>--pinentry-mode</arg>
+								<arg>loopback</arg>
+							</gpgArguments>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.11.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>central</publishingServerId>
+					<autoPublish>true</autoPublish>
+					<waitUntil>published</waitUntil>
+				</configuration>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -292,9 +322,8 @@
 				</configuration>
 				<executions>
 					<execution>
-						<id>generate-javadocs-on-build</id>
-						<phase>prepare-package</phase>
-						<goals><goal>javadoc</goal></goals>
+						<id>attach-javadocs</id>
+						<goals><goal>jar</goal></goals>
 					</execution>
 				</executions>
 			</plugin>

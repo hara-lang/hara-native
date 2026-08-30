@@ -6,6 +6,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 concurrency:
   group: hara-native-release-${{ github.ref_name }}
@@ -29,8 +30,18 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/release
-          git fetch origin release --tags --force
+          git fetch origin main release --tags --force
           test "$(git rev-parse origin/release)" = "$GITHUB_SHA"
+          # A one-time re-anchor may make release point directly at a main
+          # commit. Ordinary promotions must retain a merge parent from main
+          # so that future main-to-release pull requests remain conflict-free.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            parents="$(git show -s --format=%P "$GITHUB_SHA")"
+            read -r -a parents <<<"$parents"
+            test "${#parents[@]}" = 2
+            git merge-base --is-ancestor "${parents[0]}" "${parents[1]}"
+            git merge-base --is-ancestor "${parents[1]}" origin/main
+          fi
           version="$(jq -er '.version' release/version.json)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
@@ -40,9 +51,28 @@ jobs:
     needs: release-ref
     uses: ./.github/workflows/native-release-preflight.yml
 
+  npm-publish-credential:
+    name: npm publish credential
+    needs: release-ref
+    runs-on: ubuntu-22.04
+    environment: packages
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      - name: Verify the npmjs publish identity before creating a release intent
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NODE_AUTH_TOKEN"
+          npm whoami --registry https://registry.npmjs.org
+
   release-intent:
     name: release intent
-    needs: [release-ref, preflight]
+    needs: [release-ref, preflight, npm-publish-credential]
     runs-on: ubuntu-22.04
     outputs:
       resuming: ${{ steps.intent.outputs.resuming }}
@@ -178,41 +208,87 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
           RESUMING: ${{ needs.release-intent.outputs.resuming }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
           test -n "$CARGO_REGISTRY_TOKEN"
+          package_for_registry() {
+            local manifest="$1" package="$2" version="$3" attempt
+            for attempt in $(seq 1 30); do
+              if cargo package --locked --manifest-path "$manifest" --allow-dirty --no-verify; then
+                test -f "core/rust/target/package/${package}-${version}.crate"
+                return 0
+              fi
+              if test "$attempt" = 30; then
+                printf 'failed to package %s %s after crates.io index propagation\n' "$package" "$version" >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          check_packaged_manifest() {
+            local package="$1" version="$2" archive manifest manifest_contents
+            archive="core/rust/target/package/${package}-${version}.crate"
+            manifest="$(tar -tzf "$archive" | grep '/Cargo.toml$')"
+            manifest_contents="$(tar -xOf "$archive" "$manifest")"
+            if grep -En '= \{[^}]*[[:space:],{](path|git)[[:space:]]*=' <<<"$manifest_contents"; then
+              printf '%s contains a local or git dependency\n' "$package" >&2
+              exit 1
+            fi
+          }
+          crate_metadata() {
+            local package="$1" version="$2" output status
+            output="$(mktemp)"
+            status="$(curl --silent --show-error --retry 5 --retry-all-errors \
+              --header "Authorization: Bearer ${CARGO_REGISTRY_TOKEN}" \
+              --header 'User-Agent: hara-native-release' \
+              --output "$output" --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/${package}/${version}")" || {
+                rm -f "$output"
+                return 2
+              }
+            case "$status" in
+              200) cat "$output" ;;
+              404) rm -f "$output"; return 1 ;;
+              *)
+                rm -f "$output"
+                printf 'crates.io metadata request for %s %s returned HTTP %s\n' "$package" "$version" "$status" >&2
+                return 2
+                ;;
+            esac
+            rm -f "$output"
+          }
           wait_for_crate() {
             local package="$1" version="$2" metadata
             for _ in $(seq 1 30); do
-              if metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/${package}/${version}")"; then
+              if metadata="$(crate_metadata "$package" "$version")"; then
                 printf '%s' "$metadata"
                 return 0
               fi
+              test "$?" = 1 || return 1
               sleep 5
             done
             printf 'timed out waiting for %s %s on crates.io\n' "$package" "$version" >&2
             return 1
           }
           publish_or_resume() {
-            local manifest="$1" package="$2" output="$3" version metadata checksum
+            local manifest="$1" package="$2" output="$3" version metadata checksum expected
             version="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -er --arg package "$package" '.packages[] | select(.name == $package) | .version')"
-            if metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/${package}/${version}")"; then
+            package_for_registry "$manifest" "$package" "$version"
+            check_packaged_manifest "$package" "$version"
+            expected="$(sha256sum "core/rust/target/package/${package}-${version}.crate" | awk '{print $1}')"
+            if metadata="$(crate_metadata "$package" "$version")"; then
               test "$RESUMING" = true
             else
+              test "$?" = 1
               cargo publish --locked --manifest-path "$manifest"
               metadata="$(wait_for_crate "$package" "$version")"
             fi
             checksum="$(jq -er '.version.checksum' <<<"$metadata")"
+            test "$checksum" = "$expected"
             printf '%s=%s\n' "$output" "$checksum" >> "$GITHUB_OUTPUT"
           }
           publish_or_resume core/rust/crates/abi/Cargo.toml hara-abi abi_sha256
-          cargo package --locked --manifest-path core/rust/crates/hta-codec/Cargo.toml --allow-dirty --no-verify
-          hta_manifest="$(tar -tzf core/rust/target/package/hara-hta-*.crate | grep '/Cargo.toml$')"
-          hta_manifest_contents="$(tar -xOf core/rust/target/package/hara-hta-*.crate "$hta_manifest")"
-          if grep -En '= \{[^}]*[[:space:],{](path|git)[[:space:]]*=' <<<"$hta_manifest_contents"; then
-            printf '%s contains a local or git dependency\n' hara-hta >&2
-            exit 1
-          fi
           publish_or_resume core/rust/crates/hta-codec/Cargo.toml hara-hta hta_sha256
           publish_or_resume core/rust/crates/protocol-macros/Cargo.toml hara-protocol-macros macros_sha256
 
@@ -228,7 +304,16 @@ jobs:
           RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
-          cargo package --locked --manifest-path core/rust/Cargo.toml --allow-dirty --no-verify
+          for attempt in $(seq 1 30); do
+            if cargo package --locked --manifest-path core/rust/Cargo.toml --allow-dirty --no-verify; then
+              break
+            fi
+            if test "$attempt" = 30; then
+              printf 'failed to package hara-native %s after crates.io index propagation\n' "$RELEASE_VERSION" >&2
+              exit 1
+            fi
+            sleep 5
+          done
           manifest="$(tar -tzf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" | grep '/Cargo.toml$')"
           manifest_contents="$(tar -xOf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" "$manifest")"
           if grep -En '= \{[^}]*[[:space:],{](path|git)[[:space:]]*=' <<<"$manifest_contents"; then
@@ -251,17 +336,72 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
           RESUMING: ${{ needs.release-intent.outputs.resuming }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
           test -n "$CARGO_REGISTRY_TOKEN"
+          package_for_registry() {
+            local attempt
+            for attempt in $(seq 1 30); do
+              if cargo package --locked --manifest-path core/rust/Cargo.toml --allow-dirty --no-verify; then
+                return 0
+              fi
+              if test "$attempt" = 30; then
+                printf 'failed to package hara-native %s after crates.io index propagation\n' "$RELEASE_VERSION" >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          crate_metadata() {
+            local package="$1" version="$2" output status
+            output="$(mktemp)"
+            status="$(curl --silent --show-error --retry 5 --retry-all-errors \
+              --header "Authorization: Bearer ${CARGO_REGISTRY_TOKEN}" \
+              --header 'User-Agent: hara-native-release' \
+              --output "$output" --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/${package}/${version}")" || {
+                rm -f "$output"
+                return 2
+              }
+            case "$status" in
+              200) cat "$output" ;;
+              404) rm -f "$output"; return 1 ;;
+              *)
+                rm -f "$output"
+                printf 'crates.io metadata request for %s %s returned HTTP %s\n' "$package" "$version" "$status" >&2
+                return 2
+                ;;
+            esac
+            rm -f "$output"
+          }
+          wait_for_crate() {
+            local metadata
+            for _ in $(seq 1 30); do
+              if metadata="$(crate_metadata hara-native "$RELEASE_VERSION")"; then
+                printf '%s' "$metadata"
+                return 0
+              fi
+              test "$?" = 1 || return 1
+              sleep 5
+            done
+            printf 'timed out waiting for hara-native %s on crates.io\n' "$RELEASE_VERSION" >&2
+            return 1
+          }
           version="$(cargo metadata --manifest-path core/rust/Cargo.toml --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "hara-native") | .version')"
-          if metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/hara-native/${version}")"; then
+          test "$version" = "$RELEASE_VERSION"
+          package_for_registry
+          expected="$(sha256sum "core/rust/target/package/hara-native-${version}.crate" | awk '{print $1}')"
+          if metadata="$(crate_metadata hara-native "$version")"; then
             test "$RESUMING" = true
           else
+            test "$?" = 1
             cargo publish --locked --manifest-path core/rust/Cargo.toml
-            metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/hara-native/${version}")"
+            metadata="$(wait_for_crate)"
           fi
-          printf 'native_sha256=%s\n' "$(jq -er '.version.checksum' <<<"$metadata")" >> "$GITHUB_OUTPUT"
+          checksum="$(jq -er '.version.checksum' <<<"$metadata")"
+          test "$checksum" = "$expected"
+          printf 'native_sha256=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
 
   verify-crates:
     needs: [release-ref, publish-native-crate]
@@ -286,40 +426,58 @@ jobs:
       jar_sha256: ${{ steps.publish.outputs.jar_sha256 }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hara-native-jvm
+          path: dist
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
-          server-id: hara-packages
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+      - name: Import the Maven Central signing key
+        shell: bash
+        env:
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$MAVEN_GPG_PRIVATE_KEY"
+          printf '%s' "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --list-secret-keys --with-colons | grep -q '^sec:'
       - id: publish
         name: Publish or verify the exact Maven artifact
         shell: bash
         env:
-          MAVEN_USERNAME: ${{ secrets.PACKAGES_MAVEN_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.PACKAGES_MAVEN_PASSWORD }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
           RESUMING: ${{ needs.release-intent.outputs.resuming }}
           RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
-          test -n "$MAVEN_USERNAME"
-          test -n "$MAVEN_PASSWORD"
+          test -n "$MAVEN_CENTRAL_USERNAME"
+          test -n "$MAVEN_CENTRAL_PASSWORD"
           mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
           jar="core/java/target/hara-native-jvm-${RELEASE_VERSION}.jar"
+          release_jar="dist/hara-native-jvm-${RELEASE_VERSION}.jar"
+          test "$(sha256sum "$jar" | awk '{print $1}')" = "$(sha256sum "$release_jar" | awk '{print $1}')"
+          test -f "core/java/target/hara-native-jvm-${RELEASE_VERSION}-sources.jar"
+          test -f "core/java/target/hara-native-jvm-${RELEASE_VERSION}-javadoc.jar"
           jar_contents="$(jar tf "$jar")"
           if grep -En '\.hal$|(^|/)hal-src/|std/foundation|tool/' <<<"$jar_contents"; then
             printf '%s contains source-owned payloads\n' "$jar" >&2
             exit 1
           fi
-          url="https://packages.hara-lang.org/maven/releases/org/hara-lang/hara-native-jvm/${RELEASE_VERSION}/hara-native-jvm-${RELEASE_VERSION}.jar"
+          url="https://repo.maven.apache.org/maven2/org/hara-lang/hara-native-jvm/${RELEASE_VERSION}/hara-native-jvm-${RELEASE_VERSION}.jar"
           published="$RUNNER_TEMP/hara-native-jvm-${RELEASE_VERSION}.jar"
-          if curl --fail --silent --show-error --user "${MAVEN_USERNAME}:${MAVEN_PASSWORD}" --output "$published" "$url"; then
+          if curl --fail --silent --show-error --retry 5 --retry-all-errors --output "$published" "$url"; then
             test "$RESUMING" = true
           else
             mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests deploy
-            curl --fail --silent --show-error --user "${MAVEN_USERNAME}:${MAVEN_PASSWORD}" --output "$published" "$url"
+            curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 --output "$published" "$url"
           fi
           test "$(sha256sum "$jar" | awk '{print $1}')" = "$(sha256sum "$published" | awk '{print $1}')"
           printf 'jar_sha256=sha256:%s\n' "$(sha256sum "$published" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
@@ -334,21 +492,18 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-          server-id: hara-packages
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
       - name: Fetch and execute the exact Maven release
         shell: bash
         env:
-          MAVEN_USERNAME: ${{ secrets.PACKAGES_MAVEN_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.PACKAGES_MAVEN_PASSWORD }}
           RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+          MAVEN_SHA256: ${{ needs.publish-maven.outputs.jar_sha256 }}
         run: |
           set -euo pipefail
           mvn -q dependency:get \
             -Dartifact="org.hara-lang:hara-native-jvm:${RELEASE_VERSION}" \
-            -DremoteRepositories="hara-packages::default::https://packages.hara-lang.org/maven/releases"
+            -DremoteRepositories="central::default::https://repo.maven.apache.org/maven2"
           jar="$HOME/.m2/repository/org/hara-lang/hara-native-jvm/${RELEASE_VERSION}/hara-native-jvm-${RELEASE_VERSION}.jar"
+          test "sha256:$(sha256sum "$jar" | awk '{print $1}')" = "$MAVEN_SHA256"
           test "$(java -jar "$jar" --version)" = "hara-native-jvm ${RELEASE_VERSION}"
 
   publish-npm:
@@ -360,31 +515,27 @@ jobs:
       hta_integrity: ${{ steps.publish.outputs.hta_integrity }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hara-native-browser
+          path: core/rust/web/dist
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: core/rust/web/package-lock.json
-          registry-url: https://packages.hara-lang.org/npm/
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          registry-url: https://registry.npmjs.org
       - id: publish
         name: Publish or verify both public npm packages
         working-directory: core/rust/web
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RESUMING: ${{ needs.release-intent.outputs.resuming }}
           RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
           test -n "$NODE_AUTH_TOKEN"
-          make -C ../../.. build-browser-profiles
-          mkdir -p dist
-          (cd packages/browser && npm pack --pack-destination ../../dist)
-          (cd packages/hta && npm pack --pack-destination ../../dist)
           for archive in dist/*.tgz; do
             archive_contents="$(tar -tzf "$archive")"
             if grep -En '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$' <<<"$archive_contents"; then
@@ -392,21 +543,59 @@ jobs:
               exit 1
             fi
           done
+          npm_metadata() {
+            local package="$1" version="$2" encoded output status
+            encoded="$(node -p 'encodeURIComponent(process.argv[1])' "$package")"
+            output="$(mktemp)"
+            status="$(curl --silent --show-error --retry 5 --retry-all-errors \
+              --output "$output" --write-out '%{http_code}' \
+              "https://registry.npmjs.org/${encoded}/${version}")" || {
+                rm -f "$output"
+                return 2
+              }
+            case "$status" in
+              200) jq -er '.dist.integrity' "$output" ;;
+              404) rm -f "$output"; return 1 ;;
+              *)
+                rm -f "$output"
+                printf 'npm metadata request for %s %s returned HTTP %s\n' "$package" "$version" "$status" >&2
+                return 2
+                ;;
+            esac
+            rm -f "$output"
+          }
+          wait_for_npm() {
+            local package="$1" version="$2" integrity
+            for _ in $(seq 1 30); do
+              if integrity="$(npm_metadata "$package" "$version")"; then
+                printf '%s' "$integrity"
+                return 0
+              fi
+              test "$?" = 1 || return 1
+              sleep 5
+            done
+            printf 'timed out waiting for %s %s on npmjs\n' "$package" "$version" >&2
+            return 1
+          }
+          local_integrity() {
+            node -e 'const crypto = require("crypto"); const fs = require("fs"); process.stdout.write(`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64")}`);' "$1"
+          }
           publish_or_resume() {
-            local package="$1" output="$2" published integrity
-            published="$(npm view "${package}@${RELEASE_VERSION}" version --registry https://packages.hara-lang.org/npm/ 2>/dev/null || true)"
-            if [ -n "$published" ]; then
+            local package="$1" archive="$2" output="$3" integrity expected
+            test -f "$archive"
+            expected="$(local_integrity "$archive")"
+            if integrity="$(npm_metadata "$package" "$RELEASE_VERSION")"; then
               test "$RESUMING" = true
-              test "$published" = "$RELEASE_VERSION"
             else
-              npm publish --workspace "$package"
+              test "$?" = 1
+              npm publish "$archive" --registry https://registry.npmjs.org --access public --provenance
+              integrity="$(wait_for_npm "$package" "$RELEASE_VERSION")"
             fi
-            integrity="$(npm view "${package}@${RELEASE_VERSION}" dist.integrity --registry https://packages.hara-lang.org/npm/)"
-            test -n "$integrity"
+            test "$integrity" = "$expected"
             printf '%s=%s\n' "$output" "$integrity" >> "$GITHUB_OUTPUT"
           }
-          publish_or_resume @hara-lang/native-browser browser_integrity
-          publish_or_resume @hara-lang/hta hta_integrity
+          publish_or_resume @hara-lang/native-browser "dist/hara-lang-native-browser-${RELEASE_VERSION}.tgz" browser_integrity
+          publish_or_resume @hara-lang/hta "dist/hara-lang-hta-${RELEASE_VERSION}.tgz" hta_integrity
 
   verify-npm:
     needs: [release-ref, publish-npm]
@@ -416,11 +605,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: https://packages.hara-lang.org/npm/
+          registry-url: https://registry.npmjs.org
       - name: Install both exact npm releases in a fresh project
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_NPM_TOKEN }}
           RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
@@ -428,7 +616,7 @@ jobs:
           mkdir -p "$work"
           cd "$work"
           npm init --yes >/dev/null
-          npm install --ignore-scripts --package-lock=false --registry https://packages.hara-lang.org/npm/ \
+          npm install --ignore-scripts --package-lock=false --registry https://registry.npmjs.org \
             "@hara-lang/native-browser@${RELEASE_VERSION}" \
             "@hara-lang/hta@${RELEASE_VERSION}"
           node -e 'const fs = require("fs"); for (const name of ["native-browser", "hta"]) { const p = `node_modules/@hara-lang/${name}/package.json`; if (JSON.parse(fs.readFileSync(p)).version !== process.env.RELEASE_VERSION) process.exit(1); }'
