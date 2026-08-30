@@ -86,8 +86,8 @@ jobs:
           test "$(node -p 'require("./core/rust/web/packages/db-sqlite/package.json").dependencies["@hara-lang/hta"]')" = "$version"
           test "$(jq -er '.sourceOwnership.packageRegistry.maven' release/compatibility.json)" = https://repo.maven.apache.org/maven2
           test "$(jq -er '.sourceOwnership.packageRegistry.npm' release/compatibility.json)" = https://registry.npmjs.org
-          rg -q '<id>central</id>' core/java/pom.xml
-          rg -q '<artifactId>central-publishing-maven-plugin</artifactId>' core/java/pom.xml
+          grep -q '<id>central</id>' core/java/pom.xml
+          grep -q '<artifactId>central-publishing-maven-plugin</artifactId>' core/java/pom.xml
           test "$(node -p 'require("./core/rust/web/packages/browser/package.json").publishConfig.registry')" = https://registry.npmjs.org
           test "$(node -p 'require("./core/rust/web/packages/hta/package.json").publishConfig.registry')" = https://registry.npmjs.org
 

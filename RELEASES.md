@@ -62,6 +62,6 @@ retag a public artifact.
 
 The partial `v0.1.6` attempt is retained only as audit evidence: its immutable
 tag remains pinned to the abandoned release commit and the draft remains
-unpublished. `release/v0.1.6-aborted` preserves that branch head. The active
+unpublished. `archive/release-v0.1.6-aborted` preserves that branch head. The active
 `release` branch is re-anchored once to the reviewed `0.1.7` main commit; future
 promotions are merge commits from `main` so they stay conflict-free.
