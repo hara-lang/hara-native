@@ -484,7 +484,7 @@ public final class HaraServer implements AutoCloseable {
         "SERVER",
         "HARA",
         "VERSION",
-        "0.1.7",
+        "0.1.8",
         "PROTO",
         (long) protocol,
         "RUNTIME",
