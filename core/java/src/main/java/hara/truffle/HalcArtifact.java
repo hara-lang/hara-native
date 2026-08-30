@@ -166,7 +166,7 @@ final class HalcArtifact {
       if (!(form instanceof hara.lang.data.List<?> list) || list.count() < 2) continue;
       if (!(list.nth(0) instanceof Symbol operator) || operator.getNamespace() != null) continue;
       if (!(list.nth(1) instanceof Symbol name) || name.getNamespace() != null) continue;
-      if (Set.of("def", "defn", "defn-", "defmacro", "defstruct", "defmutable", "declare")
+      if (Set.of("def", "defn", "defmacro", "defstruct", "defmutable", "declare")
           .contains(operator.getName())) {
         definitions.add(name.getName());
       }
@@ -182,7 +182,7 @@ final class HalcArtifact {
       if (!(form instanceof hara.lang.data.List<?> list) || list.count() < 2) continue;
       if (!(list.nth(0) instanceof Symbol operator)
           || operator.getNamespace() != null
-          || !("defn".equals(operator.getName()) || "defn-".equals(operator.getName()))) {
+          || !"defn".equals(operator.getName())) {
         continue;
       }
       if (!(list.nth(1) instanceof Symbol name)
@@ -281,7 +281,7 @@ final class HalcArtifact {
                 fields));
         continue;
       }
-      if (!("defn".equals(operator.getName()) || "defn-".equals(operator.getName()))
+      if (!"defn".equals(operator.getName())
           || !(name.meta() instanceof IMapType<?, ?> rawMetadata)) continue;
       Object schema = ((IMapType<Object, Object>) rawMetadata).lookup(Keyword.create("schema"));
       if (schema == null) continue;

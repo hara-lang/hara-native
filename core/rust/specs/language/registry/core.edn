@@ -238,9 +238,9 @@
    :class :compiler
    :source "(do (defmacro do-all [& forms] `(do ~@forms)) (do-all 1 2 3))"
    :expect {:value 3 :type :integer}}
-  {:id :compiler/declare-private
+  {:id :compiler/declare-function
    :class :compiler
-   :source "(do (declare answer) (def answer 42) (defn- private-answer [] answer) (private-answer))"
+   :source "(do (declare answer) (def answer 42) (defn answer-function [] answer) (answer-function))"
    :expect {:value 42 :type :integer}}
   {:id :runtime/destructuring
    :class :runtime

@@ -26,11 +26,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.io.ByteSequence;
 import org.junit.Test;
 
 public class HbcCodecTest {
+  @Test
+  public void sourceFrontEndRejectsTheUnsupportedDefnPrivateAlias() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      PolyglotException rejected =
+          assertThrows(
+              PolyglotException.class,
+              () -> context.eval(HaraLanguage.ID, "(defn- private-answer [] 7)"));
+      assertTrue(rejected.getMessage(), rejected.getMessage().contains("Unbound symbol: defn-"));
+    }
+  }
+
   @Test
   public void alphaTypedProgramsRoundTripCanonically() {
     HbcProgram base = arithmeticProgram();

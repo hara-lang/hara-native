@@ -511,7 +511,7 @@ fn canonicalize_schema_references(
             };
             if !matches!(
                 operator.as_str(),
-                "def" | "defn" | "defn-" | "defmacro" | "defstruct" | "declare"
+                "def" | "defn" | "defmacro" | "defstruct" | "declare"
             ) {
                 return None;
             }
@@ -537,7 +537,7 @@ fn canonicalize_schema_references(
         let Some(Form::Symbol(operator)) = items.first() else {
             continue;
         };
-        if operator != "defn" && operator != "defn-" {
+        if operator != "defn" {
             continue;
         }
         let Some(Form::Metadata(metadata, _)) = items.get_mut(1) else {
@@ -760,7 +760,7 @@ fn build_schema_index(namespace: &str, forms: &[Form]) -> Result<HalcSchemaIndex
             }
             continue;
         }
-        if operator != "defn" && operator != "defn-" {
+        if operator != "defn" {
             continue;
         }
         let Some(Form::Metadata(metadata, _)) = items.get(1) else {

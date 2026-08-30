@@ -973,8 +973,7 @@ fn global_forms_issue_223() {
     // declare interns a nil var and evaluates to nil.
     assert_eq!(eval("(declare future)"), "nil");
     assert_eq!(eval("(declare a b)"), "nil");
-    // defn- compiles like defn (private metadata).
-    assert_eq!(eval("(do (defn- p [] 42) (p))"), "42");
+    assert_eval_error("(defn- p [] 42)", "unbound symbol: defn-");
 }
 
 #[test]

@@ -534,8 +534,7 @@ pub fn infer_function_types(
         let Form::List(items) = super::super::core::form_without_metadata(form) else {
             continue;
         };
-        if !matches!(items.first(), Some(Form::Symbol(operator)) if operator == "defn" || operator == "defn-")
-        {
+        if !matches!(items.first(), Some(Form::Symbol(operator)) if operator == "defn") {
             continue;
         }
         let Some(name) = items.get(1).and_then(binding_name) else {

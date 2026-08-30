@@ -250,7 +250,7 @@ fn top_level_definition_name(form: &Form) -> Option<&str> {
         Form::Symbol(head) => head.as_str(),
         _ => return None,
     };
-    if !matches!(head, "def" | "defonce" | "defn" | "defn-" | "defmacro") {
+    if !matches!(head, "def" | "defonce" | "defn" | "defmacro") {
         return None;
     }
     match values.get(1)? {

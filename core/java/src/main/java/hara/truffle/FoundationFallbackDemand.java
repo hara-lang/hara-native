@@ -23,7 +23,6 @@ final class FoundationFallbackDemand {
       Set.of(
           "def",
           "defn",
-          "defn-",
           "defmacro",
           "defstruct",
           "defmutable",
@@ -148,8 +147,12 @@ final class FoundationFallbackDemand {
         case "fn":
           return scanFn(form, lexical, globals, false);
         case "defn":
-        case "defn-":
           return scanNamedFunction(form, lexical, globals, false);
+        // Keep the removed private-definition alias out of demand analysis so
+        // its operands cannot initiate Foundation loading before analysis
+        // reports the alias as unbound.
+        case "defn-":
+          return false;
         case "defmacro":
           return scanNamedFunction(form, lexical, globals, true);
         case "def":

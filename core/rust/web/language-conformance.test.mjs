@@ -101,3 +101,16 @@ test("HLC1 error expectations reject the wrong normalized error", () => {
   assert.equal(normalizedErrorCategory(new Error("+ expects two numbers")), "expects numbers");
   assert.notEqual(normalizedErrorCategory(new Error("+ expects two numbers")), "division by zero");
 });
+
+test("browser profiles reject the unsupported defn- alias before bytecode generation", async () => {
+  const source = "(defn- private-answer [] 7)";
+  for (const [profile, start] of [["native-vm", startNativeVm], ["native-full", startNativeFull]]) {
+    const hara = await start();
+    try {
+      assert.throws(() => hara.compileBytecode(source), /unbound symbol: defn-/i, profile);
+      assert.throws(() => hara.eval(source), /unbound symbol: defn-/i, profile);
+    } finally {
+      await hara.dispose();
+    }
+  }
+});

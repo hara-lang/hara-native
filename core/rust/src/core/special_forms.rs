@@ -881,14 +881,13 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
                     refresh_schema_contract(&cell)?;
                     Ok(function)
                 }
-                Form::Symbol(n) if n == "defn" || n == "defn-" => {
+                Form::Symbol(n) if n == "defn" => {
                     if fs.len() < 4 {
                         return Err("defn expects a name, parameters, and a body".into());
                     }
                     let (name, metadata) = binding_symbol(&fs[1], "defn name")?;
-                    let (metadata, rest) =
-                        definition_metadata(metadata, &fs[2..], n == "defn-", false)
-                            .map_err(|error| format!("{name}: {error}"))?;
+                    let (metadata, rest) = definition_metadata(metadata, &fs[2..], false, false)
+                        .map_err(|error| format!("{name}: {error}"))?;
                     if let Some(schema) = schema_var_reference(metadata.as_deref()) {
                         if binding_var(env, schema.as_str()).is_none() {
                             return Err(format!("schema Var does not exist: {schema}"));

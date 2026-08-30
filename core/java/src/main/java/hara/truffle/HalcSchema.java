@@ -640,7 +640,7 @@ public final class HalcSchema {
       if (!(form instanceof hara.lang.data.List<?> definition) || definition.count() < 3) continue;
       if (!(definition.nth(0) instanceof Symbol operator)
           || operator.getNamespace() != null
-          || !("defn".equals(operator.getName()) || "defn-".equals(operator.getName()))) continue;
+          || !"defn".equals(operator.getName())) continue;
       if (!(definition.nth(1) instanceof Symbol name)) continue;
       int parametersAt = -1;
       for (int index = 2; index < definition.count(); index++) {
