@@ -74,10 +74,12 @@ pub fn build_path_with_package(
 }
 
 fn project_relative_path(project: &Project, path: &Path) -> Result<PathBuf, String> {
-    let root = project
-        .root
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve project root {}: {error}", project.root.display()))?;
+    let root = project.root.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve project root {}: {error}",
+            project.root.display()
+        )
+    })?;
     let candidate = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -507,6 +509,24 @@ pub fn publish_path_with_signer<F>(
 where
     F: Fn(&[u8]) -> Result<(String, String), String>,
 {
+    publish_path_with_signer_and_identity(path, tap_name, dry_run, skip_signed_tag, signer, None)
+}
+
+/// Integrated hosts pass their public publisher key so a missing policy grant
+/// can enter the browser-backed enrollment flow and successful submissions can
+/// carry an identity authorization.  The legacy external signer path remains
+/// available for embedding hosts that have not adopted that flow yet.
+pub fn publish_path_with_signer_and_identity<F>(
+    path: &Path,
+    tap_name: &str,
+    dry_run: bool,
+    skip_signed_tag: bool,
+    signer: F,
+    publisher_public_key: Option<&str>,
+) -> Result<String, String>
+where
+    F: Fn(&[u8]) -> Result<(String, String), String>,
+{
     if skip_signed_tag && !dry_run {
         return Err("publish --skip-signed-tag requires --dry-run".into());
     }
@@ -533,6 +553,7 @@ where
         skip_signed_tag,
         &scratch,
         &signer,
+        publisher_public_key,
     );
     let _ = fs::remove_dir_all(&scratch);
     result
@@ -545,16 +566,18 @@ fn publish_inner<F>(
     skip_signed_tag: bool,
     scratch_root: &Path,
     signer: &F,
+    publisher_public_key: Option<&str>,
 ) -> Result<String, String>
 where
     F: Fn(&[u8]) -> Result<(String, String), String>,
 {
     let policy = tap::fetch_verified_policy(trusted_tap, scratch_root)?;
-    let tag = format!("v{}", project.version);
+    let tag = project.release_tag.clone();
     let commit = source_release_commit(&project.root, &tag, skip_signed_tag)?;
     let repository = tap::git(&project.root, ["config", "--get", "remote.origin.url"])?;
     let recipe = validate_recipe(project)?;
     build_archive(project, &scratch_root.join("publish.harp"))?;
+    let project_sha256 = file_sha256(&project.root.join("project.edn"))?;
     let recipe_sha256 = file_sha256(&recipe)?;
     let coordinate = project::normalize_coordinate(&project.id)?;
     let intent = tap::canonical_recipe_intent(
@@ -563,12 +586,27 @@ where
         &repository,
         &tag,
         &commit,
+        &project_sha256,
         &recipe_sha256,
         &trusted_tap.name,
         &policy.revision,
     );
     let (key_id, signature) = signer(intent.as_bytes())?;
-    tap::authorize(&policy, &key_id, &coordinate, intent.as_bytes(), &signature)?;
+    if let Err(error) = tap::authorize(&policy, &key_id, &coordinate, intent.as_bytes(), &signature)
+    {
+        if !dry_run {
+            if let Some(public_key) = publisher_public_key {
+                crate::identity_tool::request_publisher_grant_with_signer(
+                    &coordinate,
+                    &intent,
+                    &policy.revision,
+                    public_key,
+                    signer,
+                )?;
+            }
+        }
+        return Err(error);
+    }
     if dry_run {
         let status = if skip_signed_tag {
             "local publish preflight (signed tag skipped)"
@@ -584,11 +622,22 @@ where
         .registry
         .first()
         .ok_or("official tap has no publication endpoint")?;
+    let authorization = match publisher_public_key {
+        Some(public_key) => crate::identity_tool::request_publication_authorization_with_signer(
+            &coordinate,
+            &intent,
+            &policy.revision,
+            public_key,
+            signer,
+        )?,
+        None => "null".into(),
+    };
     let body = format!(
-        "{{\"intent\":{},\"key_id\":\"{}\",\"signature\":\"{}\"}}",
+        "{{\"intent\":{},\"key_id\":\"{}\",\"signature\":\"{}\",\"authorization\":{}}}",
         json_string(&intent),
         key_id,
-        signature
+        signature,
+        authorization,
     );
     let output = std::process::Command::new("curl")
         .args([

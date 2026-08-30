@@ -25,9 +25,10 @@ release.
 
 ## What must be ready
 
-Prepare a real source-package repository. The smoke projects in
-[examples/](examples/README.md) prove the local package/host boundary, but are
-not release recipes and should not be published at their sample versions.
+Prepare a real source-package repository. `examples/smoke-answer` is the first
+end-to-end publication fixture: its protected `hara-native` namespace still
+requires an approved root-policy grant before its immutable `0.1.0` release can
+be requested.
 
 The project needs an immutable package version and an official-tap coordinate.
 A project id without a tap prefix is normalized to the `hara` tap, so this:
@@ -35,14 +36,14 @@ A project id without a tap prefix is normalized to the `hara` tap, so this:
 ```clojure
 {:project/id acme/widgets
  :project/version "1.2.3"
- :project/recipe "hara.recipe.edn"}
+ :project/recipe "project.receipe.edn"}
 ```
 
 publishes the canonical coordinate `hara:acme/widgets`. An alternate tap must
 be explicit (for example, `partner:acme/widgets`) and selected with the matching
 `--tap` value.
 
-Official publication also requires `hara.recipe.edn`. It describes a
+Official publication also requires `project.receipe.edn`. It describes a
 reproducible build, not a shell script. A minimal HAL-source recipe is:
 
 ```clojure
@@ -98,24 +99,56 @@ one expected for the official tap.
 
 ## Establish a publisher identity
 
-The private key stays outside the repository. `hara-native id enroll` derives
-the corresponding public key from `HARA_SIGNER_KEY_FILE`, obtains or accepts a
-one-time enrollment challenge, and signs that canonical enrollment proof. It
-sends the public key, key id, owner, challenge, and signature to the identity
-service; it never sends the private key.
+The private key stays outside the repository. A normal `hara-native publish`
+now derives the public key, starts a browser device flow, and signs the fresh
+server challenge automatically when a key is not yet granted. It sends only
+the public key, key id, coordinate, canonical intent, and detached proof; it
+never sends the private key.
 
-Authenticate and enroll the public key:
+The compatibility commands remain available for diagnosing an identity service,
+but a new publisher normally starts at `publish`:
 
 ```text
-"$HARA_NATIVE" id login
-"$HARA_NATIVE" id enroll --tap hara --owner YOUR_GITHUB_OWNER
-"$HARA_NATIVE" id status
+"$HARA_NATIVE" publish --tap hara .
 ```
 
-Enrollment alone is not authorization to publish. An identity-policy maintainer
-must grant the enrolled key the exact coordinate—for example,
-`hara:acme/widgets`. A dry run below proves that the key, policy revision, and
-coordinate grant all agree.
+For an owner namespace such as `hara:YOUR_GITHUB_OWNER/*`, Identity creates an
+automatically approved grant request. Protected namespaces such as
+`hara:hara-native/*` create a review issue. In both cases the offline identity
+root signer must produce and merge a valid signed policy PR before the command
+can continue. Re-run the same `publish` command after that merge.
+
+### Finalize a reviewed grant offline
+
+The browser flow never receives the identity root private key and it never
+changes policy. After the review issue is approved, a policy maintainer works
+from an offline checkout of `hara-identity` and uses the same `hara-native`
+executable to make the narrowly scoped change. This command refuses relative
+paths, a root key that does not match `:identity/root-key`, a conflicting key
+id, or a changed authorization-service key.
+
+```text
+export HARA_IDENTITY_ROOT_KEY_FILE="/offline/keys/hara-identity-root.ed25519"
+export HARA_PUBLISH_AUTHORIZATION_PUBLIC_KEY="<64 lowercase hex characters>"
+
+"$HARA_NATIVE" id policy grant \
+  --identity "$PWD/identity.edn" \
+  --root-key-file "$HARA_IDENTITY_ROOT_KEY_FILE" \
+  --key-id "hoebat-2026-01" \
+  --public-key "96369cd1bb1ea0221511ff5f2b824bd7e4617efe3d91b5809bf16029e95facfb" \
+  --github-subject "YOUR_NUMERIC_GITHUB_ID" \
+  --coordinate "hara:hara-native/smoke-answer" \
+  --authorization-public-key "$HARA_PUBLISH_AUTHORIZATION_PUBLIC_KEY"
+```
+
+Use `--dry-run` first to inspect the complete replacement policy and detached
+signature without writing either file. The normal command writes only
+`identity.edn` and its matching `identity.edn.sig`; review those two files,
+commit them on a policy branch, and open the protected policy PR through the
+repository's normal GitHub workflow. The public authorization key must match
+the private Ed25519 key configured only on the Identity service as
+`HARA_PUBLISH_AUTHORIZATION_PRIVATE_KEY`; it is not the publisher key and must
+not be put in a source repository.
 
 ## Validate and tag the source release
 
@@ -130,17 +163,18 @@ that will sign and submit the request:
 HARA_DIST_HOME="$(mktemp -d)" "$HARA_NATIVE" bundle verify /tmp/acme-widgets-1.2.3.harp
 ```
 
-The publisher binds a release to a Git tag named exactly `v` plus the package
-version. Ensure the worktree is clean, push the source commit, create a signed
+The publisher binds a release to a Git tag named exactly the package version
+(for example, `1.2.3`). `:project/release-tag` can override that default for a
+monorepo. Ensure the worktree is clean, push the source commit, create a signed
 tag, and verify it locally and on the remote before requesting publication:
 
 ```text
 git status --short
 git push origin main
-git tag -s v1.2.3 -m "acme/widgets 1.2.3"
-git verify-tag v1.2.3
-git push origin v1.2.3
-git ls-remote --tags origin refs/tags/v1.2.3
+git tag -s 1.2.3 -m "acme/widgets 1.2.3"
+git verify-tag 1.2.3
+git push origin 1.2.3
+git ls-remote --tags origin refs/tags/1.2.3
 ```
 
 Use your repository’s normal protected-branch/release policy when the source
@@ -169,7 +203,7 @@ First perform the complete non-mutating publisher preflight:
 "$HARA_NATIVE" publish --tap hara --dry-run .
 ```
 
-The dry run verifies the trusted tap policy, the signed `v1.2.3` source tag,
+The dry run verifies the trusted tap policy, the signed `1.2.3` source tag,
 the origin repository, recipe digest, detached publisher signature, and the
 coordinate grant. It does not contact the publication endpoint.
 
@@ -204,17 +238,12 @@ overwriting the requested release.
 
 ## Current limitations
 
-This checkout’s checked-in smoke fixtures are deliberately local; only
-`smoke-answer` contains the minimal typed recipe needed to demonstrate a local
-publication preflight. Use the guide when creating the separate package
-repository rather than treating their `0.1.0` identities as a release plan.
-In particular, `publish --dry-run examples/smoke-answer` is not a smoke-test
-command: publication preflight intentionally requires the enclosing source
-repository to have a valid signed `v0.1.0` tag before it reaches the recipe and
-grant checks. Use `make test-examples` to test the checked-in fixtures.
-`--skip-signed-tag` can inspect the later local checks in a real untagged
-repository, but it does not make a smoke fixture releasable or bypass its
-missing publication grant.
+`smoke-answer` contains the minimal typed recipe used for the first protected
+namespace rollout. `publish --dry-run examples/smoke-answer` intentionally
+requires the enclosing source repository to have a valid signed `0.1.0` tag
+before it reaches recipe and grant checks. Use `make test-examples` for local
+fixture verification. `--skip-signed-tag` can inspect later local checks in an
+untagged repository, but it never makes a request releasable.
 Do not bypass the identity and registry protocol by uploading a local archive:
 `hara-native publish` always sends a signed source-package request, and the
 registry remains the authority that deploys the immutable release.

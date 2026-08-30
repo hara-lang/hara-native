@@ -39,6 +39,28 @@ fn rejects_escaping_source_paths() {
 }
 
 #[test]
+fn publication_tag_defaults_to_the_bare_project_version_and_allows_an_override() {
+    let root = temp("release-tag");
+    fs::create_dir_all(&root).unwrap();
+    let base = "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.2.3\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}";
+    fs::write(root.join("project.edn"), base).unwrap();
+    assert_eq!(read(&root).unwrap().release_tag, "1.2.3");
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned() + " :project/release-tag \"demo-app-1.2.3\"}",
+    )
+    .unwrap();
+    assert_eq!(read(&root).unwrap().release_tag, "demo-app-1.2.3");
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned() + " :project/release-tag \"v1..2.3\"}",
+    )
+    .unwrap();
+    assert!(read(&root).unwrap_err().contains("release-tag"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn creates_and_validates_an_empty_lock() {
     let root = temp("lock");
     let project = new_app(&root, "lock-app").unwrap();
@@ -151,7 +173,10 @@ fn accepts_a_profile_only_multi_package_project_declaration() {
     .unwrap();
     let project = read(&root).unwrap();
     assert_eq!(project.package_name, None);
-    assert_eq!(project.package_profile, Some(PathBuf::from("config/packages.edn")));
+    assert_eq!(
+        project.package_profile,
+        Some(PathBuf::from("config/packages.edn"))
+    );
     assert!(!project.package_workspace);
     fs::remove_dir_all(root).unwrap();
 }

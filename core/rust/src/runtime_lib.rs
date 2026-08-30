@@ -5,6 +5,7 @@ pub mod asset;
 // value, protocol, promise, and host-call types form the runtime integration ABI.
 #[cfg(all(target_arch = "wasm32", not(feature = "raw-wasm")))]
 mod browser_wasm_provider;
+pub mod command;
 mod clock;
 pub mod compiled_product;
 pub mod core;

@@ -175,6 +175,7 @@
 						<testInclude>hara/truffle/HaraPackageToolTest.java</testInclude>
 						<testInclude>hara/truffle/JvmPackageLoaderTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeTestRegistryTest.java</testInclude>
+						<testInclude>hara/truffle/HaraNativeCommandTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
 					</testIncludes>
 					<annotationProcessorPaths>
@@ -223,6 +224,7 @@
 						<include>hara/truffle/HaraPackageToolTest.java</include>
 						<include>hara/truffle/JvmPackageLoaderTest.java</include>
 						<include>hara/truffle/HaraNativeTestRegistryTest.java</include>
+						<include>hara/truffle/HaraNativeCommandTest.java</include>
 					</includes>
 					<failIfNoTests>true</failIfNoTests>
 				</configuration>

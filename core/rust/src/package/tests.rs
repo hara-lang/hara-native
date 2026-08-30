@@ -258,24 +258,24 @@ fn packages_lock_and_explicit_portable_workspace_only() {
 #[test]
 fn validates_typed_recipes_and_installs_content_addressed_roots() {
     let root = fixture();
-    fs::write(root.join("hara.recipe.edn"), "{:recipe/format \"0.0.0-alpha\" :recipe/adapter :hal :recipe/toolchain {} :recipe/inputs {} :recipe/outputs []}\n").unwrap();
+    fs::write(root.join("project.receipe.edn"), "{:recipe/format \"0.0.0-alpha\" :recipe/adapter :hal :recipe/toolchain {} :recipe/inputs {} :recipe/outputs []}\n").unwrap();
     let source = fs::read_to_string(root.join("project.edn")).unwrap();
     fs::write(
         root.join("project.edn"),
         source.trim().strip_suffix('}').unwrap().to_owned()
-            + " :project/recipe \"hara.recipe.edn\"}\n",
+            + " :project/recipe \"project.receipe.edn\"}\n",
     )
     .unwrap();
     let project = read_project(&root).unwrap();
     assert_eq!(
         validate_recipe(&project).unwrap(),
-        root.join("hara.recipe.edn")
+        root.join("project.receipe.edn")
     );
     let archive = root.join("package.harp");
     build_archive(&project, &archive).unwrap();
     let dist = root.join("dist");
     let installed = install_archive_at(&archive, &dist).unwrap();
-    assert!(installed.join("hara.recipe.edn").is_file());
+    assert!(installed.join("project.receipe.edn").is_file());
     assert!(dist.join("packages/hara/example/app/1.2.3.edn").is_file());
     fs::remove_dir_all(root).unwrap();
 }
@@ -396,12 +396,12 @@ fn rejects_tampering_in_an_existing_content_addressed_root() {
 #[test]
 fn rejects_shell_recipe_escape_hatches() {
     let root = fixture();
-    fs::write(root.join("hara.recipe.edn"), "{:recipe/format \"0.0.0-alpha\" :recipe/adapter :hal :recipe/toolchain {} :recipe/inputs {:command [\"sh\"]} :recipe/outputs []}\n").unwrap();
+    fs::write(root.join("project.receipe.edn"), "{:recipe/format \"0.0.0-alpha\" :recipe/adapter :hal :recipe/toolchain {} :recipe/inputs {:command [\"sh\"]} :recipe/outputs []}\n").unwrap();
     let source = fs::read_to_string(root.join("project.edn")).unwrap();
     fs::write(
         root.join("project.edn"),
         source.trim().strip_suffix('}').unwrap().to_owned()
-            + " :project/recipe \"hara.recipe.edn\"}\n",
+            + " :project/recipe \"project.receipe.edn\"}\n",
     )
     .unwrap();
     assert!(validate_recipe(&read_project(&root).unwrap())

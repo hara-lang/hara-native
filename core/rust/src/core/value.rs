@@ -1323,6 +1323,14 @@ fn native_test_provider(native_type: &str, method: &str) -> Result<Value, String
     }))
 }
 
+fn native_command_provider(native_type: &str, method: &str) -> Result<Value, String> {
+    let display_name = native_display_name(native_type, method);
+    let method = method.to_owned();
+    Ok(native_variadic_function(&display_name, move |arguments| {
+        native_command_values(&method, arguments)
+    }))
+}
+
 fn native_regexp_provider(native_type: &str, method: &str) -> Result<Value, String> {
     let display_name = native_display_name(native_type, method);
     let method = method.to_owned();

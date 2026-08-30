@@ -58,7 +58,7 @@ fn sign_stdin() -> Result<(), String> {
 pub fn sign_intent_from_environment(intent: &[u8]) -> Result<(String, String), String> {
     let key_path = required_absolute_path(SIGNER_KEY_FILE)?;
     let key_id = required_key_id()?;
-    let signature = sign(&key_path, intent)?;
+    let signature = sign_with_key_file(&key_path, intent)?;
     Ok((key_id, hex(&signature)))
 }
 
@@ -91,14 +91,20 @@ fn generate(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn public_key_hex(path: &Path) -> Result<String, String> {
+/// Derives the lowercase Ed25519 public key for an explicitly selected local
+/// seed file. The policy-maintainer command uses this to prove that the
+/// supplied offline root key matches the policy before it writes anything.
+pub fn public_key_hex(path: &Path) -> Result<String, String> {
     let mut seed = read_private_seed(&absolute_path(path)?)?;
     let public_key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
     seed.zeroize();
     Ok(hex(&public_key))
 }
 
-fn sign(path: &Path, intent: &[u8]) -> Result<[u8; 64], String> {
+/// Signs exact bytes with an explicitly selected local seed file. This is
+/// separate from publisher environment variables so an offline identity root
+/// key cannot be used accidentally for publication.
+pub fn sign_with_key_file(path: &Path, intent: &[u8]) -> Result<[u8; 64], String> {
     let mut seed = read_private_seed(path)?;
     let signing_key = SigningKey::from_bytes(&seed);
     seed.zeroize();
@@ -267,7 +273,7 @@ mod tests {
         let seed = [7_u8; KEY_BYTES];
         write_new_private_seed(&path, &seed).unwrap();
         let intent = b"{:intent/format \"0.0.0-alpha\"}\n";
-        let signature = Signature::from_slice(&sign(&path, intent).unwrap()).unwrap();
+        let signature = Signature::from_slice(&sign_with_key_file(&path, intent).unwrap()).unwrap();
         let public_key =
             VerifyingKey::from_bytes(&SigningKey::from_bytes(&seed).verifying_key().to_bytes())
                 .unwrap();

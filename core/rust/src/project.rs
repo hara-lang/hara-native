@@ -30,6 +30,9 @@ pub struct Project {
     pub manifest_path: PathBuf,
     pub id: String,
     pub version: Version,
+    /// Signed source tag for publication.  It defaults to the exact project
+    /// version so source packages do not need a separate `v` convention.
+    pub release_tag: String,
     /// Effective native-Rust paths (shared paths followed by :rust additions).
     pub source_paths: Vec<PathBuf>,
     pub test_paths: Vec<PathBuf>,
@@ -237,6 +240,11 @@ pub fn read(input: &Path) -> Result<Project, String> {
     )?;
     let version = Version::parse(&version_text)
         .map_err(|error| format!("project.edn :project/version is not SemVer: {error}"))?;
+    let release_tag = lookup(entries, "project/release-tag")
+        .map(|value| string(value, "project.edn :project/release-tag"))
+        .transpose()?
+        .unwrap_or_else(|| version.to_string());
+    validate_release_tag(&release_tag)?;
     let shared_source_paths = paths(
         lookup(entries, "project/source-paths").unwrap(),
         "project/source-paths",
@@ -338,6 +346,7 @@ pub fn read(input: &Path) -> Result<Project, String> {
         manifest_path,
         id,
         version,
+        release_tag,
         source_paths,
         test_paths,
         extension_paths,
@@ -367,6 +376,22 @@ pub fn read(input: &Path) -> Result<Project, String> {
         aliases,
         recipe,
     })
+}
+
+fn validate_release_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty()
+        || tag.starts_with('-')
+        || tag.ends_with('.')
+        || tag.contains("..")
+        || tag.bytes().any(|byte| {
+            byte.is_ascii_whitespace()
+                || byte.is_ascii_control()
+                || matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
+        })
+    {
+        return Err("project.edn :project/release-tag is not a valid Git tag name".into());
+    }
+    Ok(())
 }
 
 fn extension_declarations(form: &Form) -> Result<BTreeMap<String, Form>, String> {

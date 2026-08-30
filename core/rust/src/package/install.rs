@@ -19,7 +19,10 @@ pub(super) fn validate_recipe(project: &Project) -> Result<PathBuf, String> {
     let path = project.root.join(relative);
     let source = fs::read_to_string(&path).map_err(io_error)?;
     let Form::Map(entries) = parse(&source)? else {
-        return Err("hara.recipe.edn must be an EDN map".into());
+        return Err(format!(
+            "project recipe {} must be an EDN map",
+            path.display()
+        ));
     };
     for key in [
         "recipe/format",
@@ -32,7 +35,10 @@ pub(super) fn validate_recipe(project: &Project) -> Result<PathBuf, String> {
             .iter()
             .any(|(candidate, _)| matches!(candidate, Form::Keyword(name) if name == key))
         {
-            return Err(format!("hara.recipe.edn is missing :{key}"));
+            return Err(format!(
+                "project recipe {} is missing :{key}",
+                path.display()
+            ));
         }
     }
     let adapter = entries
@@ -41,9 +47,10 @@ pub(super) fn validate_recipe(project: &Project) -> Result<PathBuf, String> {
         .map(|(_, value)| value);
     if !matches!(adapter, Some(Form::Keyword(name)) if matches!(name.as_str(), "rust-wasm" | "node-hta" | "hal"))
     {
-        return Err(
-            "hara.recipe.edn :recipe/adapter must be :rust-wasm, :node-hta, or :hal".into(),
-        );
+        return Err(format!(
+            "project recipe {} :recipe/adapter must be :rust-wasm, :node-hta, or :hal",
+            path.display()
+        ));
     }
     if source.contains(":command") || source.contains(":script") || source.contains(":shell") {
         return Err("official recipes cannot declare commands, scripts, or shell fragments".into());

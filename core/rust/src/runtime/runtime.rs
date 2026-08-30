@@ -1571,6 +1571,21 @@ impl Runtime {
         self.load_namespace_from_provider("std.foundation")?;
         self.loaded_resources.insert("std.foundation".into());
         for &name in EAGER_HAL_RESOURCES {
+            let has_resource = self.resources.contains_key(name)
+                || self.has_bytecode_resource(name)
+                || {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.source_paths.contains_key(name)
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        false
+                    }
+                };
+            if !has_resource {
+                continue;
+            }
             self.load_namespace_from_provider(name)?;
             self.loaded_resources.insert(name.into());
         }

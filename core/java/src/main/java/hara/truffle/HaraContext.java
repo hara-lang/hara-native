@@ -131,6 +131,7 @@ public final class HaraContext {
   private final java.util.List<Object> nativeTestResults = new ArrayList<>();
   private final java.util.List<Object> nativeTestFacts = new ArrayList<>();
   private long nativeTestOrder;
+  private final HaraNativeCommand nativeCommand = new HaraNativeCommand(this);
   private final Map<String, HaraNamespace> namespaces = new ConcurrentHashMap<>();
   private final Map<String, Map<String, HaraMacro>> macros = new ConcurrentHashMap<>();
   private final Map<String, Map<String, String>> aliases = new ConcurrentHashMap<>();
@@ -5117,6 +5118,14 @@ public final class HaraContext {
     test.define("failure-count", new VariadicBuiltin("std.native.Test/failure-count", values -> nativeTestInspect(values, "failure-count")));
     test.define("failure", new VariadicBuiltin("std.native.Test/failure", this::nativeTestFailureAt));
     test.define("failure?", new VariadicBuiltin("std.native.Test/failure?", this::nativeTestFailurePredicate));
+    HaraNamespace command = namespace("std.native.Command");
+    for (String method : HaraNativeDeclarations.methods("Command")) {
+      command.define(
+          method,
+          new VariadicBuiltin(
+              "std.native.Command/" + method,
+              values -> nativeCommand.invoke(method, values)));
+    }
     HaraNamespace algo = namespace("std.native.Algo");
     StdNativeAlgo.install(this, "std.native.Algo");
     algo.define("deque?", typePredicate("std.native.Algo/deque?", hara.lang.data.Deque.class));

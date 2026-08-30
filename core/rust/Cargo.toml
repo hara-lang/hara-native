@@ -163,5 +163,9 @@ path = "src/bin/hara-native-language-conformance-artifact.rs"
 name = "native-test-registry"
 path = "tests/native_test_registry.rs"
 
+[[test]]
+name = "native-command"
+path = "tests/native_command.rs"
+
 [dev-dependencies]
 hara-hta = { version = "0.1.6", path = "crates/hta-codec" }

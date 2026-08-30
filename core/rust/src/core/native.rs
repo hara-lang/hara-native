@@ -1480,6 +1480,724 @@ fn native_test_values(operation: &str, values: Vec<Value>) -> Result<Value, Stri
         _ => Err(format!("unknown std.native.Test operation: {operation}")),
     }
 }
+
+struct NativeCommandRequest {
+    app: u64,
+    request: crate::command::Request,
+    context: Value,
+}
+
+struct NativeCommandSnapshot {
+    app: u64,
+    snapshot: crate::command::Snapshot<Value>,
+}
+
+struct NativeCommandState {
+    next_app: u64,
+    next_request: u64,
+    next_snapshot: u64,
+    apps: HashMap<u64, crate::command::App<Value>>,
+    requests: HashMap<u64, NativeCommandRequest>,
+    snapshots: HashMap<u64, NativeCommandSnapshot>,
+}
+
+impl Default for NativeCommandState {
+    fn default() -> Self {
+        Self {
+            next_app: 1,
+            next_request: 1,
+            next_snapshot: 1,
+            apps: HashMap::new(),
+            requests: HashMap::new(),
+            snapshots: HashMap::new(),
+        }
+    }
+}
+
+thread_local! {
+    static NATIVE_COMMAND_STATE: RefCell<NativeCommandState> = RefCell::new(NativeCommandState::default());
+}
+
+fn native_command_keyword(name: &str) -> Value {
+    Value::Keyword(Keyword::from(name))
+}
+
+fn native_command_map(entries: impl IntoIterator<Item = (Value, Value)>) -> Value {
+    Value::Map(PMap::from_iter(entries))
+}
+
+fn native_command_pointer(context: &str, entries: impl IntoIterator<Item = (Value, Value)>) -> Value {
+    Value::Pointer(PPointer::new(
+        Keyword::from(context),
+        PMap::from_iter(entries),
+    ))
+}
+
+fn native_command_handle(value: &Value, context: &str, operation: &str) -> Result<u64, String> {
+    let Value::Pointer(pointer) = value else {
+        return Err(format!("std.native.Command/{operation} expects a {context} handle"));
+    };
+    if pointer.context().as_str() != context {
+        return Err(format!("std.native.Command/{operation} expects a {context} handle"));
+    }
+    match pointer.get(&native_command_keyword("id")) {
+        Some(Value::Number(id)) if *id > 0 => Ok(*id as u64),
+        _ => Err(format!("std.native.Command/{operation} received an invalid {context} handle")),
+    }
+}
+
+fn native_command_app(value: &Value, operation: &str) -> Result<u64, String> {
+    native_command_handle(value, "command/app", operation)
+}
+
+fn native_command_route(value: &Value, app: u64, operation: &str) -> Result<crate::command::RouteHandle, String> {
+    let route = native_command_handle(value, "command/route", operation)?;
+    let Value::Pointer(pointer) = value else {
+        unreachable!()
+    };
+    match pointer.get(&native_command_keyword("app")) {
+        Some(Value::Number(candidate)) if *candidate == app as i64 => {
+            Ok(crate::command::RouteHandle::from_id(route))
+        }
+        _ => Err(format!("std.native.Command/{operation} route belongs to a different application")),
+    }
+}
+
+fn native_command_config_argument(value: &Value, operation: &str) -> Result<crate::command::AppConfig, String> {
+    let Some(entries) = map_entries(value) else {
+        return Err(format!("std.native.Command/{operation} expects a config map"));
+    };
+    let config = Value::Map(PMap::from_iter(entries));
+    let id = match map_value(&config, &native_command_keyword("id")) {
+        Some(Value::Symbol(id)) if !id.as_str().is_empty() => id.as_str().to_owned(),
+        _ => return Err(format!("std.native.Command/{operation} config :id must be a symbol")),
+    };
+    let desc = match map_value(&config, &native_command_keyword("desc")) {
+        Some(Value::String(desc)) if !desc.trim().is_empty() => desc.clone(),
+        _ => return Err(format!("std.native.Command/{operation} config :desc must be a non-empty string")),
+    };
+    Ok(crate::command::AppConfig { id, desc })
+}
+
+fn native_command_vector(value: &Value, operation: &str, field: &str) -> Result<Vec<Value>, String> {
+    match value {
+        Value::Vector(values) => Ok(values.iter().cloned().collect()),
+        Value::Tuple(values) => Ok(values.iter().cloned().collect()),
+        _ => Err(format!("std.native.Command/{operation} {field} must be a vector")),
+    }
+}
+
+fn native_command_string(value: &Value, operation: &str, field: &str) -> Result<String, String> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        _ => Err(format!("std.native.Command/{operation} {field} must be a string")),
+    }
+}
+
+fn native_command_strings(value: &Value, operation: &str, field: &str) -> Result<Vec<String>, String> {
+    native_command_vector(value, operation, field)?
+        .into_iter()
+        .map(|value| native_command_string(&value, operation, field))
+        .collect()
+}
+
+fn native_command_keyword_argument(value: &Value, operation: &str, field: &str) -> Result<String, String> {
+    match value {
+        Value::Keyword(value) if !value.as_str().is_empty() => Ok(value.as_str().to_owned()),
+        _ => Err(format!("std.native.Command/{operation} {field} must be a keyword")),
+    }
+}
+
+fn native_command_boolean(value: Option<&Value>, operation: &str, field: &str, fallback: bool) -> Result<bool, String> {
+    match value {
+        None | Some(Value::Nil) => Ok(fallback),
+        Some(Value::Bool(value)) => Ok(*value),
+        _ => Err(format!("std.native.Command/{operation} {field} must be a boolean")),
+    }
+}
+
+fn native_command_option(value: Value, operation: &str) -> Result<crate::command::OptionSpec, String> {
+    let Some(entries) = map_entries(&value) else {
+        return Err(format!("std.native.Command/{operation} :options entries must be maps"));
+    };
+    let value = Value::Map(PMap::from_iter(entries));
+    let id = native_command_keyword_argument(
+        map_value(&value, &native_command_keyword("id"))
+            .ok_or_else(|| format!("std.native.Command/{operation} option :id is required"))?,
+        operation,
+        "option :id",
+    )?;
+    let long = match map_value(&value, &native_command_keyword("long")) {
+        None | Some(Value::Nil) => None,
+        Some(value) => Some(native_command_string(value, operation, "option :long")?),
+    };
+    let short = match map_value(&value, &native_command_keyword("short")) {
+        None | Some(Value::Nil) => None,
+        Some(Value::String(value)) if value.chars().count() == 1 => value.chars().next(),
+        _ => return Err(format!("std.native.Command/{operation} option :short must be one character")),
+    };
+    let kind = match map_value(&value, &native_command_keyword("type")) {
+        Some(Value::Keyword(kind)) if kind.as_str() == "boolean" => crate::command::OptionKind::Boolean,
+        Some(Value::Keyword(kind)) if kind.as_str() == "string" => crate::command::OptionKind::String,
+        _ => return Err(format!("std.native.Command/{operation} option :type must be :boolean or :string")),
+    };
+    let many = native_command_boolean(
+        map_value(&value, &native_command_keyword("many?")),
+        operation,
+        "option :many?",
+        false,
+    )?;
+    let default = match map_value(&value, &native_command_keyword("default")) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Bool(value)) => Some(crate::command::ParsedValue::Boolean(*value)),
+        Some(Value::String(value)) => Some(crate::command::ParsedValue::String(value.clone())),
+        Some(value) => Some(crate::command::ParsedValue::Strings(native_command_strings(
+            value,
+            operation,
+            "option :default",
+        )?)),
+    };
+    Ok(crate::command::OptionSpec {
+        id,
+        long,
+        short,
+        kind,
+        many,
+        default,
+    })
+}
+
+fn native_command_argument(value: Value, operation: &str) -> Result<crate::command::ArgumentSpec, String> {
+    let Some(entries) = map_entries(&value) else {
+        return Err(format!("std.native.Command/{operation} :arguments entries must be maps"));
+    };
+    let value = Value::Map(PMap::from_iter(entries));
+    Ok(crate::command::ArgumentSpec {
+        id: native_command_keyword_argument(
+            map_value(&value, &native_command_keyword("id"))
+                .ok_or_else(|| format!("std.native.Command/{operation} argument :id is required"))?,
+            operation,
+            "argument :id",
+        )?,
+        required: native_command_boolean(
+            map_value(&value, &native_command_keyword("required?")),
+            operation,
+            "argument :required?",
+            true,
+        )?,
+        many: native_command_boolean(
+            map_value(&value, &native_command_keyword("many?")),
+            operation,
+            "argument :many?",
+            false,
+        )?,
+    })
+}
+
+fn native_command_route_argument(value: Value, operation: &str) -> Result<crate::command::Route<Value>, String> {
+    let Some(entries) = map_entries(&value) else {
+        return Err(format!("std.native.Command/{operation} expects a route map"));
+    };
+    let value = Value::Map(PMap::from_iter(entries));
+    let path = native_command_strings(
+        map_value(&value, &native_command_keyword("path"))
+            .ok_or_else(|| format!("std.native.Command/{operation} route :path is required"))?,
+        operation,
+        "route :path",
+    )?;
+    let aliases = match map_value(&value, &native_command_keyword("aliases")) {
+        None | Some(Value::Nil) => Vec::new(),
+        Some(value) => native_command_vector(value, operation, "route :aliases")?
+            .into_iter()
+            .map(|alias| native_command_strings(&alias, operation, "route :aliases"))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let options = match map_value(&value, &native_command_keyword("options")) {
+        None | Some(Value::Nil) => Vec::new(),
+        Some(value) => native_command_vector(value, operation, "route :options")?
+            .into_iter()
+            .map(|value| native_command_option(value, operation))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let arguments = match map_value(&value, &native_command_keyword("arguments")) {
+        None | Some(Value::Nil) => Vec::new(),
+        Some(value) => native_command_vector(value, operation, "route :arguments")?
+            .into_iter()
+            .map(|value| native_command_argument(value, operation))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let handler = match map_value(&value, &native_command_keyword("handler")) {
+        Some(Value::Function(function)) => Value::Function(function.clone()),
+        _ => return Err(format!("std.native.Command/{operation} route :handler must be a function")),
+    };
+    Ok(crate::command::Route {
+        spec: crate::command::RouteSpec {
+            id: native_command_keyword_argument(
+                map_value(&value, &native_command_keyword("id"))
+                    .ok_or_else(|| format!("std.native.Command/{operation} route :id is required"))?,
+                operation,
+                "route :id",
+            )?,
+            path,
+            aliases,
+            desc: native_command_string(
+                map_value(&value, &native_command_keyword("desc"))
+                    .ok_or_else(|| format!("std.native.Command/{operation} route :desc is required"))?,
+                operation,
+                "route :desc",
+            )?,
+            options,
+            arguments,
+            passthrough: native_command_boolean(
+                map_value(&value, &native_command_keyword("passthrough?")),
+                operation,
+                "route :passthrough?",
+                false,
+            )?,
+        },
+        handler,
+    })
+}
+
+fn native_command_parsed_value(value: &crate::command::ParsedValue) -> Value {
+    match value {
+        crate::command::ParsedValue::Boolean(value) => Value::Bool(*value),
+        crate::command::ParsedValue::String(value) => Value::String(value.clone()),
+        crate::command::ParsedValue::Strings(values) => {
+            Value::Vector(PVector::from_iter(values.iter().cloned().map(Value::String)))
+        }
+    }
+}
+
+fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
+    native_command_map([
+        (native_command_keyword("id"), native_command_keyword(&spec.id)),
+        (
+            native_command_keyword("path"),
+            Value::Vector(PVector::from_iter(spec.path.iter().cloned().map(Value::String))),
+        ),
+        (
+            native_command_keyword("aliases"),
+            Value::Vector(PVector::from_iter(spec.aliases.iter().map(|alias| {
+                Value::Vector(PVector::from_iter(alias.iter().cloned().map(Value::String)))
+            }))),
+        ),
+        (native_command_keyword("desc"), Value::String(spec.desc.clone())),
+        (
+            native_command_keyword("passthrough?"),
+            Value::Bool(spec.passthrough),
+        ),
+        (
+            native_command_keyword("options"),
+            Value::Vector(PVector::from_iter(spec.options.iter().map(|option| {
+                let mut entries = vec![
+                    (native_command_keyword("id"), native_command_keyword(&option.id)),
+                    (native_command_keyword("long"), Value::String(option.long_name())),
+                    (
+                        native_command_keyword("short"),
+                        option
+                            .short
+                            .map(|short| Value::String(short.into()))
+                            .unwrap_or(Value::Nil),
+                    ),
+                    (
+                        native_command_keyword("type"),
+                        native_command_keyword(match option.kind {
+                            crate::command::OptionKind::Boolean => "boolean",
+                            crate::command::OptionKind::String => "string",
+                        }),
+                    ),
+                    (native_command_keyword("many?"), Value::Bool(option.many)),
+                ];
+                if let Some(default) = &option.default {
+                    entries.push((native_command_keyword("default"), native_command_parsed_value(default)));
+                }
+                native_command_map(entries)
+            }))),
+        ),
+        (
+            native_command_keyword("arguments"),
+            Value::Vector(PVector::from_iter(spec.arguments.iter().map(|argument| {
+                native_command_map([
+                    (native_command_keyword("id"), native_command_keyword(&argument.id)),
+                    (native_command_keyword("required?"), Value::Bool(argument.required)),
+                    (native_command_keyword("many?"), Value::Bool(argument.many)),
+                ])
+            }))),
+        ),
+    ])
+}
+
+fn native_command_invocation(value: Value, operation: &str) -> Result<(Vec<String>, Value), String> {
+    let Some(entries) = map_entries(&value) else {
+        return Err(format!("std.native.Command/{operation} expects an invocation map"));
+    };
+    let value = Value::Map(PMap::from_iter(entries));
+    let argv = native_command_strings(
+        map_value(&value, &native_command_keyword("argv"))
+            .ok_or_else(|| format!("std.native.Command/{operation} invocation :argv is required"))?,
+        operation,
+        "invocation :argv",
+    )?;
+    let context = map_value(&value, &native_command_keyword("context"))
+        .cloned()
+        .unwrap_or_else(|| Value::Map(PMap::new()));
+    if map_entries(&context).is_none() {
+        return Err(format!("std.native.Command/{operation} invocation :context must be a map"));
+    }
+    Ok((argv, context))
+}
+
+fn native_command_request_value(request_id: u64, request: &crate::command::Request, context: Value) -> Value {
+    native_command_map([
+        (
+            native_command_keyword("app/id"),
+            Value::Symbol(Symbol::parse(&request.app_id)),
+        ),
+        (native_command_keyword("route/id"), native_command_keyword(&request.route_id)),
+        (
+            native_command_keyword("route/path"),
+            Value::Vector(PVector::from_iter(request.route_path.iter().cloned().map(Value::String))),
+        ),
+        (
+            native_command_keyword("argv"),
+            Value::Vector(PVector::from_iter(request.argv.iter().cloned().map(Value::String))),
+        ),
+        (
+            native_command_keyword("arguments"),
+            native_command_map(request.arguments.iter().map(|(key, value)| {
+                (native_command_keyword(key), native_command_parsed_value(value))
+            })),
+        ),
+        (
+            native_command_keyword("options"),
+            native_command_map(request.options.iter().map(|(key, value)| {
+                (native_command_keyword(key), native_command_parsed_value(value))
+            })),
+        ),
+        (native_command_keyword("context"), context),
+        (
+            native_command_keyword("command/request"),
+            native_command_pointer(
+                "command/request",
+                [(native_command_keyword("id"), Value::Number(request_id as i64))],
+            ),
+        ),
+    ])
+}
+
+fn native_command_response_value(response: crate::command::Response) -> Value {
+    native_command_map([
+        (native_command_keyword("stdout"), Value::String(response.stdout)),
+        (native_command_keyword("stderr"), Value::String(response.stderr)),
+        (native_command_keyword("exit"), Value::Number(response.exit)),
+    ])
+}
+
+fn native_command_response_argument(value: Value, operation: &str) -> Result<crate::command::Response, String> {
+    let Some(entries) = map_entries(&value) else {
+        return Err(format!("std.native.Command/{operation} handler must return a response map"));
+    };
+    if entries.len() != 3 {
+        return Err(format!("std.native.Command/{operation} response must contain only :stdout, :stderr, and :exit"));
+    }
+    let value = Value::Map(PMap::from_iter(entries));
+    let stdout = native_command_string(
+        map_value(&value, &native_command_keyword("stdout"))
+            .ok_or_else(|| format!("std.native.Command/{operation} response :stdout is required"))?,
+        operation,
+        "response :stdout",
+    )?;
+    let stderr = native_command_string(
+        map_value(&value, &native_command_keyword("stderr"))
+            .ok_or_else(|| format!("std.native.Command/{operation} response :stderr is required"))?,
+        operation,
+        "response :stderr",
+    )?;
+    let exit = match map_value(&value, &native_command_keyword("exit")) {
+        Some(Value::Number(value)) => *value,
+        _ => return Err(format!("std.native.Command/{operation} response :exit must be an integer")),
+    };
+    crate::command::Response { stdout, stderr, exit }
+        .checked()
+        .map_err(|error| error.to_string())
+}
+
+fn native_command_parse(app: u64, invocation: Value, operation: &str) -> Result<Value, String> {
+    let (argv, context) = native_command_invocation(invocation, operation)?;
+    NATIVE_COMMAND_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let request = state
+            .apps
+            .get(&app)
+            .ok_or_else(|| format!("std.native.Command/{operation} application was not found"))?
+            .parse(argv)
+            .map_err(|error| error.to_string())?;
+        let request_id = state.next_request;
+        state.next_request += 1;
+        state.requests.insert(
+            request_id,
+            NativeCommandRequest {
+                app,
+                request: request.clone(),
+                context: context.clone(),
+            },
+        );
+        Ok(native_command_request_value(request_id, &request, context))
+    })
+}
+
+fn native_command_request_id(value: &Value, operation: &str) -> Result<u64, String> {
+    let Some(request) = map_value(value, &native_command_keyword("command/request")) else {
+        return Err(format!("std.native.Command/{operation} expects a Command/parse request"));
+    };
+    native_command_handle(request, "command/request", operation)
+}
+
+fn native_command_dispatch(app: u64, request_value: Value, operation: &str) -> Result<Value, String> {
+    let request_id = native_command_request_id(&request_value, operation)?;
+    let (handler, request, context) = NATIVE_COMMAND_STATE.with(|state| {
+        let state = state.borrow();
+        let stored = state
+            .requests
+            .get(&request_id)
+            .ok_or_else(|| format!("std.native.Command/{operation} request was not found"))?;
+        if stored.app != app {
+            return Err(format!("std.native.Command/{operation} request belongs to a different application"));
+        }
+        let application = state
+            .apps
+            .get(&app)
+            .ok_or_else(|| format!("std.native.Command/{operation} application was not found"))?;
+        let handler = application
+            .handler(&stored.request)
+            .map_err(|error| error.to_string())?
+            .clone();
+        Ok::<_, String>((handler, stored.request.clone(), stored.context.clone()))
+    })?;
+    let output = call_value(handler, vec![native_command_request_value(request_id, &request, context)])?;
+    native_command_response_argument(output, operation).map(native_command_response_value)
+}
+
+fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
+    let operation = operation
+        .strip_prefix("std.native.Command/")
+        .unwrap_or(operation);
+    match operation {
+        "create" => match values.as_slice() {
+            [config] => {
+                let config = native_command_config_argument(config, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    let id = state.next_app;
+                    state.next_app += 1;
+                    state
+                        .apps
+                        .insert(id, crate::command::App::create(config).map_err(|error| error.to_string())?);
+                    Ok(native_command_pointer(
+                        "command/app",
+                        [(native_command_keyword("id"), Value::Number(id as i64))],
+                    ))
+                })
+            }
+            _ => Err("std.native.Command/create expects one config map".into()),
+        },
+        "config" => match values.as_slice() {
+            [app] => {
+                let app = native_command_app(app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let state = state.borrow();
+                    let config = state
+                        .apps
+                        .get(&app)
+                        .ok_or_else(|| "std.native.Command/config application was not found".to_owned())?
+                        .config();
+                    Ok(native_command_map([
+                        (native_command_keyword("id"), Value::Symbol(Symbol::parse(&config.id))),
+                        (native_command_keyword("desc"), Value::String(config.desc)),
+                    ]))
+                })
+            }
+            _ => Err("std.native.Command/config expects one application".into()),
+        },
+        "install" => match values.as_slice() {
+            [app, route] => {
+                let app = native_command_app(app, operation)?;
+                let route = native_command_route_argument(route.clone(), operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    let handle = state
+                        .apps
+                        .get_mut(&app)
+                        .ok_or_else(|| "std.native.Command/install application was not found".to_owned())?
+                        .install(route)
+                        .map_err(|error| error.to_string())?;
+                    Ok(native_command_pointer(
+                        "command/route",
+                        [
+                            (native_command_keyword("id"), Value::Number(handle.id() as i64)),
+                            (native_command_keyword("app"), Value::Number(app as i64)),
+                        ],
+                    ))
+                })
+            }
+            _ => Err("std.native.Command/install expects an application and route map".into()),
+        },
+        "uninstall" => match values.as_slice() {
+            [app, route] => {
+                let app = native_command_app(app, operation)?;
+                let route = native_command_route(route, app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    state
+                        .borrow_mut()
+                        .apps
+                        .get_mut(&app)
+                        .ok_or_else(|| "std.native.Command/uninstall application was not found".to_owned())?
+                        .uninstall(route)
+                        .map(Value::Bool)
+                        .map_err(|error| error.to_string())
+                })
+            }
+            _ => Err("std.native.Command/uninstall expects an application and route handle".into()),
+        },
+        "routes" => match values.as_slice() {
+            [app] => {
+                let app = native_command_app(app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    state
+                        .borrow()
+                        .apps
+                        .get(&app)
+                        .ok_or_else(|| "std.native.Command/routes application was not found".to_owned())?
+                        .routes()
+                        .map(|routes| Value::Vector(PVector::from_iter(routes.iter().map(native_command_spec_value))))
+                        .map_err(|error| error.to_string())
+                })
+            }
+            _ => Err("std.native.Command/routes expects one application".into()),
+        },
+        "snapshot" => match values.as_slice() {
+            [app] => {
+                let app = native_command_app(app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    let snapshot = state
+                        .apps
+                        .get(&app)
+                        .ok_or_else(|| "std.native.Command/snapshot application was not found".to_owned())?
+                        .snapshot()
+                        .map_err(|error| error.to_string())?;
+                    let id = state.next_snapshot;
+                    state.next_snapshot += 1;
+                    state.snapshots.insert(id, NativeCommandSnapshot { app, snapshot });
+                    Ok(native_command_pointer(
+                        "command/snapshot",
+                        [
+                            (native_command_keyword("id"), Value::Number(id as i64)),
+                            (native_command_keyword("app"), Value::Number(app as i64)),
+                        ],
+                    ))
+                })
+            }
+            _ => Err("std.native.Command/snapshot expects one application".into()),
+        },
+        "restore" => match values.as_slice() {
+            [app, snapshot] => {
+                let app = native_command_app(app, operation)?;
+                let snapshot_id = native_command_handle(snapshot, "command/snapshot", operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    let snapshot = state
+                        .snapshots
+                        .get(&snapshot_id)
+                        .ok_or_else(|| "std.native.Command/restore snapshot was not found".to_owned())?;
+                    if snapshot.app != app {
+                        return Err("std.native.Command/restore snapshot belongs to a different application".into());
+                    }
+                    let snapshot = snapshot.snapshot.clone();
+                    state
+                        .apps
+                        .get_mut(&app)
+                        .ok_or_else(|| "std.native.Command/restore application was not found".to_owned())?
+                        .restore(snapshot)
+                        .map_err(|error| error.to_string())?;
+                    Ok(values[0].clone())
+                })
+            }
+            _ => Err("std.native.Command/restore expects an application and snapshot".into()),
+        },
+        "reset" => match values.as_slice() {
+            [app] => {
+                let app = native_command_app(app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    state
+                        .apps
+                        .get_mut(&app)
+                        .ok_or_else(|| "std.native.Command/reset application was not found".to_owned())?
+                        .reset()
+                        .map_err(|error| error.to_string())?;
+                    state.requests.retain(|_, request| request.app != app);
+                    Ok(values[0].clone())
+                })
+            }
+            _ => Err("std.native.Command/reset expects one application".into()),
+        },
+        "closed?" => match values.as_slice() {
+            [app] => {
+                let app = native_command_app(app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    state
+                        .borrow()
+                        .apps
+                        .get(&app)
+                        .map(|app| Value::Bool(app.closed()))
+                        .ok_or_else(|| "std.native.Command/closed? application was not found".to_owned())
+                })
+            }
+            _ => Err("std.native.Command/closed? expects one application".into()),
+        },
+        "close" => match values.as_slice() {
+            [app] => {
+                let app = native_command_app(app, operation)?;
+                NATIVE_COMMAND_STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    state
+                        .apps
+                        .get_mut(&app)
+                        .ok_or_else(|| "std.native.Command/close application was not found".to_owned())?
+                        .close();
+                    state.requests.retain(|_, request| request.app != app);
+                    Ok(Value::Nil)
+                })
+            }
+            _ => Err("std.native.Command/close expects one application".into()),
+        },
+        "parse" => match values.as_slice() {
+            [app, invocation] => native_command_parse(native_command_app(app, operation)?, invocation.clone(), operation),
+            _ => Err("std.native.Command/parse expects an application and invocation map".into()),
+        },
+        "dispatch" => match values.as_slice() {
+            [app, request] => native_command_dispatch(native_command_app(app, operation)?, request.clone(), operation),
+            _ => Err("std.native.Command/dispatch expects an application and parsed request".into()),
+        },
+        "run" => match values.as_slice() {
+            [app, invocation] => {
+                let app = native_command_app(app, operation)?;
+                match native_command_parse(app, invocation.clone(), operation) {
+                    Ok(request) => match native_command_dispatch(app, request, operation) {
+                        Ok(response) => Ok(response),
+                        Err(error) => Ok(native_command_response_value(crate::command::Response::failure(1, error))),
+                    },
+                    Err(error) => Ok(native_command_response_value(crate::command::Response::failure(2, error))),
+                }
+            }
+            _ => Err("std.native.Command/run expects an application and invocation map".into()),
+        },
+        _ => Err(format!("unknown std.native.Command operation: {operation}")),
+    }
+}
+
 fn native_regex_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
     let operation = operation
         .strip_prefix("std.native.RegExp/")

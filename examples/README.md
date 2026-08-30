@@ -134,18 +134,16 @@ package smoke inputs. The normal host validation remains source-free.
 
 ## 5. Follow the publishing path with `hara-native`
 
-Do **not** submit either checked-in smoke fixture. Their identifiers and
-`0.1.0` versions are local examples, and a registry release is immutable.
-`smoke-answer` includes a minimal typed recipe so it can exercise local
-publication preflight, but it has no signed release tag or publication grant.
-Use the following steps in a real source-package repository after replacing the
-sample owner, package id, version, and paths.
+`smoke-answer` is the first end-to-end publication fixture. Its
+`hara-native/smoke-answer` coordinate is protected, so the `0.1.0` release
+waits for its reviewed root-policy grant and signed source tag. The same steps
+also apply to a new source-package repository.
 
 The native flow has five boundaries:
 
 1. Create a local signing key.
-2. Enroll its public key with the identity service.
-3. Obtain an explicit grant for one package coordinate.
+2. Let `publish` prove the public key through browser sign-in.
+3. Wait for the scoped identity-policy grant when review is required.
 4. Preflight the signed, tagged source release.
 5. Submit the publication request; the registry rebuilds and deploys it.
 
@@ -187,34 +185,23 @@ The root fingerprint is public, not private-key material. It pins the official
 identity policy root so `publish` can verify the policy it fetches from the
 official tap.
 
-### Preview and perform identity enrollment
+### Sign in, prove the key, and request a scope
 
-`id enroll` derives the public key from `HARA_SIGNER_KEY_FILE`, prepares a
-canonical enrollment record, and signs it in the native process. It sends only
-the public key, key id, owner, server challenge, and detached signature. The
-private seed remains in the local file.
-
-This preview is fully local because it supplies an intentionally fake challenge
-and uses `--dry-run`. It lets you inspect the exact request shape without
-changing an account:
+Run the normal publish command. If the policy has no matching grant,
+`hara-native` creates a device request, signs its fresh challenge with the
+local key, prints a browser URL, and polls until GitHub confirmation finishes:
 
 ```text
-"$HARA_NATIVE" id enroll --tap hara --owner "$PUBLISH_OWNER" --challenge preview-only --dry-run
+"$HARA_NATIVE" publish --tap hara .
 ```
 
-When you are ready to enroll for real, authenticate in the browser URL printed
-by `id login`, then run the two commands below. `id enroll` fetches a real
-one-time challenge and posts the signed enrollment, so it changes identity
-service state:
-
-```text
-"$HARA_NATIVE" id login
-"$HARA_NATIVE" id enroll --tap hara --owner "$PUBLISH_OWNER"
-"$HARA_NATIVE" id status
-```
-
-Successful enrollment proves that you control the key. It does **not** authorize
-that key to publish every package.
+For `hara:YOUR_GITHUB_OWNER/*`, the request is automatically approved for root
+signing. Protected namespaces, including `hara:hara-native/*`, create a GitHub
+review issue. The CLI prints its URL and exits safely; after the offline root
+signer merges the signed policy PR, rerun the exact same command. The policy
+maintainer uses `hara-native id policy grant` with an explicit offline root key
+to write and sign the reviewed exact-coordinate grant; see
+[PUBLISHING.md](../PUBLISHING.md#finalize-a-reviewed-grant-offline).
 
 ### Obtain permission for a real package
 
@@ -224,15 +211,15 @@ enrolled key id. For example, a project with this manifest fragment:
 ```clojure
 {:project/id acme/widgets
  :project/version "1.2.3"
- :project/recipe "hara.recipe.edn"}
+ :project/recipe "project.receipe.edn"}
 ```
 
 has the official coordinate `hara:acme/widgets`. Ask the maintainer to grant
 `$HARA_SIGNER_KEY_ID` permission for that exact coordinate. A key enrolled for
 one package cannot publish another package unless its policy grant says so.
 
-The project also needs `hara.recipe.edn` with a typed, reproducible recipe and
-a signed Git tag named exactly `v1.2.3`. The full recipe and tag requirements
+The project also needs `project.receipe.edn` with a typed, reproducible recipe and
+a signed Git tag named exactly `1.2.3`. The full recipe and tag requirements
 are in [PUBLISHING.md](../PUBLISHING.md).
 
 ### Preflight, submit, and observe deployment
@@ -269,10 +256,10 @@ the published archive/attestation before considering the release deployed.
 | `bundle build` cannot read `project.edn` | Run it from the repository root and pass the project directory, such as `examples/smoke-answer`. |
 | `bundle run` cannot find the entry | Copy the exact `--entry` value from the walkthrough or the example project's `project.edn`. |
 | You expect a `.hal` file to execute as a loose script | Build the project first, then run the verified `.harp` archive. |
-| `id enroll` reports an unknown key, owner, or challenge | Run `id login`, complete browser authentication, then retry enrollment with the same key id. |
-| `publish --dry-run` reports a missing grant | Ask the policy maintainer to grant your enrolled key id the exact package coordinate. |
-| `identity policy does not authorize publisher key` | Enrollment succeeded, but no policy grant exists for that key id and coordinate. Request the exact grant from the policy maintainer; do not retry publication until it is recorded in the signed policy. |
-| `publish --dry-run` reports that `v…` is missing or unsigned | A real package repository needs a clean, signed tag named for its project version. Before creating it, `publish --dry-run --skip-signed-tag` can inspect the remaining local checks, but it can never submit a release. Do not use a checked-in smoke fixture as a publication preflight; run `make test-examples` instead. |
+| `publish` prints a browser URL | Open it in the GitHub account that owns the requested namespace and confirm the exact displayed key fingerprint and coordinate. |
+| `publish` reports a pending root-policy review | Open the printed issue URL; after the signed identity-policy PR merges, rerun the same command. |
+| `identity policy does not authorize publisher key` | The policy revision still lacks the exact coordinate or namespace grant. Do not bypass it or upload an archive manually. |
+| `publish --dry-run` reports that the version tag is missing or unsigned | Create and verify a clean signed tag named `1.2.3` (or the declared `:project/release-tag`). `--skip-signed-tag` is diagnostic only. |
 
 For the complete operational reference, including recipe, signed-tag, and
 published-artifact verification requirements, see [PUBLISHING.md](../PUBLISHING.md).

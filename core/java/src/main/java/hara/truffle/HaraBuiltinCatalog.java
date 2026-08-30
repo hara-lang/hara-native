@@ -54,6 +54,7 @@ import java.util.Set;
     capability = "host-call", methods = {"call", "describe", "capabilities", "capability?"})
 @HaraNativeBinding(namespace = "std.native", name = "Instrument", methods = {"provider", "validate", "inspect", "disassemble", "transform", "execute"})
 @HaraNativeBinding(namespace = "std.native", name = "Test", methods = {"catalog", "config", "context", "events", "compare", "check", "register", "facts", "get", "remove", "purge", "reset", "run-fact", "run", "summary", "result", "passed?", "actual", "expected", "failures", "failure-seq", "failure-count", "failure", "failure?"})
+@HaraNativeBinding(namespace = "std.native", name = "Command", methods = {"create", "config", "install", "uninstall", "routes", "snapshot", "restore", "reset", "closed?", "close", "parse", "dispatch", "run"})
 @HaraNativeBinding(namespace = "std.native", name = "RegExp", methods = {"compile", "pattern", "find?", "find", "matches", "replace", "split"})
 @HaraNativeBinding(namespace = "std.native", name = "Result", methods = {"create", "synchronize", "success?", "error?", "status", "data", "error-value", "context", "with-context"})
 @HaraNativeBinding(namespace = "std.native", name = "Schema", methods = {"compile", "of", "kind", "form", "ast", "origin"})

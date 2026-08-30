@@ -6,6 +6,6 @@
  :project/test-paths ["test"]
  :project/extension-paths []
  :project/main hara-native.smoke.answer.main
- :project/recipe "hara.recipe.edn"
+ :project/recipe "project.receipe.edn"
  :project/capabilities #{}
  :project/dependencies {}}

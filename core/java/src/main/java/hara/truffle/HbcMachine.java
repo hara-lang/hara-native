@@ -1275,6 +1275,21 @@ public final class HbcMachine {
       return call(program, context, prototype, arguments, captures);
     }
 
+    /**
+     * Executes a guest closure through the portable HBC interpreter.
+     *
+     * <p>Native boundaries that validate a guest-owned data contract use this
+     * path so their result shape does not depend on bytecode-root lowering.
+     */
+    @TruffleBoundary
+    Object invokeInterpreted(Object[] arguments) {
+      Function function = program.functions().get(prototype);
+      if (function.asyncFunction()) {
+        return context.hbcAsync(() -> call(program, context, prototype, arguments, captures));
+      }
+      return call(program, context, prototype, arguments, captures);
+    }
+
     @ExportMessage
     boolean isExecutable() {
       return true;

@@ -39,6 +39,9 @@ pub struct IdentityPolicy {
 pub struct PublisherKey {
     pub public_key: String,
     pub coordinates: Vec<String>,
+    /// GitHub-owner namespaces granted by the root policy, represented as the
+    /// owner component of `hara:<owner>/<package>` rather than a glob.
+    pub namespace_owners: Vec<String>,
     pub revoked: bool,
 }
 
@@ -328,6 +331,10 @@ pub fn fetch_verified_policy(tap: &Tap, scratch: &Path) -> Result<IdentityPolicy
                     .map(|value| strings(value, "publisher :coordinates"))
                     .transpose()?
                     .unwrap_or_default(),
+                namespace_owners: lookup(entry, "namespace-owners")
+                    .map(|value| strings(value, "publisher :namespace-owners"))
+                    .transpose()?
+                    .unwrap_or_default(),
                 revoked: matches!(lookup(entry, "revoked"), Some(Form::Bool(true))),
             },
         );
@@ -352,11 +359,7 @@ pub fn authorize(
     if key.revoked {
         return Err(format!("publisher key is revoked: {key_id}"));
     }
-    if !key
-        .coordinates
-        .iter()
-        .any(|candidate| candidate == coordinate)
-    {
+    if !publisher_scope_matches(key, coordinate) {
         return Err(format!(
             "publisher key {key_id} is not authorized for {coordinate}"
         ));
@@ -366,6 +369,16 @@ pub fn authorize(
         intent,
         signature,
     )
+}
+
+fn publisher_scope_matches(key: &PublisherKey, coordinate: &str) -> bool {
+    key.coordinates
+        .iter()
+        .any(|candidate| candidate == coordinate)
+        || key
+            .namespace_owners
+            .iter()
+            .any(|owner| !owner.is_empty() && coordinate.starts_with(&format!("hara:{owner}/")))
 }
 
 /// The external signer receives canonical intent bytes on stdin and returns
@@ -420,11 +433,12 @@ pub fn canonical_recipe_intent(
     repository: &str,
     tag: &str,
     commit: &str,
+    project_sha256: &str,
     recipe_sha256: &str,
     tap: &str,
     identity_revision: &str,
 ) -> String {
-    format!("{{:intent/format \"0.0.0-alpha\" :tap \"{tap}\" :coordinate \"{coordinate}\" :version \"{version}\" :repository \"{repository}\" :tag \"{tag}\" :commit \"{commit}\" :recipe-sha256 \"sha256:{recipe_sha256}\" :identity-revision \"{identity_revision}\"}}\n")
+    format!("{{:intent/format \"0.0.0-alpha\" :tap \"{tap}\" :coordinate \"{coordinate}\" :version \"{version}\" :repository \"{repository}\" :tag \"{tag}\" :commit \"{commit}\" :project-sha256 \"sha256:{project_sha256}\" :recipe-sha256 \"sha256:{recipe_sha256}\" :identity-revision \"{identity_revision}\"}}\n")
 }
 
 pub fn git(
@@ -664,5 +678,52 @@ fn strings(form: &Form, label: &str) -> Result<Vec<String>, String> {
     match form {
         Form::Vector(values) => values.iter().map(|value| string(value, label)).collect(),
         _ => Err(format!("{label} must be a vector of strings")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_recipe_intent, publisher_scope_matches, PublisherKey};
+
+    fn key(coordinates: Vec<&str>, namespace_owners: Vec<&str>) -> PublisherKey {
+        PublisherKey {
+            public_key: "00".repeat(32),
+            coordinates: coordinates.into_iter().map(str::to_owned).collect(),
+            namespace_owners: namespace_owners.into_iter().map(str::to_owned).collect(),
+            revoked: false,
+        }
+    }
+
+    #[test]
+    fn publisher_scope_accepts_exact_coordinates_and_complete_owner_segments() {
+        assert!(publisher_scope_matches(
+            &key(vec!["hara:hara-native/smoke-answer"], vec![]),
+            "hara:hara-native/smoke-answer"
+        ));
+        assert!(publisher_scope_matches(
+            &key(vec![], vec!["hoebat"]),
+            "hara:hoebat/widgets"
+        ));
+        assert!(!publisher_scope_matches(
+            &key(vec![], vec!["hoebat"]),
+            "hara:hoebat-tools/widgets"
+        ));
+    }
+
+    #[test]
+    fn recipe_intent_binds_project_and_recipe_bytes_independently() {
+        let intent = canonical_recipe_intent(
+            "hara:hara-native/smoke-answer",
+            "0.1.0",
+            "git@github.com:hara-lang/hara-native.git",
+            "0.1.0",
+            &"a".repeat(40),
+            &"b".repeat(64),
+            &"c".repeat(64),
+            "hara",
+            &"d".repeat(40),
+        );
+        assert!(intent.contains(&format!(":project-sha256 \"sha256:{}\"", "b".repeat(64))));
+        assert!(intent.contains(&format!(":recipe-sha256 \"sha256:{}\"", "c".repeat(64))));
     }
 }

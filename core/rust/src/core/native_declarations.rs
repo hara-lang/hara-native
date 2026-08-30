@@ -195,6 +195,17 @@ pub(crate) mod declarations {
     )]
     struct Test;
 
+    #[hara_native(
+        namespace = "std.native",
+        name = "Command",
+        methods = [
+            "create", "config", "install", "uninstall", "routes", "snapshot", "restore",
+            "reset", "closed?", "close", "parse", "dispatch", "run"
+        ],
+        provider = native_command_provider
+    )]
+    struct Command;
+
     #[hara_native(namespace = "std.native", name = "RegExp", methods = ["compile", "pattern", "find?", "find", "matches", "replace", "split"], provider = native_regexp_provider)]
     struct RegExp;
 

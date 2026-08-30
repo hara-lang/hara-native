@@ -53,6 +53,9 @@
     :methods ["catalog" "config" "context" "events" "compare" "check" "register" "facts" "get"
               "remove" "purge" "reset" "run-fact" "run" "summary" "result" "passed?" "actual"
               "expected" "failures" "failure-seq" "failure-count" "failure" "failure?"]}
+   {:type "std.native.Command"
+    :methods ["create" "config" "install" "uninstall" "routes" "snapshot" "restore" "reset"
+              "closed?" "close" "parse" "dispatch" "run"]}
    {:type "std.native.RegExp"
     :methods ["compile" "pattern" "find?" "find" "matches" "replace" "split"]}
    {:type "std.native.Result"
@@ -700,6 +703,52 @@
                        false (catch error true))
                   (try (std.native.Instrument/execute :hbc (std.native.Base/bytes) {})
                        false (catch error true))])
+     :expect {:display "true"}}
+    {:id :native/command-app-route-lifecycle
+     :program (let [app (std.native.Command/create
+                         {:id (quote demo/cli) :desc "Demo CLI"})
+                    config (std.native.Command/config app)
+                    route (std.native.Command/install app
+                            {:id :test :path ["test"] :aliases [["t"]] :desc "Run tests"
+                             :options [{:id :watch :short "w" :type :boolean}
+                                       {:id :namespace :type :string :many? true}]
+                             :arguments [{:id :files :required? false :many? true}]
+                             :handler (fn [_] {:stdout "ok" :stderr "" :exit 0})})
+                    snapshot (std.native.Command/snapshot app)
+                    parsed (std.native.Command/parse app
+                             {:argv ["t" "-w" "--namespace" "demo.core" "a_test.hal"]
+                              :context {:origin :test}})
+                    dispatched (std.native.Command/dispatch app parsed)
+                    response (std.native.Command/run app {:argv ["test"]})
+                    removed (std.native.Command/uninstall app route)
+                    absent (std.native.Command/uninstall app route)
+                    _ (std.native.Command/restore app snapshot)
+                    restored (std.native.Command/routes app)
+                    _ (std.native.Command/reset app)
+                    reset-routes (std.native.Command/routes app)
+                    closed-before (std.native.Command/closed? app)
+                    _ (std.native.Command/close app)
+                    closed-after (std.native.Command/closed? app)
+                    _ (std.native.Command/close app)]
+                (= [(= (:id config) (quote demo/cli))
+                    (:desc config)
+                    (:route/id parsed)
+                    (:options parsed)
+                    (:arguments parsed)
+                    dispatched
+                    response
+                    removed
+                    absent
+                    (std.protocol.icount.ICount/count restored)
+                    (std.protocol.icount.ICount/count reset-routes)
+                    closed-before
+                    closed-after]
+                   [true "Demo CLI" :test
+                    {:watch true :namespace ["demo.core"]}
+                    {:files ["a_test.hal"]}
+                    {:stdout "ok" :stderr "" :exit 0}
+                    {:stdout "ok" :stderr "" :exit 0}
+                    true false 1 0 false true]))
      :expect {:display "true"}}
     {:id :native/test-registry-and-result-semantics
      :program (let [config (std.native.Test/config {})

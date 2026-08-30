@@ -84,15 +84,45 @@ pub fn compile_bytecode_bundle(sources: &[ModuleSource<'_>]) -> Result<Vec<u8>, 
     compile_bytecode_bundle_with_runtime(&mut runtime, sources, sources)
 }
 
-/// Compiles a package with a fully bootstrapped Foundation runtime. `context`
-/// is registered for resolving imports and macros, while only `sources` are
-/// emitted into the resulting HBX0 bundle.
+/// Compiles a package against the portable core runtime. `context` is
+/// registered for resolving imports and macros, while only `sources` are
+/// emitted into the resulting HBX0 bundle. A source-owned Foundation package
+/// evaluates `std.foundation` first so its companion namespaces can resolve
+/// the root surface during their own compilation.
 pub fn compile_package_bytecode_bundle(
     context: &[ModuleSource<'_>],
     sources: &[ModuleSource<'_>],
 ) -> Result<Vec<u8>, String> {
     let mut runtime = Runtime::new();
-    compile_bytecode_bundle_with_runtime(&mut runtime, context, sources)
+    let ordered = foundation_root_first(sources);
+    compile_bytecode_bundle_with_runtime(&mut runtime, context, &ordered)
+}
+
+fn foundation_root_first<'a>(sources: &[ModuleSource<'a>]) -> Vec<ModuleSource<'a>> {
+    if !sources
+        .iter()
+        .any(|source| source.resource == "std.foundation")
+    {
+        return sources.to_vec();
+    }
+    let mut ordered = Vec::with_capacity(sources.len());
+    for resource in std::iter::once("std.foundation").chain(EAGER_HAL_RESOURCES.iter().copied())
+    {
+        if let Some(source) = sources.iter().find(|source| source.resource == resource) {
+            ordered.push(*source);
+        }
+    }
+    let remaining = sources
+        .iter()
+        .filter(|source| {
+            !ordered
+                .iter()
+                .any(|ordered| ordered.resource == source.resource)
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    ordered.extend(remaining);
+    ordered
 }
 
 fn compile_bytecode_bundle_with_runtime(
@@ -672,6 +702,40 @@ mod tests {
         let first = compile_bytecode_bundle(&sources).expect("first deterministic bundle");
         let second = compile_bytecode_bundle(&sources).expect("second deterministic bundle");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn foundation_package_compiles_the_root_before_companions() {
+        let sources = [
+            ModuleSource {
+                resource: "std.foundation.bootstrap",
+                source: "(ns std.foundation.bootstrap) (def ready (str/starts-with? \"hara\" \"ha\"))",
+            },
+            ModuleSource {
+                resource: "std.foundation.string",
+                source: "(ns std.foundation.string (:config {:set-global-alias str})) (defn starts-with? [value prefix] true)",
+            },
+            ModuleSource {
+                resource: "std.foundation",
+                source: "(ns std.foundation) (def foundation-ready true)",
+            },
+        ];
+
+        let bytes = compile_package_bytecode_bundle(&sources, &sources)
+            .expect("compile source-owned Foundation package");
+        let modules = decode(&bytes).expect("decode Foundation package");
+        assert_eq!(modules[0].resource, "std.foundation");
+        assert!(modules
+            .iter()
+            .any(|module| module.resource == "std.foundation.string"));
+
+        let mut runtime = Runtime::core();
+        eval_bytecode_bundle(&mut runtime, &bytes).expect("load Foundation package");
+        runtime
+            .load_bytecode_resource("std.foundation.bootstrap")
+            .expect("load Foundation companion");
+        assert!(runtime.use_namespace("std.foundation.bootstrap"));
+        assert_eq!(runtime.eval_native("ready").unwrap(), "true");
     }
 
     #[test]

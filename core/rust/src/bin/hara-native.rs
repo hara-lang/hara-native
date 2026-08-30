@@ -4,7 +4,16 @@
 //! verified HARP archive.  The user-facing `hara` command is intentionally a
 //! source-package wrapper and is not built into this binary.
 
-use hara_native::{core::Value, identity_tool, package, package_manifest::PackageManifest, project, Runtime};
+use hara_native::{
+    command::{
+        App as CommandApp, AppConfig, ArgumentSpec, CommandError, OptionKind, OptionSpec,
+        ParsedValue, Request, Route, RouteSpec,
+    },
+    core::Value,
+    identity_tool, package,
+    package_manifest::PackageManifest,
+    project, Runtime,
+};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::env;
@@ -73,8 +82,12 @@ Commands:
   signer public-key --key-file PATH
                                 print the key's lowercase public-key hex
   signer sign                   sign a canonical intent from stdin
-  id <login|enroll|status|key|namespace> ...
+  id <login|enroll|status|key|namespace|grant|policy> ...
                                 manage a publisher identity with the integrated signer
+  id policy grant --identity POLICY.edn --root-key-file PATH --key-id ID
+                  --public-key HEX --github-subject ID --coordinate COORDINATE
+                  --authorization-public-key HEX [--dry-run]
+                                offline-root-sign one reviewed exact publisher grant
   publish [--tap TAP] [--dry-run [--skip-signed-tag]] [PROJECT]
                                 sign and submit a source-package publication request
 
@@ -87,167 +100,276 @@ publishable preflight."#
 }
 
 fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Command, String> {
-    let mut arguments = arguments.into_iter();
-    let Some(command) = arguments.next() else {
-        return Ok(Command::Help);
-    };
-    match command.as_str() {
-        "--help" | "-h" | "help" => Ok(Command::Help),
-        "--version" | "-V" | "version" => Ok(Command::Version),
-        "eval" => {
-            Ok(Command::Eval(arguments.next().ok_or_else(|| {
-                "hara-native eval requires FORM".to_owned()
-            })?))
-        }
-        "run" => Ok(Command::Run(required_path(&mut arguments, "run")?)),
-        "repl" => {
-            if let Some(argument) = arguments.next() {
-                return Err(format!("hara-native repl does not accept {argument}"));
-            }
-            Ok(Command::Repl)
-        }
-        "test" => parse_project_test(arguments),
-        "test-json" => Ok(Command::TestJson {
-            suite: required_path(&mut arguments, "test-json")?,
-            groups: arguments.collect(),
-        }),
-        "bundle" => parse_bundle(arguments),
-        "signer" => Ok(Command::Signer(arguments.collect())),
-        "id" => Ok(Command::Id(arguments.collect())),
-        "publish" => parse_publish(arguments),
-        other => Err(format!("unknown hara-native command: {other}")),
-    }
+    let argv = arguments.into_iter().collect::<Vec<_>>();
+    let app = cli_application()?;
+    let request = app
+        .parse(argv.clone())
+        .map_err(|error| cli_parse_error(&argv, error))?;
+    app.handler(&request).map_err(|error| error.to_string())?(&request)
 }
 
-fn parse_project_test(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
-    let mut project = PathBuf::from(".");
-    let mut files = Vec::new();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--project" => {
-                project = required_path(&mut arguments, "test --project")?;
-            }
-            "--file" => files.push(required_path(&mut arguments, "test --file")?),
-            option if option.starts_with('-') => {
-                return Err(format!("unknown hara-native test option: {option}"));
-            }
-            argument => {
-                return Err(format!(
-                    "hara-native test does not accept {argument}; use --project or --file"
-                ));
-            }
-        }
-    }
-    Ok(Command::Test { project, files })
-}
+type CliHandler = fn(&Request) -> Result<Command, String>;
 
-fn parse_publish(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
-    let mut tap = "hara".to_owned();
-    let mut dry_run = false;
-    let mut skip_signed_tag = false;
-    let mut project = None;
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--tap" => {
-                tap = arguments
-                    .next()
-                    .ok_or_else(|| "hara-native publish --tap requires a tap name".to_owned())?;
-                if tap.is_empty() || tap.starts_with('-') {
-                    return Err("hara-native publish --tap requires a tap name".into());
-                }
-            }
-            "--dry-run" => dry_run = true,
-            "--skip-signed-tag" => skip_signed_tag = true,
-            option if option.starts_with('-') => {
-                return Err(format!("unknown hara-native publish option: {option}"));
-            }
-            path if project.is_none() => project = Some(PathBuf::from(path)),
-            path => {
-                return Err(format!(
-                    "hara-native publish accepts one project path, not {path}"
-                ))
-            }
-        }
-    }
-    if skip_signed_tag && !dry_run {
-        return Err("hara-native publish --skip-signed-tag requires --dry-run".into());
-    }
-    Ok(Command::Publish {
-        project: project.unwrap_or_else(|| PathBuf::from(".")),
-        tap,
-        dry_run,
-        skip_signed_tag,
+fn cli_application() -> Result<CommandApp<CliHandler>, String> {
+    let mut app = CommandApp::create(AppConfig {
+        id: "hara-native".into(),
+        desc: "HAL-free native Hara host".into(),
     })
+    .map_err(|error| error.to_string())?;
+
+    let mut help = cli_route("help", &[], "Show command help");
+    help.spec.aliases = cli_paths(&[&["help"], &["--help"], &["-h"]]);
+    cli_install(&mut app, help)?;
+    let mut version = cli_route("version", &["version"], "Show the native host version");
+    version.spec.aliases = cli_paths(&[&["--version"], &["-V"]]);
+    cli_install(&mut app, version)?;
+
+    let mut eval = cli_route("eval", &["eval"], "Evaluate one core-language form");
+    eval.spec.arguments = vec![cli_argument("source", true, false)];
+    cli_install(&mut app, eval)?;
+    let mut run = cli_route("run", &["run"], "Evaluate a source file");
+    run.spec.arguments = vec![cli_argument("file", true, false)];
+    cli_install(&mut app, run)?;
+    cli_install(
+        &mut app,
+        cli_route("repl", &["repl"], "Start a core-language REPL"),
+    )?;
+
+    let mut test = cli_route("test", &["test"], "Run project Test files");
+    test.spec.options = vec![
+        cli_string_option("project", "--project", false, Some(".")),
+        cli_string_option("file", "--file", true, None),
+    ];
+    cli_install(&mut app, test)?;
+    let mut test_json = cli_route("test-json", &["test-json"], "Run JSON host tests");
+    test_json.spec.arguments = vec![
+        cli_argument("suite", true, false),
+        cli_argument("groups", false, true),
+    ];
+    cli_install(&mut app, test_json)?;
+
+    let mut bundle = cli_route("bundle", &["bundle"], "Report an unknown bundle operation");
+    bundle.spec.passthrough = true;
+    bundle.spec.arguments = vec![
+        cli_argument("operation", true, false),
+        cli_argument("argv", false, true),
+    ];
+    cli_install(&mut app, bundle)?;
+    let mut bundle_build = cli_route("bundle-build", &["bundle", "build"], "Build a HARP archive");
+    bundle_build.spec.arguments = vec![cli_argument("project", true, false)];
+    bundle_build.spec.options = vec![cli_string_option("output", "--output", false, None)];
+    cli_install(&mut app, bundle_build)?;
+    let mut bundle_verify = cli_route(
+        "bundle-verify",
+        &["bundle", "verify"],
+        "Verify a HARP archive",
+    );
+    bundle_verify.spec.arguments = vec![cli_argument("archive", true, false)];
+    cli_install(&mut app, bundle_verify)?;
+    let mut bundle_install = cli_route(
+        "bundle-install",
+        &["bundle", "install"],
+        "Install a HARP archive",
+    );
+    bundle_install.spec.arguments = vec![cli_argument("archive", true, false)];
+    cli_install(&mut app, bundle_install)?;
+    let mut bundle_run = cli_route("bundle-run", &["bundle", "run"], "Run a HARP archive");
+    bundle_run.spec.arguments = vec![cli_argument("archive", true, false)];
+    bundle_run.spec.options = vec![cli_string_option("entry", "--entry", false, None)];
+    cli_install(&mut app, bundle_run)?;
+
+    for (id, desc) in [
+        ("signer", "Manage local signing keys"),
+        ("id", "Manage publisher identity"),
+    ] {
+        let mut delegated = cli_route(id, &[id], desc);
+        delegated.spec.passthrough = true;
+        delegated.spec.arguments = vec![cli_argument("argv", false, true)];
+        cli_install(&mut app, delegated)?;
+    }
+    let mut publish = cli_route("publish", &["publish"], "Publish a source package");
+    publish.spec.arguments = vec![cli_argument("project", false, false)];
+    publish.spec.options = vec![
+        cli_string_option("tap", "--tap", false, Some("hara")),
+        cli_boolean_option("dry-run", "--dry-run"),
+        cli_boolean_option("skip-signed-tag", "--skip-signed-tag"),
+    ];
+    cli_install(&mut app, publish)?;
+    Ok(app)
 }
 
-fn required_path(
-    arguments: &mut impl Iterator<Item = String>,
-    command: &str,
-) -> Result<PathBuf, String> {
-    arguments
-        .next()
-        .map(PathBuf::from)
-        .ok_or_else(|| format!("hara-native {command} requires a path"))
-}
-
-fn parse_bundle(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
-    let operation = arguments
-        .next()
-        .ok_or_else(|| "hara-native bundle requires build, verify, install, or run".to_owned())?;
-    match operation.as_str() {
-        "build" => parse_bundle_build(arguments),
-        "verify" => {
-            let archive = required_path(&mut arguments, "bundle verify")?;
-            no_extra(arguments, Command::BundleVerify(archive))
-        }
-        "install" => {
-            let archive = required_path(&mut arguments, "bundle install")?;
-            no_extra(arguments, Command::BundleInstall(archive))
-        }
-        "run" => {
-            let archive = required_path(&mut arguments, "bundle run")?;
-            let entry = match arguments.next() {
-                None => None,
-                Some(option) if option == "--entry" => Some(arguments.next().ok_or_else(|| {
-                    "hara-native bundle run --entry requires NAMESPACE/SYMBOL".to_owned()
-                })?),
-                Some(option) => {
-                    return Err(format!(
-                        "unknown hara-native bundle run option: {option}; expected --entry"
-                    ));
-                }
-            };
-            no_extra(arguments, Command::BundleRun { archive, entry })
-        }
-        other => Err(format!(
-            "unknown hara-native bundle operation: {other}; expected build, verify, install, or run"
-        )),
+fn cli_route(id: &str, path: &[&str], desc: &str) -> Route<CliHandler> {
+    Route {
+        spec: RouteSpec {
+            id: id.into(),
+            path: path.iter().map(|value| (*value).into()).collect(),
+            aliases: Vec::new(),
+            desc: desc.into(),
+            options: Vec::new(),
+            arguments: Vec::new(),
+            passthrough: false,
+        },
+        handler: cli_command,
     }
 }
 
-fn parse_bundle_build(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
-    let project = required_path(&mut arguments, "bundle build")?;
-    let output = match arguments.next() {
-        None => None,
-        Some(option) if option == "--output" => {
-            Some(required_path(&mut arguments, "bundle build --output")?)
-        }
-        Some(option) => {
-            return Err(format!(
-                "unknown hara-native bundle build option: {option}; expected --output"
-            ));
-        }
-    };
-    no_extra(arguments, Command::BundleBuild { project, output })
+fn cli_paths(paths: &[&[&str]]) -> Vec<Vec<String>> {
+    paths
+        .iter()
+        .map(|path| path.iter().map(|value| (*value).into()).collect())
+        .collect()
 }
 
-fn no_extra(
-    mut arguments: impl Iterator<Item = String>,
-    command: Command,
-) -> Result<Command, String> {
-    match arguments.next() {
-        None => Ok(command),
-        Some(argument) => Err(format!("unexpected argument: {argument}")),
+fn cli_argument(id: &str, required: bool, many: bool) -> ArgumentSpec {
+    ArgumentSpec {
+        id: id.into(),
+        required,
+        many,
+    }
+}
+
+fn cli_string_option(id: &str, long: &str, many: bool, default: Option<&str>) -> OptionSpec {
+    OptionSpec {
+        id: id.into(),
+        long: Some(long.into()),
+        short: None,
+        kind: OptionKind::String,
+        many,
+        default: default.map(|value| ParsedValue::String(value.into())),
+    }
+}
+
+fn cli_boolean_option(id: &str, long: &str) -> OptionSpec {
+    OptionSpec {
+        id: id.into(),
+        long: Some(long.into()),
+        short: None,
+        kind: OptionKind::Boolean,
+        many: false,
+        default: None,
+    }
+}
+
+fn cli_install(app: &mut CommandApp<CliHandler>, route: Route<CliHandler>) -> Result<(), String> {
+    app.install(route)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn cli_command(request: &Request) -> Result<Command, String> {
+    let argument = |id| cli_string(request.arguments.get(id), id);
+    let arguments = |id| cli_strings(request.arguments.get(id), id);
+    let option = |id| cli_string(request.options.get(id), id);
+    let enabled = |id| cli_bool(request.options.get(id), id);
+    match request.route_id.as_str() {
+        "help" => Ok(Command::Help),
+        "version" => Ok(Command::Version),
+        "eval" => Ok(Command::Eval(argument("source")?)),
+        "run" => Ok(Command::Run(PathBuf::from(argument("file")?))),
+        "repl" => Ok(Command::Repl),
+        "test" => Ok(Command::Test {
+            project: PathBuf::from(option("project")?),
+            files: cli_strings(request.options.get("file"), "file")?
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+        }),
+        "test-json" => Ok(Command::TestJson {
+            suite: PathBuf::from(argument("suite")?),
+            groups: arguments("groups")?,
+        }),
+        "bundle" => Err(format!(
+            "unknown hara-native bundle operation: {}; expected build, verify, install, or run",
+            argument("operation")?
+        )),
+        "bundle-build" => Ok(Command::BundleBuild {
+            project: PathBuf::from(argument("project")?),
+            output: non_empty(option("output")?).map(PathBuf::from),
+        }),
+        "bundle-verify" => Ok(Command::BundleVerify(PathBuf::from(argument("archive")?))),
+        "bundle-install" => Ok(Command::BundleInstall(PathBuf::from(argument("archive")?))),
+        "bundle-run" => Ok(Command::BundleRun {
+            archive: PathBuf::from(argument("archive")?),
+            entry: non_empty(option("entry")?),
+        }),
+        "signer" => Ok(Command::Signer(arguments("argv")?)),
+        "id" => Ok(Command::Id(arguments("argv")?)),
+        "publish" => {
+            let tap = option("tap")?;
+            if tap.is_empty() || tap.starts_with('-') {
+                return Err("hara-native publish --tap requires a tap name".into());
+            }
+            let dry_run = enabled("dry-run")?;
+            let skip_signed_tag = enabled("skip-signed-tag")?;
+            if skip_signed_tag && !dry_run {
+                return Err("hara-native publish --skip-signed-tag requires --dry-run".into());
+            }
+            Ok(Command::Publish {
+                project: non_empty(argument("project")?)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(".")),
+                tap,
+                dry_run,
+                skip_signed_tag,
+            })
+        }
+        route => Err(format!("unhandled hara-native command route: {route}")),
+    }
+}
+
+fn cli_string(value: Option<&ParsedValue>, id: &str) -> Result<String, String> {
+    match value {
+        Some(ParsedValue::String(value)) => Ok(value.clone()),
+        _ => Err(format!("hara-native command route did not provide {id}")),
+    }
+}
+
+fn cli_strings(value: Option<&ParsedValue>, id: &str) -> Result<Vec<String>, String> {
+    match value {
+        Some(ParsedValue::Strings(values)) => Ok(values.clone()),
+        _ => Err(format!("hara-native command route did not provide {id}")),
+    }
+}
+
+fn cli_bool(value: Option<&ParsedValue>, id: &str) -> Result<bool, String> {
+    match value {
+        Some(ParsedValue::Boolean(value)) => Ok(*value),
+        _ => Err(format!("hara-native command route did not provide {id}")),
+    }
+}
+
+fn non_empty(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+fn cli_parse_error(argv: &[String], error: CommandError) -> String {
+    let option = argv.iter().find(|value| value.starts_with('-')).cloned();
+    match argv {
+        [command, ..] if error.code == ":command/unknown-route" => {
+            format!("unknown hara-native command: {command}")
+        }
+        [bundle, operation, ..]
+            if bundle == "bundle"
+                && operation == "build"
+                && error.code == ":command/unknown-option" =>
+        {
+            format!(
+                "unknown hara-native bundle build option: {}; expected --output",
+                option.unwrap_or_default()
+            )
+        }
+        [publish, rest @ ..] if publish == "publish" && error.code == ":command/unknown-option" => {
+            format!(
+                "unknown hara-native publish option: {}",
+                option.unwrap_or_default()
+            )
+        }
+        [publish, rest @ ..]
+            if publish == "publish" && rest.last().is_some_and(|value| value == "--tap") =>
+        {
+            "hara-native publish --tap requires a tap name".into()
+        }
+        _ => error.message,
     }
 }
 
@@ -269,13 +391,17 @@ fn run(command: Command) -> Result<(), String> {
             tap,
             dry_run,
             skip_signed_tag,
-        } => package::publish_path_with_signer(
-            &project,
-            &tap,
-            dry_run,
-            skip_signed_tag,
-            signer::sign_intent_from_environment,
-        )
+        } => {
+            let public_key = signer::public_key_from_environment()?;
+            package::publish_path_with_signer_and_identity(
+                &project,
+                &tap,
+                dry_run,
+                skip_signed_tag,
+                signer::sign_intent_from_environment,
+                Some(&public_key),
+            )
+        }
         .map(|result| println!("{result}")),
         Command::Help => {
             usage();
@@ -289,7 +415,17 @@ fn run(command: Command) -> Result<(), String> {
 }
 
 fn run_id(arguments: &[String]) -> Result<(), String> {
-    if matches!(arguments.first().map(String::as_str), Some("enroll")) {
+    if matches!(arguments.first().map(String::as_str), Some("policy"))
+        && matches!(arguments.get(1).map(String::as_str), Some("grant"))
+    {
+        let root_key_file = id_option(arguments, "--root-key-file")?;
+        let root_public_key = signer::public_key_hex(&root_key_file)?;
+        let forwarded = without_id_option(&arguments[2..], "--root-key-file")?;
+        identity_tool::grant_policy_with_signer(&forwarded, &root_public_key, |bytes| {
+            signer::sign_with_key_file(&root_key_file, bytes)
+                .map(|signature| signature.iter().map(|byte| format!("{byte:02x}")).collect())
+        })
+    } else if matches!(arguments.first().map(String::as_str), Some("enroll")) {
         let public_key = signer::public_key_from_environment()?;
         identity_tool::enroll_with_signer(
             &arguments[1..],
@@ -299,6 +435,39 @@ fn run_id(arguments: &[String]) -> Result<(), String> {
     } else {
         identity_tool::run(arguments)
     }
+}
+
+fn id_option(arguments: &[String], name: &str) -> Result<PathBuf, String> {
+    let values = arguments
+        .windows(2)
+        .filter_map(|window| (window[0] == name).then(|| PathBuf::from(&window[1])))
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] if value.is_absolute() => Ok(value.clone()),
+        [value] => Err(format!(
+            "{name} must be an absolute path: {}",
+            value.display()
+        )),
+        [] => Err(format!("hara-native id policy grant requires {name}")),
+        _ => Err(format!("{name} may be supplied only once")),
+    }
+}
+
+fn without_id_option(arguments: &[String], name: &str) -> Result<Vec<String>, String> {
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == name {
+            if arguments.get(index + 1).is_none() {
+                return Err(format!("{name} requires a value"));
+            }
+            index += 2;
+        } else {
+            output.push(arguments[index].clone());
+            index += 1;
+        }
+    }
+    Ok(output)
 }
 
 fn evaluate(source: &str) -> Result<(), String> {
@@ -545,6 +714,7 @@ fn run_project_tests(
     let project = project::discover(project_path)?;
     let files = selected_test_files(&project, requested)?;
     let catalog = project::source_catalog(&project)?;
+    let source_foundation = catalog.path("std.foundation").is_some();
     let mut report = ProjectTestReport::default();
     for path in files {
         let outcome = (|| -> Result<TestCounts, String> {
@@ -552,6 +722,9 @@ fn run_project_tests(
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
             let mut runtime = Runtime::core();
             runtime.register_source_catalog(&catalog);
+            if source_foundation {
+                runtime.bootstrap_source_foundation()?;
+            }
             test_file_counts(runtime.eval_native_value(&source)?)
         })();
         let file = match outcome {
@@ -804,8 +977,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_arguments, parse_test_suite, run_project_tests, run_test_suite, select_test_cases,
-        Command,
+        parse_arguments, parse_test_suite, run_id, run_project_tests, run_test_suite,
+        select_test_cases, signer, Command,
     };
     use hara_native::{identity_tool, package, package_manifest::PackageManifest, tap};
     use std::cell::RefCell;
@@ -967,9 +1140,57 @@ mod tests {
             }) if project == std::path::PathBuf::from("examples/smoke-answer") && tap == "hara"
         ));
 
-        let error = parse_arguments(["publish".into(), "--skip-signed-tag".into()])
-            .unwrap_err();
+        let error = parse_arguments(["publish".into(), "--skip-signed-tag".into()]).unwrap_err();
         assert!(error.contains("--skip-signed-tag requires --dry-run"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_policy_grant_command_only_writes_after_the_explicit_non_dry_run() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-policy-grant-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let root_key = root.join("root.ed25519");
+        fs::write(&root_key, [9_u8; 32]).unwrap();
+        fs::set_permissions(&root_key, fs::Permissions::from_mode(0o600)).unwrap();
+        let root_public = signer::public_key_hex(&root_key).unwrap();
+        let policy = root.join("identity.edn");
+        let source = format!(
+            "{{:identity/format 1 :identity/root-key \"{root_public}\" :publisher-keys {{}}}}\n"
+        );
+        fs::write(&policy, &source).unwrap();
+        let arguments = vec![
+            "policy".into(),
+            "grant".into(),
+            "--identity".into(),
+            policy.to_string_lossy().into_owned(),
+            "--root-key-file".into(),
+            root_key.to_string_lossy().into_owned(),
+            "--key-id".into(),
+            "hoebat-2026-01".into(),
+            "--public-key".into(),
+            "ab".repeat(32),
+            "--github-subject".into(),
+            "1455572".into(),
+            "--coordinate".into(),
+            "hara:hara-native/smoke-answer".into(),
+            "--authorization-public-key".into(),
+            "cd".repeat(32),
+            "--dry-run".into(),
+        ];
+        let result = run_id(&arguments);
+        assert_eq!(fs::read_to_string(&policy).unwrap(), source);
+        assert!(!root.join("identity.edn.sig").exists());
+        fs::remove_dir_all(&root).unwrap();
+        result.unwrap();
     }
 
     #[test]
@@ -1130,6 +1351,50 @@ mod tests {
         .unwrap();
         assert_eq!(selected.files.len(), 1);
         assert_eq!(selected.counts.passed, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_test_runner_bootstraps_source_owned_foundation() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-foundation-project-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/std/foundation")).unwrap();
+        fs::create_dir_all(root.join("test/fixture")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/foundation :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/std/foundation.hal"),
+            "(ns std.foundation)\n(defn root-answer [] 42)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/std/foundation/string.hal"),
+            "(ns std.foundation.string (:config {:set-global-alias str}))\n(defn upper [value] value)\n",
+        )
+        .unwrap();
+        for name in ["promise", "bytes", "coroutine", "pretty"] {
+            fs::write(
+                root.join(format!("src/std/foundation/{name}.hal")),
+                format!("(ns std.foundation.{name})\n(def loaded true)\n"),
+            )
+            .unwrap();
+        }
+        fs::write(
+            root.join("test/fixture/foundation_test.hal"),
+            "(ns fixture.foundation-test (:require [std.foundation :as foundation] [std.foundation.string :as str]))\n(Test/register {:desc \"loads source Foundation\" :test (fn [] [(foundation/root-answer) (str/upper \"hara\")]) :expected [42 \"hara\"] :meta {:refer (quote std.foundation/root-answer) :id (quote source-foundation)}})\n(Test/run)\n",
+        )
+        .unwrap();
+
+        let report = run_project_tests(&root, &[]).unwrap();
+        assert_eq!(report.counts.passed, 1);
+        assert_eq!(report.counts.failing(), 0);
 
         fs::remove_dir_all(root).unwrap();
     }
