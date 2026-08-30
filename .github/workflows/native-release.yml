@@ -478,7 +478,7 @@ jobs:
           if curl --fail --silent --show-error --retry 5 --retry-all-errors --output "$published" "$url"; then
             test "$RESUMING" = true
           else
-            mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests deploy
+            mvn --batch-mode -e -Dstyle.color=never -f core/java/pom.xml -Djacoco.skip=true -DskipTests deploy
             curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 --output "$published" "$url"
           fi
           test "$(sha256sum "$jar" | awk '{print $1}')" = "$(sha256sum "$published" | awk '{print $1}')"
@@ -596,8 +596,8 @@ jobs:
             test "$integrity" = "$expected"
             printf '%s=%s\n' "$output" "$integrity" >> "$GITHUB_OUTPUT"
           }
-          publish_or_resume @hara-lang/native-browser "dist/hara-lang-native-browser-${RELEASE_VERSION}.tgz" browser_integrity
-          publish_or_resume @hara-lang/hta "dist/hara-lang-hta-${RELEASE_VERSION}.tgz" hta_integrity
+          publish_or_resume @hara-lang/native-browser "./dist/hara-lang-native-browser-${RELEASE_VERSION}.tgz" browser_integrity
+          publish_or_resume @hara-lang/hta "./dist/hara-lang-hta-${RELEASE_VERSION}.tgz" hta_integrity
 
   verify-npm:
     needs: [release-ref, publish-npm]
