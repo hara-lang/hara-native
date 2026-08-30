@@ -624,22 +624,16 @@ public class HaraLanguageTest {
   }
 
   @Test
-  public void supportsDeclarationsAndPrivateDefinitions() {
+  public void supportsDeclarationsAndRejectsPrivateDefinitions() {
     try (Context context = context()) {
       assertEquals(
           42,
           context.eval(HaraLanguage.ID, "(do (declare answer) (def answer 42) answer)").asLong());
-      assertEquals(
-          7,
-          context
-              .eval(HaraLanguage.ID, "(do (defn- private-answer [] 7) (private-answer))")
-              .asLong());
-      assertTrue(
-          context
-              .eval(
-                  HaraLanguage.ID,
-                  "(ILookup/lookup (IObjType/meta (var private-answer)) :private)")
-              .asBoolean());
+      PolyglotException privateDefinition =
+          assertThrows(
+              PolyglotException.class,
+              () -> context.eval(HaraLanguage.ID, "(defn- private-answer [] 7)"));
+      assertTrue(privateDefinition.getMessage().contains("Unbound symbol: defn-"));
     }
   }
 

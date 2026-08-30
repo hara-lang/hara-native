@@ -102,7 +102,7 @@ interpreter:
 | Source form | Native lowering |
 | --- | --- |
 | `def` | `std.native.Base/def` with `Base/current-namespace`, an unqualified symbol, value, and metadata-or-`nil` |
-| `defn` / `defn-` | Construct the function in the source package, then use `Base/def`; visibility and schemas remain metadata |
+| `defn` | Construct the function in the source package, then use `Base/def`; schemas remain metadata. `defn-` is unsupported and rejected as an unbound symbol. |
 | `defmacro` | Construct the expander with its `form` and `environment` inputs, then use `Base/def` with `{:macro true}` metadata |
 | `defstruct` / `defmutable` | `Base/struct` / `Base/mutable` with a native Vector of fields |
 | `defprotocol` | `Base/protocol` with a method-to-arity map and a native Vector of parents |

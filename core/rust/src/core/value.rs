@@ -1722,7 +1722,6 @@ pub(crate) fn syntax_symbol(name: &str) -> bool {
         "defmulti",
         "defmutable",
         "defn",
-        "defn-",
         "defprotocol",
         "defstruct",
         "do",

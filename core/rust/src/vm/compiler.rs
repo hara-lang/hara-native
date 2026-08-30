@@ -4,7 +4,7 @@
 //! the ten shared primitives, `if`, `do`, `let`, `loop`/`recur`, `fn`
 //! closures with capture-by-value upvalues (including variadic
 //! parameters), direct calls, exceptions, and the registry-direct global
-//! forms — `def`, `defn`/`defn-` (single- and multi-arity, interning real
+//! forms — `def`, `defn` (single- and multi-arity, interning real
 //! late-bound vars), `var`, `set!`, `declare`, `defstruct`, `defmutable`, `field`, and
 //! `instance?` (issue #223; see
 //! `specs/01-lang/010-bytecode/draft/hal-bytecode-vm.edn` `:vm/namespaces`).
@@ -595,7 +595,6 @@ impl Compiler {
                 "def"
                     | "defonce"
                     | "defn"
-                    | "defn-"
                     | "defmacro"
                     | "defstruct"
                     | "defmutable"
@@ -650,7 +649,7 @@ impl Compiler {
                         }
                     }
                 }
-                if matches!(operator.as_str(), "defn" | "defn-") {
+                if operator == "defn" {
                     if let Some(Form::Symbol(name)) =
                         items.get(1).map(crate::core::form_without_metadata)
                     {
@@ -1186,9 +1185,7 @@ impl Compiler {
                     }
                     Form::Symbol(name) if name == "fn" => self.compile_fn_form(&children, span),
                     Form::Symbol(name) if name == "def" => self.compile_def(&children, span),
-                    Form::Symbol(name) if name == "defn" || name == "defn-" => {
-                        self.compile_defn(&children, span, top, name == "defn-")
-                    }
+                    Form::Symbol(name) if name == "defn" => self.compile_defn(&children, span, top),
                     Form::Symbol(name) if name == "defmacro" => {
                         self.compile_defmacro(&children, span, top)
                     }

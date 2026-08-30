@@ -1,4 +1,4 @@
-//! Named global-form compilation (issue #223): `defn`/`defn-`, `declare`,
+//! Named global-form compilation (issue #223): `defn`, `declare`,
 //! `defstruct`, `field`, and `instance?` lower to registry-direct global
 //! instructions. Basic `def`, `set!`, and `var` bindings live in `bindings.rs`.
 //! Names resolve in two phases:
@@ -558,7 +558,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// `(defn name ...)` / `(defn- name ...)`: interns a real var holding
+    /// `(defn name ...)` interns a real var holding
     /// the function (single arity) or arity dispatcher (multiple
     /// clauses) and evaluates to the var, matching the evaluator. Definitions
     /// may occur inside a function body as well as in a top-level sequence:
@@ -571,7 +571,6 @@ impl Compiler {
         children: &[Child<'_>],
         span: &Span,
         _top: bool,
-        private: bool,
     ) -> Result<(), CompileError> {
         if children.len() < 4 {
             return Err(CompileError::new(
@@ -587,7 +586,7 @@ impl Compiler {
         // `rest` is a suffix of the elements, so the matching children
         // (with spans) are the same suffix of `children`.
         let raw: Vec<Form> = children.iter().map(|child| child.form.clone()).collect();
-        let (metadata, rest) = definition_metadata(metadata, &raw[2..], private, false)
+        let (metadata, rest) = definition_metadata(metadata, &raw[2..], false, false)
             .map_err(|message| unsupported(format!("{name}: {message}"), children[1].span.start))?;
         if let Some(schema) = schema_var_reference(metadata.as_deref()) {
             let schema_name = schema.as_str();

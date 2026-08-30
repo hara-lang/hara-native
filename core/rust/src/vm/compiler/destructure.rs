@@ -13,7 +13,7 @@ pub(super) fn expand(form: &Form, next: &mut u64) -> Result<Option<Form>, String
         "let" => expand_let(items, next),
         "loop" => expand_loop(items, next),
         "fn" => expand_fn(items, next),
-        "defn" | "defn-" | "defmacro" => expand_definition(items, next),
+        "defn" | "defmacro" => expand_definition(items, next),
         "binding" => expand_binding(items, next),
         "letfn" => expand_letfn(items, next),
         _ => Ok(None),

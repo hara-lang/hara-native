@@ -99,7 +99,6 @@ final class HaraBuiltinCatalog {
           "try",
           "fn",
           "defn",
-          "defn-",
           "declare",
           "defmulti",
           "defmethod",

@@ -105,7 +105,6 @@ final class FoundationHalcLowerer {
       case "fn" -> lowerFn(list);
       case "def" -> lowerDef(list);
       case "defn" -> lowerDefn(list);
-      case "defn-" -> lowerPrivateDefn(list);
       case "declare" -> lowerDeclare(list);
       case "defmacro" -> lowerDefMacro(list);
       case "ns" -> lowerNamespace(list);
@@ -573,23 +572,6 @@ final class FoundationHalcLowerer {
       if ("bool".equals(primitive.name())) return FrameSlotKind.Boolean;
     }
     return FrameSlotKind.Object;
-  }
-
-  @SuppressWarnings("unchecked")
-  private HaraExpressionNode lowerPrivateDefn(List<?> form) {
-    if (form.count() < 4 || !(form.nth(1) instanceof Symbol)) {
-      fail("defn- expects a name, parameters, and body");
-    }
-    Symbol name = (Symbol) form.nth(1);
-    IMapType<Object, Object> metadata =
-        name.meta() instanceof IMapType<?, ?>
-            ? (IMapType<Object, Object>) name.meta()
-            : hara.lang.data.Map.Standard.EMPTY;
-    Object[] values = new Object[(int) form.count()];
-    values[0] = Symbol.create("defn");
-    values[1] = name.withMeta((IMapType<Object, Object>) metadata.assoc(Keyword.create("private"), Boolean.TRUE));
-    for (int index = 2; index < form.count(); index++) values[index] = form.nth(index);
-    return lowerDefn(hara.lang.data.List.Standard.from(form.meta(), values));
   }
 
   private HaraExpressionNode lowerDeclare(List<?> form) {

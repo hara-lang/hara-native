@@ -3,7 +3,7 @@
 //! Milestone 4 compiles literals, lexical locals, arithmetic,
 //! comparisons, `if`, `do`, `let`, `loop`/`recur`, `fn` closures
 //! (including variadic), exceptions, and the registry-direct global
-//! forms (`def`, `defn`/`defn-` single- and multi-arity, `var`, `set!`,
+//! forms (`def`, `defn` single- and multi-arity, `var`, `set!`,
 //! `declare`, `defstruct`, `field`, `instance?`) into a typed
 //! instruction program and executes it on a stack machine (issue #223).
 //! See `notes/rust-bytecode-vm.md` for the design.

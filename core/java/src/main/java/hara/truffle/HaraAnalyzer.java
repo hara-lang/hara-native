@@ -100,7 +100,7 @@ final class HaraAnalyzer {
   }
 
   private void predeclareTopLevel(Object[] forms, int start, int end) {
-    Set<String> definitionForms = Set.of("def", "defn", "defn-", "defmacro");
+    Set<String> definitionForms = Set.of("def", "defn", "defmacro");
     for (int index = start; index < end; index++) {
       if (!(forms[index] instanceof List<?> list)
           || list.count() < 2
@@ -265,8 +265,6 @@ final class HaraAnalyzer {
           return analyzeFunction(list);
         case "defn":
           return analyzeDefn(list);
-        case "defn-":
-          return analyzeDefn(list, true);
         case "declare":
           return analyzeDeclare(list);
         case "defmulti":

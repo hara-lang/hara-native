@@ -14,7 +14,7 @@ pub(crate) fn unit_kind(form: &Form) -> UnitKind {
         Some(
             "defprotocol" | "extend-type" | "defmulti" | "defmethod" | "defstruct" | "defmutable",
         ) => UnitKind::Registration,
-        Some("def" | "defn" | "defn-" | "declare") => UnitKind::Definition,
+        Some("def" | "defn" | "declare") => UnitKind::Definition,
         _ => UnitKind::Initializer,
     }
 }
@@ -43,7 +43,7 @@ fn collect_provided_vars(form: &Form, module: &str, output: &mut BTreeSet<String
                 }
             }
         }
-        "def" | "defn" | "defn-" | "defmacro" | "defmulti" => {
+        "def" | "defn" | "defmacro" | "defmulti" => {
             if let Some(name) = values.get(1).and_then(binding_name) {
                 output.insert(qualify(module, name));
             }

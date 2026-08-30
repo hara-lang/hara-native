@@ -132,7 +132,6 @@ final class FoundationFallbackDefinitions {
     if (!Set.of(
             "def",
             "defn",
-            "defn-",
             "defmacro",
             "defstruct",
             "defmutable",
