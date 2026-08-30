@@ -1,6 +1,18 @@
 use super::{install_native_kernel, DocumentationValue, RuntimeBroker};
 
 #[test]
+fn postgres_authority_is_rejected_by_the_core_crate() {
+    let error = match RuntimeBroker::start_with(None, false, false, true) {
+        Ok(_) => panic!("a core build must reject PostgreSQL authority"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        "PostgreSQL support is not included in the core hara-native crate"
+    );
+}
+
+#[test]
 fn native_sandbox_surface_uses_the_broker_kernel() {
     let broker = RuntimeBroker::start_core().unwrap();
     let mut runtime = crate::Runtime::core();
