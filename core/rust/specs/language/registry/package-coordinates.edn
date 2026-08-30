@@ -1,0 +1,8 @@
+[{:case/id :hara.package.case/coordinate
+  :case/type :coordinate
+  :case/input "hara/graph"
+  :case/expected {:owner "hara" :name "graph"}}
+ {:case/id :hara.package.case/tap-coordinate
+  :case/type :coordinate
+  :case/input "greenways:greenways/graph"
+  :case/expected {:tap "greenways" :owner "greenways" :name "graph"}}]

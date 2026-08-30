@@ -802,6 +802,57 @@ public class HbcCodecTest {
   }
 
   @Test
+  public void executesLanguageConformanceArtifactSerially() throws Exception {
+    List<HbcConformanceCorpus.LanguageCase> cases =
+        HbcConformanceCorpus.decodeLanguage(
+            Files.readAllBytes(Path.of("rust/assets/language-conformance.hlc")));
+    assertTrue("language corpus must exercise functional behavior", cases.size() >= 20);
+    assertTrue(cases.stream().anyMatch(testCase -> testCase.layer().equals("parser")));
+    assertTrue(cases.stream().anyMatch(testCase -> testCase.layer().equals("evaluator")));
+    assertTrue(cases.stream().anyMatch(testCase -> testCase.layer().equals("native-abi")));
+    assertTrue(cases.stream().anyMatch(HbcConformanceCorpus.LanguageCase::browserSafe));
+    int executed = 0;
+    for (HbcConformanceCorpus.LanguageCase testCase : cases) {
+      assertFalse(
+          testCase.id() + " source must not require Foundation",
+          testCase.source().contains("std.foundation") || testCase.source().contains("std.lib."));
+      HbcProgram program = HbcCodec.decode(testCase.artifact());
+      assertFalse(
+          testCase.id() + " must not require Foundation",
+          requiresMountedFoundationPackage(program));
+      Source source =
+          Source.newBuilder(
+                  HaraLanguage.ID,
+                  ByteSequence.create(testCase.artifact()),
+                  testCase.id() + ".hbc")
+              .mimeType(HaraLanguage.BYTECODE_MIME_TYPE)
+              .build();
+      try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+        String expectedError = HbcConformanceCorpus.expectedErrorCategory(testCase.expectedDisplay());
+        try {
+          org.graalvm.polyglot.Value actual = context.eval(source);
+          if (expectedError != null) {
+            throw new AssertionError(
+                testCase.id() + " expected normalized error " + expectedError + " but returned "
+                    + HbcConformanceCorpus.display(actual));
+          }
+          assertEquals(testCase.id(), testCase.expectedDisplay(), HbcConformanceCorpus.display(actual));
+        } catch (RuntimeException failure) {
+          if (expectedError == null) {
+            throw new AssertionError(testCase.id() + " layer=" + testCase.layer(), failure);
+          }
+          assertEquals(
+              testCase.id() + " failure=" + failure,
+              expectedError,
+              HbcConformanceCorpus.normalizedErrorCategory(failure));
+        }
+      }
+      executed++;
+    }
+    assertEquals("all declared language cases ran", cases.size(), executed);
+  }
+
+  @Test
   public void nativeProtocolOutcomeCategoriesRejectWrongExpectations() {
     assertEquals("protocol/arity", HbcConformanceCorpus.expectedErrorCategory("!error:protocol/arity"));
     assertEquals(null, HbcConformanceCorpus.expectedErrorCategory("true"));

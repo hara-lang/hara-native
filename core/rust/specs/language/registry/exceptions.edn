@@ -1,0 +1,160 @@
+{:spec/version "0.0.0-alpha"
+ :spec/status :draft
+ :namespace std.foundation
+ :purpose :portable-exception-contract-and-cross-runtime-conformance
+
+ :contract
+ {:constructor (ex code data & key-value-pairs)
+  :canonical-data-keys [:ex/code :ex/class :ex/message :ex/cause :ex/context]
+  :code
+  {:standard-shorthand :unqualified-registered-keyword
+   :standard-namespace hara
+   :custom :namespaced-keyword}
+  :class
+  {:required false
+   :type :namespaced-keyword
+   :matching :flat-equality-label
+   :catch-selection false}
+  :catch-selection :ex/code
+  :native-type
+  {:scope :host-leak-diagnostic-only
+   :portable-exception-result nil
+   :portable-data-key false
+   :portable-serialization false}
+  :cause
+  {:portable-exception :preserve-identity
+   :host-error :normalize-to-host/native-error
+   :native-object-storage false
+   :native-type-storage false}}
+
+ :standard-codes
+ [{:shorthand :security :code :hara/security :class :ex.class/security}
+  {:shorthand :timeout :code :hara/timeout :class :ex.class/timeout}
+  {:shorthand :not-found :code :hara/not-found :class :ex.class/not-found}
+  {:shorthand :conflict :code :hara/conflict :class :ex.class/conflict}
+  {:shorthand :limit :code :hara/limit :class :ex.class/limit}
+  {:shorthand :syntax :code :hara/syntax :class :ex.class/syntax}
+  {:shorthand :io :code :hara/io :class :ex.class/io}
+  {:shorthand :database :code :hara/database :class :ex.class/database}
+  {:shorthand :dependency :code :hara/dependency :class :ex.class/dependency}
+  {:shorthand :serialization :code :hara/serialization :class :ex.class/serialization}
+  {:shorthand :argument :code :hara/argument :class :ex.class/argument}
+  {:shorthand :state :code :hara/state :class :ex.class/state}
+  {:shorthand :host :code :hara/host :class :ex.class/host}
+  {:shorthand :generic :code :hara/generic :class :ex.class/internal}]
+
+ :functions
+ [{:name ex
+   :status :portable
+   :arities [[code data] [code data & key-value-pairs]]
+   :semantics :canonical-exception-construction}
+  {:name ex-info
+   :status :deprecated-runtime-input
+   :arities [[message data] [message data cause]]
+   :semantics :legacy-unclassified-exception-construction}
+  {:name ex-data
+   :status :portable
+   :arities [[exception]]
+   :semantics :portable-exception-data}
+  {:name ex-message
+   :status :portable
+   :arities [[exception]]
+   :semantics :exception-message}
+  {:name ex-cause
+   :status :portable
+   :arities [[exception]]
+   :semantics :portable-cause-access}
+  {:name ex-provenance
+   :status :portable
+   :arities [[exception]]
+   :semantics :creation-and-throw-site-access}
+  {:name ex-class
+   :status :portable
+   :arities [[exception]]
+   :semantics :semantic-class-access}
+  {:name ex-native-type
+   :status :diagnostic
+   :arities [[exception]]
+   :semantics :leaked-host-native-type-or-nil}]
+
+ :cases
+ [{:id :exception/variadic-construction
+   :source "(let [error (ex :greenways.ex/checkout-failed {:order/id 7} :ex/message \"checkout failed\" :ex/class :greenways.class/workflow)] (if (and (= :greenways.ex/checkout-failed (:ex/code (ex-data error))) (= 7 (:order/id (ex-data error))) (= \"checkout failed\" (ex-message error)) (= :greenways.class/workflow (ex-class error))) 42 0))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/standard-code-registry
+   :source "(if (and (= [:hara/security :ex.class/security] [(:ex/code (ex-data (ex :security {}))) (ex-class (ex :security {}))]) (= [:hara/timeout :ex.class/timeout] [(:ex/code (ex-data (ex :timeout {}))) (ex-class (ex :timeout {}))]) (= [:hara/not-found :ex.class/not-found] [(:ex/code (ex-data (ex :not-found {}))) (ex-class (ex :not-found {}))]) (= [:hara/conflict :ex.class/conflict] [(:ex/code (ex-data (ex :conflict {}))) (ex-class (ex :conflict {}))]) (= [:hara/limit :ex.class/limit] [(:ex/code (ex-data (ex :limit {}))) (ex-class (ex :limit {}))]) (= [:hara/syntax :ex.class/syntax] [(:ex/code (ex-data (ex :syntax {}))) (ex-class (ex :syntax {}))]) (= [:hara/io :ex.class/io] [(:ex/code (ex-data (ex :io {}))) (ex-class (ex :io {}))]) (= [:hara/database :ex.class/database] [(:ex/code (ex-data (ex :database {}))) (ex-class (ex :database {}))]) (= [:hara/dependency :ex.class/dependency] [(:ex/code (ex-data (ex :dependency {}))) (ex-class (ex :dependency {}))]) (= [:hara/serialization :ex.class/serialization] [(:ex/code (ex-data (ex :serialization {}))) (ex-class (ex :serialization {}))]) (= [:hara/argument :ex.class/argument] [(:ex/code (ex-data (ex :argument {}))) (ex-class (ex :argument {}))]) (= [:hara/state :ex.class/state] [(:ex/code (ex-data (ex :state {}))) (ex-class (ex :state {}))]) (= [:hara/host :ex.class/host] [(:ex/code (ex-data (ex :host {}))) (ex-class (ex :host {}))]) (= [:hara/generic :ex.class/internal] [(:ex/code (ex-data (ex :generic {}))) (ex-class (ex :generic {}))])) 42 0)"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/canonical-standard-code
+   :source "(let [error (ex :hara/not-found {})] (if (and (= :hara/not-found (:ex/code (ex-data error))) (= :ex.class/not-found (ex-class error))) 42 0))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/custom-class-optional
+   :source "(if (nil? (ex-class (ex :tahto.ex/invalid-workspace {}))) 42 0)"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/legacy-accessors
+   :source "(let [cause (ex-info \"cause\" {:cause/id 1}) error (ex-info \"legacy\" {:legacy true} cause)] (if (and (= \"legacy\" (ex-message error)) (= true (:legacy (ex-data error))) (= cause (ex-cause error)) (nil? (ex-class error))) 42 0))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/cause-identity
+   :source "(let [cause (ex :app/cause {}) error (ex :app/wrapped {:ex/cause cause})] (if (and (= cause (ex-cause error)) (= cause (:ex/cause (ex-data error)))) 42 0))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/provenance
+   :execution :direct
+   :source "(let [error (ex :app/provenance {})] (try (throw error) (catch caught (let [provenance (ex-provenance caught)] (if (and (:ex/created-at provenance) (= 1 (count (:ex/throws provenance)))) 42 0)))))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/rethrow-provenance
+   :execution :direct
+   :source "(let [error (ex :app/provenance {})] (try (try (throw error) (catch caught (throw caught))) (catch caught (if (= 2 (count (:ex/throws (ex-provenance caught)))) 42 0))))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/class-does-not-select-catch
+   :source "(try (throw (ex :file/read {:ex/class :ex.class/io})) (catch :ex.class/io error 0) (catch :file/read error 42))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/native-type-is-not-portable-data
+   :source "(let [error (ex :app/failure {:ex/class :app.class/failure}) data (ex-data error)] (if (and (nil? (:ex/native-type data)) (nil? (:native-type data)) (nil? (ex-native-type error))) 42 0))"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/legacy-native-type-is-nil
+   :source "(if (nil? (ex-native-type (ex-info \"legacy\" {}))) 42 0)"
+   :expect {:value 42 :type :integer}}
+  {:id :exception/reject-unknown-shorthand
+   :source "(ex :unknown {})"
+   :expect {:error :exception :message "registered standard keyword or namespaced keyword code"}}
+  {:id :exception/reject-reserved-code
+   :source "(ex :app/failure {:ex/code :app/other})"
+   :expect {:error :exception :message "attributes must not contain :ex/code"}}
+  {:id :exception/reject-malformed-class
+   :source "(ex :app/failure {:ex/class :failure})"
+   :expect {:error :exception :message ":ex/class must be a namespaced keyword"}}
+  {:id :exception/reject-malformed-legacy-class
+   :source "(ex-class (ex-info \"legacy\" {:ex/class :failure}))"
+   :expect {:error :exception :message ":ex/class must be a namespaced keyword"}}
+  {:id :exception/reject-registered-class-conflict
+   :source "(ex :not-found {:ex/class :ex.class/io})"
+   :expect {:error :exception :message ":ex/class conflicts with the registered class for :ex/code"}}
+  {:id :exception/reject-ordinary-class-access
+   :source "(ex-class 42)"
+   :expect {:error :exception :message "ex-class expects an Exception"}}
+  {:id :exception/reject-ordinary-cause-access
+   :source "(ex-cause 42)"
+   :expect {:error :exception :message "ex-cause expects an Exception"}}
+  {:id :exception/reject-ordinary-provenance-access
+   :source "(ex-provenance 42)"
+   :expect {:error :exception :message "ex-provenance expects an Exception"}}
+  {:id :exception/reject-ordinary-native-type-access
+   :source "(ex-native-type 42)"
+   :expect {:error :exception :message "ex-native-type expects an Exception"}}]
+
+ :diagnostic/cases
+ [{:id :exception.jvm/leaked-runtime-exception
+   :runtime :jvm
+   :setup "(ns exception-native-type (:flavor :jvm) (:import [java.lang RuntimeException]))"
+   :source "(ex-native-type (new RuntimeException \"host\"))"
+   :expect "java.lang.RuntimeException"}]
+
+ :boundary/requirements
+ [{:id :exception.boundary/portable-cause
+   :targets [:jvm :rust :wasm]
+   :requirement "Portable causes preserve code, class, message, attributes, and independent provenance."}
+  {:id :exception.boundary/host-normalization
+   :targets [:jvm :rust :wasm]
+   :requirement "A host error crossing into portable exception data becomes :host/native-error without a live host object or native type."}
+  {:id :exception.boundary/hta-round-trip
+   :targets [:rust :wasm]
+   :requirement "HTA settlement preserves portable exception projections and never serializes backend-native type information."}]}

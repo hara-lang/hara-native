@@ -35,10 +35,12 @@ make test-conformance
 ```
 
 This is the serial first-layer conformance layer. Rust, JVM, and browser each
-decode the checked-in `HNC1` artifact and run its native suite followed by its
-protocol suite in one host runtime. The artifact is generated from
-`specs/native-protocol-v1.edn`, uses only direct `std.native.*` and
-`std.protocol.*` operations, and is rejected if it requires Foundation.
+decode the checked-in `HNC1` native/protocol artifact and `HLC1` functional
+language artifact. HNC1 runs its native suite followed by its protocol suite
+in one host runtime. HLC1 executes every Rust-produced HBC0 case in a fresh
+runtime and covers parser, evaluator, and lowered-native-ABI behavior.
+`specs/native-protocol-v1.edn` and `specs/language-v1.edn` are the editable
+sources; both reject Foundation dependencies.
 
 The source contains the exact deterministic behavior cases. At generation time
 the native registry contributes independent resolver cases for every portable
@@ -57,20 +59,26 @@ Every portable protocol method has generated extension-success, missing-arity,
 and unsupported-receiver cases; `IEncodable/encode-with` is excluded only
 because its universal default dispatch is specified behavior.
 
-To extend it, add a structured `:program` form and exact `:expect` display to
-the appropriate suite, then regenerate and verify the artifact:
+To extend HNC1, add a structured `:program` form and exact `:expect` display to
+the appropriate suite. To extend HLC1, adopt a bytecode VM fixture from the
+verbatim local registry import or a case from `specs/lowering-v1.edn`; the
+generator rejects a drifted source program or expectation. Regenerate and
+verify the artifacts:
 
 ```text
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- generate
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- check
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-language-conformance-artifact -- generate
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-language-conformance-artifact -- check
 make test-conformance
 make test-conformance-full
 ```
 
-Do not add raw source strings, `.hal` fixtures, registry paths, or Foundation
-calls. New native and protocol semantics belong in this artifact; parser,
-evaluator, standard-library, and source-level corpora remain outside the native
-host repository.
+Do not add `.hal` fixtures or Foundation calls. Registry material belongs under
+`specs/language/registry` as a verbatim, non-executable provenance import;
+HLC1 contains only the adopted, generated HBC0 cases. HLC1 covers the core
+parser/evaluator and ABI lowering; standard-library and source-package
+semantics remain outside the source-free host boundary.
 
 Use `test-conformance-full` when a capability-bound operation needs its
 deterministic trusted-provider profile. The strict portable artifact must still
@@ -87,9 +95,10 @@ cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-art
 The mirror is a publication artifact. Do not edit it directly or feed it back
 into HNC generation.
 
-This is not the Hara language conformance suite. Parser, evaluator, standard
-library, and source-level behavioral corpora remain versioned with the
-canonical HAL and run from the Hara source/package repository.
+HLC1 is the source-free host subset of language conformance, not a replacement
+for the full Hara language suite. Standard-library and source-package behavioral
+corpora remain versioned with canonical HAL and run from the Hara
+source/package repository.
 
 ## Browser, HTA, and provider hosts
 

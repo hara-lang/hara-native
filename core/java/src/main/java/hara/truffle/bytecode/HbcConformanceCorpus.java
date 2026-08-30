@@ -15,6 +15,7 @@ import org.graalvm.polyglot.Value;
 public final class HbcConformanceCorpus {
   private static final byte[] MAGIC = {'H', 'C', 'C', '0'};
   private static final byte[] NATIVE_PROTOCOL_MAGIC = {'H', 'N', 'C', '1'};
+  private static final byte[] LANGUAGE_MAGIC = {'H', 'L', 'C', '1'};
   private static final String ERROR_EXPECTATION_PREFIX = "!error:";
 
   private HbcConformanceCorpus() {}
@@ -39,6 +40,24 @@ public final class HbcConformanceCorpus {
     @Override
     public byte[] setup() {
       return setup.clone();
+    }
+  }
+
+  /** One isolated, Rust-produced HBC0 behavior case in the portable language corpus. */
+  public record LanguageCase(
+      String id,
+      String layer,
+      String expectedDisplay,
+      boolean browserSafe,
+      String source,
+      byte[] artifact) {
+    public LanguageCase {
+      artifact = artifact.clone();
+    }
+
+    @Override
+    public byte[] artifact() {
+      return artifact.clone();
     }
   }
 
@@ -98,6 +117,40 @@ public final class HbcConformanceCorpus {
     return List.copyOf(suites);
   }
 
+  /** Decodes the checksummed HLC1 artifact generated from language-v1.edn. */
+  public static List<LanguageCase> decodeLanguage(byte[] corpus) {
+    if (corpus.length < 36 || !Arrays.equals(LANGUAGE_MAGIC, Arrays.copyOf(corpus, 4))) {
+      throw new HbcFormatException("invalid language conformance corpus header");
+    }
+    byte[] payload = Arrays.copyOfRange(corpus, 36, corpus.length);
+    if (!MessageDigest.isEqual(Arrays.copyOfRange(corpus, 4, 36), sha256(payload))) {
+      throw new HbcFormatException("language conformance corpus checksum mismatch");
+    }
+    ByteBuffer input = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+    int count = size(input);
+    if (count == 0) {
+      throw new HbcFormatException("language conformance corpus has no cases");
+    }
+    ArrayList<LanguageCase> cases = new ArrayList<>(count);
+    for (int index = 0; index < count; index++) {
+      String id = text(input);
+      String layer = text(input);
+      if (!List.of("parser", "evaluator", "native-abi").contains(layer)) {
+        throw new HbcFormatException("language conformance case has invalid layer: " + layer);
+      }
+      String expectation = text(input);
+      int browserSafe = size(input);
+      if (browserSafe != 0 && browserSafe != 1) {
+        throw new HbcFormatException("language conformance browser-safe field must be zero or one");
+      }
+      cases.add(new LanguageCase(id, layer, expectation, browserSafe == 1, text(input), bytes(input)));
+    }
+    if (input.hasRemaining()) {
+      throw new HbcFormatException("trailing bytes in language conformance corpus");
+    }
+    return List.copyOf(cases);
+  }
+
   /** Returns the Hara display form for a value exported through the polyglot boundary. */
   public static String display(Value value) {
     if (value.isNull()) return "nil";
@@ -121,6 +174,8 @@ public final class HbcConformanceCorpus {
     for (Throwable current = failure; current != null; current = current.getCause()) {
       String message = current.getMessage();
       if (message == null) continue;
+      if (message.toLowerCase().contains("divide by zero")) return "division by zero";
+      if (message.contains("expects") && message.contains("numbers")) return "expects numbers";
       int protocolArity = message.indexOf("protocol/arity:");
       if (protocolArity >= 0) return "protocol/arity";
       int unsupported = message.indexOf("protocol/unsupported-receiver:");

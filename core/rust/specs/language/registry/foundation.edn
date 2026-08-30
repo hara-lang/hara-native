@@ -1,0 +1,1095 @@
+{:spec/version "0.0.0-alpha"
+ :spec/status :draft
+ :syntax :edn
+ :purpose :foundation-surface-control
+ :source-material "specs/99-archive/planning/foundation/foundation.edn"
+ :protocol-contract "specs/01-lang/001-language/draft/conformance/protocols.edn"
+ :public-method-case-catalog "specs/01-lang/001-language/draft/conformance/protocol-method-cases.edn"
+
+ ;; This is the editable control document for the public Foundation surface.
+ ;; Runtime code and parity tests are downstream artifacts of accepted entries.
+ :workflow
+ {:authority :edit-this-file-first
+  :downstream [:rust :truffle :hal-library :parity-tests :documentation]
+  :implementation-gate :accepted-or-explicitly-selected-proposal}
+
+ :namespace-policy
+ {:status :accepted
+  :startup-default-library-aliases
+  {edn std.foundation.edn}
+  :canonical-protocol-namespace "std.protocol.<ascii-lowercase-protocol-name>"
+  :canonical-protocol-var "std.protocol.<ascii-lowercase-protocol-name>.<Protocol>/<Protocol>"
+  :canonical-method-var "std.protocol.<ascii-lowercase-protocol-name>.<Protocol>/<method>"
+  :global-protocol-alias "<Protocol>"
+  :global-method-call "<Protocol>/<method>"
+  :example {:canonical std.protocol.ifn.IFn/invoke
+            :global IFn/invoke}
+  :foundation-protocol-alias {:namespace std.foundation
+                              :name "<Protocol>"
+                              :loads-canonical-object true
+                              :visibility :public}
+  :protocol-method-global-availability
+  {:default true
+   :hidden []}
+
+ :namespace-config
+ {:set-global-alias
+  {:value :unqualified-symbol
+   :effect :global-namespace-alias
+   :conflict :reject-atomically}
+  :set-global
+  {:value :vector-of-qualified-vars
+   :protocol-shorthand "IColl/start-string"
+   :canonical-var "std.protocol.icoll.IColl/start-string"
+   :effect :global-terminal-name-import
+   :whole-namespace false
+   :local-only-vars false
+   :conflict :reject-atomically}
+  :operations [:override :only :blank :set-global-alias :set-global :role :rename]
+  :intrinsics
+  {:reserved-for [:native-types :runtime-symbols]
+   :namespace-config false}
+  :resource-order
+  {:root ["std/foundation.hal" "std/foundation.hbx"]
+   :children ["std/foundation/<name>.hal" "std/foundation/<name>.hbx"]
+   :rule :root-before-child
+   :cache-hit :refresh-foundation-visibility}}
+
+ :placement-policy
+ {:status :proposed
+  :general-and-collection std.foundation
+  :reference-compatibility std.foundation
+  :domain-specific "std.foundation.<domain>"
+  :context-domains [:context :pointer :space]
+  :root-domains [:general :collection :hash :mutable :application]
+  :close-function std.foundation/close!
+  :hidden-protocols []
+  :protocol-dispatch "available everywhere through <Protocol>/<method>"
+  :no-reference-subnamespace true
+  :examples [{:call IFn/invoke :foundation-wrapper nil}
+             {:call IIter/iter :foundation-wrapper std.foundation/iter}
+             {:call IReset/reset :foundation-wrapper std.foundation/reset!}]}
+
+ :naming-policy
+ {:status :accepted
+  :predicate-suffix "?"
+  :compatibility-bang-names [reset! swap! cas! close!]
+  :protocol-method-bang-suffix false
+  :new-public-bang-functions false
+  :watch-functions [watch-add watch-remove watch-list]
+  :mutable-functions [to-mutable to-persistent]}
+
+ :reference-functions
+ {:status :accepted
+  :namespace std.foundation
+  :functions
+  [{:name reset!
+    :kind :direct-interface-wrapper
+    :protocol-method IReset/reset
+    :clojure-equivalent clojure.core/reset!}
+   {:name cas!
+    :kind :direct-interface-wrapper
+    :protocol-method ICas/cas
+    :clojure-equivalent clojure.core/compare-and-set!}
+   {:name swap!
+    :kind :derived-protocol-function
+    :protocol-methods [IDeref/deref ICas/cas]
+    :clojure-equivalent clojure.core/swap!}
+   {:name watch-add
+    :kind :direct-interface-wrapper
+    :protocol-method IWatch/watch-add
+    :clojure-equivalent clojure.core/add-watch}
+   {:name watch-remove
+    :kind :direct-interface-wrapper
+    :protocol-method IWatch/watch-remove
+    :clojure-equivalent clojure.core/remove-watch}
+   {:name watch-list
+    :kind :direct-interface-wrapper
+    :protocol-method IWatch/watch-list
+    :clojure-equivalent clojure.core/get-watches}]
+  :excluded [compare:set! compare-and-set! add-watch remove-watch get-watches]}
+
+ :classification
+ {:direct-interface-wrapper
+  "A public HAL function whose implementation delegates directly to one protocol method."
+  :derived-protocol-function
+  "A public HAL function implemented in .hal by composing protocol methods."
+  :protocol-dispatch-only
+  "No duplicate Foundation wrapper is proposed; use <Protocol>/<method> explicitly."
+  :hidden-runtime-interface
+  "Retained for runtime implementation parity but absent from the public protocol and Foundation surfaces."
+  :host-primitive
+  "The smallest runtime operation that cannot reasonably be expressed in portable .hal."}
+
+ :clojure-relations
+ {:exact "Same public operation and materially matching semantics."
+  :semantic "Equivalent intent, with HAL naming, arity, or protocol-dispatch differences."
+  :approximate "Useful migration analogue but not a compatibility promise."
+  :none "No canonical clojure.core equivalent is claimed."}
+
+ :function-contracts
+ {:hara-specific "specs/01-lang/001-language/draft/conformance/functions.edn"
+  :clojure-inspired "specs/01-lang/001-language/draft/conformance/clojure-functions.edn"
+  :rule
+  "This grouped surface is the consolidated callable contract. The focused
+   files retain per-function rationale, Clojure relations, and exclusions."}
+
+ :function-surface
+ {:status :accepted
+  :implementation-policy
+  {:default :portable-hal
+   :host-primitives :only-when-portable-hal-cannot-express-the-operation
+   :public-private-hal-helpers false}
+
+  :root
+  {:portable-hal
+   [map-keys map-vals map-juxt filter-keys filter-vals sid
+    map-indexed keep-indexed select-keys merge flatten
+    min max min-key max-key rand-int rand-nth random-sample shuffle]
+   :host-primitives
+   [var-ns var-sym bound? unbound? regexp? seq? error? uuid load-string
+    ex ex-info ex-message ex-cause ex-provenance ex-class ex-native-type
+    abs acos acosh asin asinh atan atan2 atanh
+    ceil cos cosh exp floor pow sin sinh sqrt tan tanh
+    quot rem parse-long parse-double nan? infinite?
+    bit-and bit-or bit-xor bit-not bit-and-not bit-clear bit-flip bit-set
+    bit-shift-left bit-shift-right bit-test rand]
+   :host-values [wrapped wrapped?]
+   :constants [E PI]
+   :pending
+   [{:name ns+
+     :reason :confirm-arity-and-namespace-composition-semantics}]}
+
+  :libraries
+  {:set
+   {:namespace std.foundation
+    :implementation :portable-hal
+    :functions
+    [union intersection difference select subset? superset?]}
+
+   :str
+   {:namespace std.foundation.string
+    :call-prefix str
+    :implementation :host-string-primitives-with-hal-wrappers
+    :functions
+    [length blank? includes? starts-with? ends-with? char-at slice
+     index-of last-index-of join split split-lines repeat replace
+     replace-first trim trim-left trim-right trim-newline upper lower
+     capitalize decapitalize pad-left pad-right reverse escape
+     encode-utf8 decode-utf8]}
+
+   :bytes
+   {:namespace std.foundation.bytes
+    :call-prefix bytes
+    :implementation :host-byte-primitives
+    :functions [count get set copy slice u8 s8]}
+
+   :pretty
+   {:namespace std.foundation.pretty
+    :call-prefix pretty
+    :implementation :portable-structural-visitor-over-native-document
+    :functions [canonical-printer pretty-printer format-doc-edn format-doc
+                render write pprint-str pprint]}
+
+   :edn
+   {:namespace std.foundation.edn
+    :call-prefix edn
+    :implementation :portable-hal-over-native-reader
+    :functions [read write pretty]}
+
+   :json
+   {:namespace std.foundation.json
+    :call-prefix json
+    :implementation :portable-hal-over-native-json
+    :functions [read write pretty]}}
+
+  :dynamic-context
+  {:dynamic-vars [*ns*]
+   :forms [binding set!]
+   :functions [alter-var-root bound? unbound?]
+   :ownership :evaluation-context-not-thread}
+
+  :types
+  [{:name Wrapped
+    :constructor wrapped
+    :predicate wrapped?
+    :derefable true}]}
+
+ :function-sync
+ {:audit-date "2026-07-30"
+  :method :source-and-hal-activation-audit
+  :checked-against
+  ["lib/src/std/foundation.hal"
+   "lib/src/std/foundation/string.hal"
+   "lib/src/std/foundation/bytes.hal"
+   "lib/src/std/foundation/edn.hal"
+   "lib/src/std/foundation/json.hal"
+   "rust/src/core.rs"
+   "rust/src/fiber.rs"
+   "java/src/main/java/hara/truffle/HaraContext.java"
+   "java/src/main/java/hara/truffle/StdFoundationCollection.java"]
+  :verification
+  {:rust-eval :passed
+   :truffle-eval :passed
+   :rust-focused-test
+   "tests::basic_math_has_the_portable_root_surface_and_explicit_numeric_boundary"
+   :rust-focused-test-result :passed
+   :truffle-focused-test
+   "hara.truffle.StdFoundationTest#basicMathHasThePortableRootSurfaceAndExplicitNumericBoundary"
+   :truffle-focused-test-result :passed}
+
+  :root
+  {:synced-both
+   [map-keys map-vals seq? ex ex-info ex-message ex-cause ex-provenance
+    ex-class ex-native-type min max
+    abs acos acosh asin asinh atan atan2 atanh
+    ceil cos cosh exp floor pow sin sinh sqrt tan tanh
+    parse-long parse-double
+    bit-and bit-or bit-xor bit-not bit-shift-left bit-shift-right]
+   :truffle-only
+   [var-sym regexp? load-string select-keys merge uuid]
+   :rust-only []
+   :missing-both
+   [map-juxt filter-keys filter-vals sid
+    map-indexed keep-indexed flatten min-key max-key
+    rand-int rand-nth random-sample shuffle
+    var-ns bound? unbound? error?
+    quot rem nan? infinite?
+    bit-and-not bit-clear bit-flip bit-set bit-test rand
+    wrapped wrapped?]
+   :missing-constants []
+   :pending [ns+]}
+
+  :libraries
+  {:set
+   {:synced-both
+    [union intersection difference select subset? superset?]
+    :missing-both []}
+
+   :str
+   {:synced-both
+    [length blank? includes? starts-with? ends-with? char-at slice
+     index-of last-index-of join split split-lines repeat replace
+     replace-first trim trim-left trim-right upper lower capitalize
+     decapitalize pad-left pad-right reverse encode-utf8 decode-utf8]
+    :missing-both [trim-newline escape]}
+
+   :bytes
+   {:synced-both [count get set copy slice u8 s8]
+    :missing-both []}}
+
+  :dynamic-context
+  {:synced-both {:forms [binding set!]
+                 :functions [alter-var-root]}
+   :missing-both {:dynamic-vars [*ns*]
+                  :functions [bound? unbound?]}}
+
+  :types
+  {:missing-both [Wrapped]}
+
+  :classification-divergence
+  [{:names [merge select-keys]
+    :desired :portable-hal
+    :truffle :host-primitives
+    :rust :missing}]
+
+  :removal-debt
+  {:truffle-public
+   [load-file module-dependencies module-revision
+    iter-any? iter-close iter-constantly iter-cycle iter-drop
+    iter-drop-while iter-every? iter-filter iter-has? iter-interleave
+    iter-interpose iter-iterate iter-keep iter-map iter-mapcat
+    iter-partition iter-partition-all iter-partition-pair iter-range
+    iter-repeatedly iter-take iter-take-while iter-zip]
+   :rust-public
+   [comp2 comp3 __map-transform
+    iter-close iter-constantly iter-cycle iter-drop iter-filter
+    iter-has? iter-interleave iter-interpose iter-iterate iter-keep
+    iter-map iter-mapcat iter-partition iter-partition-all
+    iter-partition-pair iter-repeatedly iter-take iter-take-while
+    iter-drop-while iter-zip]
+   :private-hal
+   [comp2 comp3 map-transform partition-transform
+    partition-all-transform]
+   :allowed-iterator-surface [iter iter? iter-next? iter-next]}}
+
+ :counts
+ {:protocol-authority "specs/01-lang/001-language/draft/conformance/protocols.edn"
+  :protocol-method-counting :declaration-once
+  :protocols 55
+  :method-declarations 105
+  :effective-surface-method-count 115
+  :inherited-method-references 10
+  :capability-specific-protocols 15
+  :capability-specific-method-declarations 20
+  :capability-specific-effective-surface-method-count 34
+  :capability-specific-inherited-method-references 14
+  :covered-protocols-total 70
+  :covered-method-declarations-total 125
+  :covered-effective-surface-method-count-total 149
+  :historical-control-snapshot
+  {:protocols 52
+   :method-declarations 93
+   :distinct-method-names 91}
+  :root-function-names 71
+  :root-constants 2
+  :library-function-names 42
+  :library-constants 0}
+
+ ;; Historical classification input only. It is not an inventory and must not
+ ;; be counted as the current protocol surface.
+ :historical-protocol-method-list
+ [IApplicable/apply-default IApplicable/apply-in IApplicable/transform-in IApplicable/transform-out
+  IAssoc/assoc ICas/cas IClose/close IColl/start-string
+  IColl/end-string IColl/sep-string IComponent/props
+  IComponent/status IComponent/started? IComponent/stopped? IComponent/start
+  IComponent/stop IComponent/kill IComponent/remote? IConj/conj
+  ICons/cons IContext/call ICoroutine/status ICoroutine/resume
+  IContextLifeCycle/has-module? IContextLifeCycle/setup-module IContextLifeCycle/teardown-module IContextLifeCycle/has-pointer?
+  IContextLifeCycle/setup-pointer IContextLifeCycle/teardown-pointer ICount/count IDeref/deref
+  IDerefTimeout/deref-timeout IDisplay/display IDissoc/dissoc IEmpty/empty
+  IEquality/equality IExInfo/data IFind/find IFn/invoke
+  IHash/hash IHashCached/hash-current IHashCached/hash-put
+  IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val IInvokeIn/invoke-in
+  IIter/iter IIterator/iter-next? IIterator/iter-next ILookup/lookup
+  IMetadata/metatype INamespaced/name INamespaced/namespace INth/nth
+  IObjType/meta IObjType/with-meta IPair/key IPair/value
+  IPeekFirst/peek-first IPeekLast/peek-last IPromise/state IPromise/value
+  IPromise/then IPromise/catch IPromise/finally IPromise/cancel
+  IPointer/ptr-context IPopFirst/pop-first
+  IPopLast/pop-last IPushFirst/push-first IPushLast/push-last IRealize/realized?
+  IRealize/realize IReduce/reduce
+  IReset/reset ISpace/context-set ISpace/context-unset ISpace/context-list
+  ISpace/context-get ISpace/rt-active ISpace/rt-get ISpace/rt-start
+  ISpace/rt-started? ISpace/rt-stopped? ISpace/rt-stop IToMutable/to-mutable
+  IToPersistent/to-persistent IWatch/watch-add
+  IWatch/watch-remove IWatch/watch-list]
+
+ :not-accepted-protocol-method-list
+ [IApplicable/apply-default IApplicable/apply-in IApplicable/transform-in IApplicable/transform-out
+  IClose/close IComponent/props IComponent/status IComponent/started?
+  IComponent/stopped? IComponent/start IComponent/stop IComponent/kill
+  IComponent/remote? IContext/call ICoroutine/status ICoroutine/resume
+  IContextLifeCycle/has-module? IContextLifeCycle/setup-module IContextLifeCycle/teardown-module IContextLifeCycle/has-pointer?
+  IContextLifeCycle/setup-pointer IContextLifeCycle/teardown-pointer IDerefTimeout/deref-timeout IDisplay/display
+  IEquality/equality IFn/invoke IHashCached/hash-current
+  IHashCached/hash-put IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val
+  IInvokeIn/invoke-in IIter/iter IIterator/iter-next? IIterator/iter-next
+  ILookup/lookup IMetadata/metatype IPeekFirst/peek-first IPeekLast/peek-last
+  IPromise/state IPromise/value IPromise/then IPromise/catch
+  IPromise/finally IPromise/cancel IPointer/ptr-context
+  IPopFirst/pop-first IPopLast/pop-last IPushFirst/push-first
+  IPushLast/push-last IRealize/realize
+  ISpace/context-set ISpace/context-unset ISpace/context-list ISpace/context-get
+  ISpace/rt-active ISpace/rt-get ISpace/rt-start ISpace/rt-started?
+  ISpace/rt-stopped? ISpace/rt-stop IToMutable/to-mutable IToPersistent/to-persistent]
+
+ :not-accepted-foundation-matches
+ [
+  {:dispatch IApplicable/apply-default, :target :protocol-only}
+  {:dispatch IApplicable/apply-in, :target std.foundation/apply-in}
+  {:dispatch IApplicable/transform-in, :target :protocol-only}
+  {:dispatch IApplicable/transform-out, :target :protocol-only}
+  {:dispatch IClose/close, :target std.foundation/close!}
+  {:dispatch IComponent/props, :target std.lib.component/props}
+  {:dispatch IComponent/status, :target std.lib.component/status}
+  {:dispatch IComponent/started?, :target std.lib.component/started?}
+  {:dispatch IComponent/stopped?, :target std.lib.component/stopped?}
+  {:dispatch IComponent/start, :target std.lib.component/start}
+  {:dispatch IComponent/stop, :target std.lib.component/stop}
+  {:dispatch IComponent/kill, :target std.lib.component/kill}
+  {:dispatch IComponent/remote?, :target std.lib.component/remote?}
+  {:dispatch IContext/call, :target std.lib.context/call}
+  {:dispatch ICoroutine/status, :target std.foundation.coroutine/status}
+  {:dispatch ICoroutine/resume, :target std.foundation.coroutine/resume}
+  {:dispatch IContextLifeCycle/has-module?, :target std.lib.context/has-module?}
+  {:dispatch IContextLifeCycle/setup-module, :target std.lib.context/setup-module}
+  {:dispatch IContextLifeCycle/teardown-module, :target std.lib.context/teardown-module}
+  {:dispatch IContextLifeCycle/has-pointer?, :target std.lib.context/has-pointer?}
+  {:dispatch IContextLifeCycle/setup-pointer, :target std.lib.context/setup-pointer}
+  {:dispatch IContextLifeCycle/teardown-pointer, :target std.lib.context/teardown-pointer}
+  {:dispatch IDerefTimeout/deref-timeout, :target std.foundation/deref}
+  {:dispatch IDisplay/display, :target std.foundation.display/display}
+  {:dispatch IEquality/equality, :target std.foundation/=}
+  {:dispatch IFn/invoke, :target :protocol-only}
+  {:dispatch IHashCached/hash-current, :target std.foundation/hash-current}
+  {:dispatch IHashCached/hash-put, :target std.foundation/hash-put}
+  {:dispatch IIndexed/index-of, :target std.foundation/index-of}
+  {:dispatch IIndexedKV/index-of-key, :target std.foundation/index-of-key}
+  {:dispatch IIndexedKV/index-of-val, :target std.foundation/index-of-val}
+  {:dispatch IInvokeIn/invoke-in, :target std.lib.context/invoke-in}
+  {:dispatch IIter/iter, :target std.foundation/iter}
+  {:dispatch IIterator/iter-next?, :target std.foundation/iter-next?}
+  {:dispatch IIterator/iter-next, :target std.foundation/iter-next}
+  {:dispatch ILookup/lookup, :target std.foundation/get}
+  {:dispatch IPeekFirst/peek-first, :target std.foundation/peek-first}
+  {:dispatch IPeekLast/peek-last, :target std.foundation/peek-last}
+  {:dispatch IPromise/state, :target std.foundation.promise/state}
+  {:dispatch IPromise/value, :target std.foundation.promise/value}
+  {:dispatch IPromise/then, :target std.foundation.promise/then}
+  {:dispatch IPromise/catch, :target std.foundation.promise/catch}
+  {:dispatch IPromise/finally, :target std.foundation.promise/finally}
+  {:dispatch IPromise/cancel, :target std.foundation.promise/cancel}
+  {:dispatch IPointer/ptr-context, :target std.lib.context/ptr-context}
+  {:dispatch IPopFirst/pop-first, :target std.foundation/pop-first}
+  {:dispatch IPopLast/pop-last, :target std.foundation/pop-last}
+  {:dispatch IPushFirst/push-first, :target std.foundation/push-first}
+  {:dispatch IPushLast/push-last, :target std.foundation/push-last}
+  {:dispatch IRealize/realize, :target std.foundation/realize}
+  {:dispatch ISpace/context-set, :target std.lib.context/context-set}
+  {:dispatch ISpace/context-unset, :target std.lib.context/context-unset}
+  {:dispatch ISpace/context-list, :target std.lib.context/context-list}
+  {:dispatch ISpace/context-get, :target std.lib.context/context-get}
+  {:dispatch ISpace/rt-active, :target std.lib.context/rt-active}
+  {:dispatch ISpace/rt-get, :target std.lib.context/rt-get}
+  {:dispatch ISpace/rt-start, :target std.lib.context/rt-start}
+  {:dispatch ISpace/rt-started?, :target std.lib.context/rt-started?}
+  {:dispatch ISpace/rt-stopped?, :target std.lib.context/rt-stopped?}
+  {:dispatch ISpace/rt-stop, :target std.lib.context/rt-stop}
+  {:dispatch IToMutable/to-mutable, :target std.foundation/to-mutable}
+  {:dispatch IToPersistent/to-persistent, :target std.foundation/to-persistent}
+ ]
+
+ ;; Every protocol method is explicit so this file can be reviewed and edited
+ ;; before implementations or parity tests are regenerated.
+ :protocol-methods
+ [
+  {:protocol IApplicable :method apply-default :arity 1 :domain :application
+   :dispatch IApplicable/apply-default
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IApplicable :method apply-in :arity 3 :domain :application
+   :dispatch IApplicable/apply-in
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name apply-in
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IApplicable :method transform-in :arity 3 :domain :application
+   :dispatch IApplicable/transform-in
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IApplicable :method transform-out :arity 4 :domain :application
+   :dispatch IApplicable/transform-out
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IAssoc :method assoc :arity 3 :domain :associative-collection
+   :dispatch IAssoc/assoc
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name assoc
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/assoc" :relation :exact}}
+  {:protocol ICas :method cas :arity 3 :domain :reference-state
+   :dispatch ICas/cas
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name cas!
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/compare-and-set!" :relation :semantic}
+    :notes "HAL retains the familiar bang only on the public wrapper; protocol methods never end in !."}
+  {:protocol IClose :method close :arity 1 :domain :lifecycle
+   :dispatch IClose/close
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name close!
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IColl :method start-string :arity 1 :domain :collection
+   :dispatch IColl/start-string
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IColl :method end-string :arity 1 :domain :collection
+   :dispatch IColl/end-string
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IColl :method sep-string :arity 1 :domain :collection
+   :dispatch IColl/sep-string
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method props :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/props
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name props
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method status :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/status
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name status
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method started? :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/started?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name started?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method stopped? :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/stopped?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name stopped?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method start :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/start
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name start
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method stop :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/stop
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name stop
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method kill :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/kill
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name kill
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IComponent :method remote? :arity 1 :domain :component-lifecycle
+   :dispatch IComponent/remote?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.component
+                :name remote?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IConj :method conj :arity 2 :domain :collection
+   :dispatch IConj/conj
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name conj
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/conj" :relation :exact}}
+  {:protocol ICons :method cons :arity 2 :domain :sequence
+   :dispatch ICons/cons
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name cons
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/cons" :relation :exact}}
+  {:protocol IContext :method call :arity -1 :domain :execution-context
+   :dispatch IContext/call
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name call
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ICoroutine :method status :arity 1 :domain :coroutine
+   :dispatch ICoroutine/status
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.coroutine
+                :name status
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ICoroutine :method resume :arity -1 :domain :coroutine
+   :dispatch ICoroutine/resume
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.coroutine
+                :name resume
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method has-module? :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/has-module?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name has-module?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method setup-module :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/setup-module
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name setup-module
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method teardown-module :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/teardown-module
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name teardown-module
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method has-pointer? :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/has-pointer?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name has-pointer?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method setup-pointer :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/setup-pointer
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name setup-pointer
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method teardown-pointer :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/teardown-pointer
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name teardown-pointer
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ICount :method count :arity 1 :domain :collection
+   :dispatch ICount/count
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name count
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/count" :relation :exact}}
+  {:protocol IDeref :method deref :arity 1 :domain :reference-state
+   :dispatch IDeref/deref
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name deref
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/deref" :relation :exact}}
+  {:protocol IDerefTimeout :method deref-timeout :arity 3 :domain :reference-state
+   :dispatch IDerefTimeout/deref-timeout
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name deref
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/deref" :relation :semantic}}
+  {:protocol IDisplay :method display :arity 1 :domain :representation
+   :dispatch IDisplay/display
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.display
+                :name display
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IDissoc :method dissoc :arity 2 :domain :associative-collection
+   :dispatch IDissoc/dissoc
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name dissoc
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/dissoc" :relation :exact}}
+  {:protocol IEmpty :method empty :arity 1 :domain :collection
+   :dispatch IEmpty/empty
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name empty
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/empty" :relation :exact}}
+  {:protocol IEquality :method equality :arity 2 :domain :identity
+   :dispatch IEquality/equality
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name =
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/=" :relation :semantic}}
+  {:protocol IExInfo :method data :arity 1 :domain :exception
+   :dispatch IExInfo/data
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name ex-data
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/ex-data" :relation :exact}}
+  {:protocol IFind :method find :arity 2 :domain :associative-collection
+   :dispatch IFind/find
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name find
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/find" :relation :exact}}
+  {:protocol IFn :method invoke :arity -1 :domain :application
+   :dispatch IFn/invoke
+   :foundation {:classification :protocol-dispatch-only
+                :namespace nil
+                :name nil
+                :status :proposed}
+   :clojure {:equivalent "(function & arguments)" :relation :semantic}
+    :notes "Invocation syntax is the public surface; IFn/invoke remains available for explicit dispatch."}
+  {:protocol IHash :method hash :arity 1 :domain :identity
+   :dispatch IHash/hash
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name hash
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/hash" :relation :exact}}
+  {:protocol IHashCached :method hash-current :arity 1 :domain :identity
+   :dispatch IHashCached/hash-current
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name hash-current
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IHashCached :method hash-put :arity 2 :domain :identity
+   :dispatch IHashCached/hash-put
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name hash-put
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IIndexed :method index-of :arity 2 :domain :indexed-collection
+   :dispatch IIndexed/index-of
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name index-of
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IIndexedKV :method index-of-key :arity 2 :domain :indexed-collection
+   :dispatch IIndexedKV/index-of-key
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name index-of-key
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IIndexedKV :method index-of-val :arity 2 :domain :indexed-collection
+   :dispatch IIndexedKV/index-of-val
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name index-of-val
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IInvokeIn :method invoke-in :arity -1 :domain :execution-context
+   :dispatch IInvokeIn/invoke-in
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name invoke-in
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IIter :method iter :arity 1 :domain :iteration
+   :dispatch IIter/iter
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name iter
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/seq" :relation :approximate}
+    :notes "HAL iteration is iterator-oriented and is not identical to Clojure seq coercion."}
+  {:protocol IIterator :method iter-next? :arity 1 :domain :iteration
+   :dispatch IIterator/iter-next?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name iter-next?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IIterator :method iter-next :arity 1 :domain :iteration
+   :dispatch IIterator/iter-next
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name iter-next
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ILookup :method lookup :arity -1 :domain :associative-collection
+   :dispatch ILookup/lookup
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name get
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/get" :relation :semantic}}
+  {:protocol IMetadata :method metatype :arity 1 :domain :metadata
+   :dispatch IMetadata/metatype
+   :foundation {:classification :direct-interface-wrapper
+                :namespace nil
+                :name nil
+                :status :protocol-only}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol INamespaced :method name :arity 1 :domain :symbolic-name
+   :dispatch INamespaced/name
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name name
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/name" :relation :exact}}
+  {:protocol INamespaced :method namespace :arity 1 :domain :symbolic-name
+   :dispatch INamespaced/namespace
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name namespace
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/namespace" :relation :exact}}
+  {:protocol INth :method nth :arity 2 :domain :indexed-collection
+   :dispatch INth/nth
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name nth
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/nth" :relation :exact}}
+  {:protocol IObjType :method meta :arity 1 :domain :metadata
+   :dispatch IObjType/meta
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name meta
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/meta" :relation :exact}}
+  {:protocol IObjType :method with-meta :arity 2 :domain :metadata
+   :dispatch IObjType/with-meta
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name with-meta
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/with-meta" :relation :exact}}
+  {:protocol IPair :method key :arity 1 :domain :map-entry
+   :dispatch IPair/key
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name key
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/key" :relation :exact}}
+  {:protocol IPair :method value :arity 1 :domain :map-entry
+   :dispatch IPair/value
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name val
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/val" :relation :exact}}
+  {:protocol IPeekFirst :method peek-first :arity 1 :domain :deque
+   :dispatch IPeekFirst/peek-first
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name peek-first
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/first" :relation :approximate}}
+  {:protocol IPeekLast :method peek-last :arity 1 :domain :deque
+   :dispatch IPeekLast/peek-last
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name peek-last
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/peek" :relation :approximate}}
+  {:protocol IPromise :method state :arity 1 :domain :promise
+   :dispatch IPromise/state
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.promise
+                :name state
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPromise :method value :arity 1 :domain :promise
+   :dispatch IPromise/value
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.promise
+                :name value
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPromise :method then :arity 2 :domain :promise
+   :dispatch IPromise/then
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.promise
+                :name then
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPromise :method catch :arity 2 :domain :promise
+   :dispatch IPromise/catch
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.promise
+                :name catch
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPromise :method finally :arity 2 :domain :promise
+   :dispatch IPromise/finally
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.promise
+                :name finally
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPromise :method cancel :arity 1 :domain :promise
+   :dispatch IPromise/cancel
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation.promise
+                :name cancel
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPointer :method ptr-context :arity 1 :domain :runtime-pointer
+   :dispatch IPointer/ptr-context
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name ptr-context
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IPopFirst :method pop-first :arity 1 :domain :deque
+   :dispatch IPopFirst/pop-first
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name pop-first
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/rest" :relation :approximate}}
+  {:protocol IPopLast :method pop-last :arity 1 :domain :deque
+   :dispatch IPopLast/pop-last
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name pop-last
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/pop" :relation :approximate}}
+  {:protocol IPushFirst :method push-first :arity 2 :domain :deque
+   :dispatch IPushFirst/push-first
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name push-first
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/cons" :relation :approximate}}
+  {:protocol IPushLast :method push-last :arity 2 :domain :deque
+   :dispatch IPushLast/push-last
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name push-last
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/conj" :relation :approximate}}
+  {:protocol IRealize :method realized? :arity 1 :domain :realization
+   :dispatch IRealize/realized?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name realized?
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/realized?" :relation :exact}}
+  {:protocol IRealize :method realize :arity 1 :domain :realization
+   :dispatch IRealize/realize
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name realize
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/deref" :relation :approximate}}
+  {:protocol IReduce :method reduce :arity -1 :domain :reduction
+   :dispatch IReduce/reduce
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name reduce
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/reduce" :relation :exact}}
+  {:protocol IReset :method reset :arity 2 :domain :reference-state
+   :dispatch IReset/reset
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name reset!
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/reset!" :relation :semantic}
+    :notes "HAL retains reset! as the compatibility wrapper over IReset/reset."}
+  {:protocol ISpace :method context-set :arity 4 :domain :runtime-space
+   :dispatch ISpace/context-set
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name context-set
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method context-unset :arity 2 :domain :runtime-space
+   :dispatch ISpace/context-unset
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name context-unset
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method context-list :arity 1 :domain :runtime-space
+   :dispatch ISpace/context-list
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name context-list
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method context-get :arity 2 :domain :runtime-space
+   :dispatch ISpace/context-get
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name context-get
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method rt-active :arity 1 :domain :runtime-space
+   :dispatch ISpace/rt-active
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name rt-active
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method rt-get :arity 2 :domain :runtime-space
+   :dispatch ISpace/rt-get
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name rt-get
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method rt-start :arity 2 :domain :runtime-space
+   :dispatch ISpace/rt-start
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name rt-start
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method rt-started? :arity 2 :domain :runtime-space
+   :dispatch ISpace/rt-started?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name rt-started?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method rt-stopped? :arity 2 :domain :runtime-space
+   :dispatch ISpace/rt-stopped?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name rt-stopped?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol ISpace :method rt-stop :arity 2 :domain :runtime-space
+   :dispatch ISpace/rt-stop
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name rt-stop
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IToMutable :method to-mutable :arity 1 :domain :conversion
+   :dispatch IToMutable/to-mutable
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name to-mutable
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/transient" :relation :approximate}
+    :notes "HAL does not adopt Clojure's transient naming or bang convention."}
+  {:protocol IToPersistent :method to-persistent :arity 1 :domain :conversion
+   :dispatch IToPersistent/to-persistent
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name to-persistent
+                :status :proposed}
+   :clojure {:equivalent "clojure.core/persistent!" :relation :approximate}
+    :notes "HAL does not adopt Clojure's persistent! naming."}
+  {:protocol IWatch :method watch-add :arity 3 :domain :reference-watch
+   :dispatch IWatch/watch-add
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name watch-add
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/add-watch" :relation :semantic}
+    :notes "HAL deliberately uses watch-add instead of add-watch."}
+  {:protocol IWatch :method watch-remove :arity 2 :domain :reference-watch
+   :dispatch IWatch/watch-remove
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name watch-remove
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/remove-watch" :relation :semantic}
+    :notes "HAL deliberately uses watch-remove instead of remove-watch."}
+  {:protocol IWatch :method watch-list :arity 1 :domain :reference-watch
+   :dispatch IWatch/watch-list
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.foundation
+                :name watch-list
+                :status :accepted}
+   :clojure {:equivalent "clojure.core/get-watches" :relation :semantic}
+    :notes "HAL deliberately uses watch-list instead of a Clojure-style name."}]}

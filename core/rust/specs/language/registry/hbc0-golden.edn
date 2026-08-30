@@ -1,0 +1,14 @@
+{:corpus/id :hal/hbc0-golden
+ :corpus/spec :hal/hbc0-wire
+ :corpus/version "0-alpha"
+ :encoding :lowercase-hex
+ :cases
+ [{:case/id :constant-42
+   :artifact/hex
+   "484243300000005f0000010000000475736572000000010000000d4854413003000000000000002a0000000000000000000000000000000000000001000000000000000000000100000002000000000018000000020100000000000000010000000100000000006073811fa3086d8edff969b6f31169f2d358937b295630863ec63366450debec"
+   :expect {:valid true
+            :entry 0
+            :namespace "user"
+            :functions 1
+            :value 42}}]
+ :consumers [:rust-stack-vm :java-reference-vm :tool.vm/conform]}

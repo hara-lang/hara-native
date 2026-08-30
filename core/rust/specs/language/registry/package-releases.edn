@@ -1,0 +1,10 @@
+[{:case/id :hara.package.case/idempotent-release
+  :case/type :package-release
+  :case/input {:existing/digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               :proposed/digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  :case/expected :already-accepted}
+ {:case/id :hara.package.case/version-conflict
+  :case/type :package-release
+  :case/input {:existing/digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               :proposed/digest "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  :case/expected :reject}]

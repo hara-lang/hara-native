@@ -1,0 +1,115 @@
+{:spec/id :hal/bytecode-vm-suspension-conformance
+ :spec/version "alpha"
+ :runtime "hara-bytecode-vm"
+ :feature "bytecode-vm"
+ :schema
+ {:source "HAL source compiled against a registry containing the setup Vars"
+  :setup "Promise and provider state installed before compilation"
+  :drive "Ordered host actions after the initial VM run"
+  :expect "Observable fiber, Promise, value, error, and side-effect results"}
+
+ :cases
+ [{:id :await/fulfilled-fast-path
+   :source "(std.native.Coroutine/await source)"
+   :setup {:source {:promise/state :fulfilled :promise/value 42}}
+   :drive []
+   :expect {:initial/state :completed
+            :initial/display "42"
+            :suspended false}}
+
+  {:id :await/pending-resume
+   :source "(std.native.Coroutine/await source)"
+   :setup {:source {:promise/state :pending}}
+   :drive [{:op :promise/resolve :var source :value 42}
+           {:op :fiber/poll}]
+   :expect {:initial/state :suspended
+            :pending/var source
+            :terminal/state :completed
+            :terminal/display "42"}}
+
+  {:id :await/rejected-catch
+   :source "(try (std.native.Coroutine/await source) (catch Exception error error))"
+   :setup {:source {:promise/state :pending}}
+   :drive [{:op :promise/reject :var source :message "failed"}
+           {:op :fiber/poll}]
+   :expect {:initial/state :suspended
+            :terminal/state :completed
+            :terminal/display "\"failed\""}}
+
+  {:id :await/fulfilled-finally
+   :source "(do (def marker 0) (defn inner [p] (try (std.native.Coroutine/await p) (finally (set! marker 1)))) (defn outer [p] [(inner p) marker]) (outer source))"
+   :setup {:source {:promise/state :pending}}
+   :drive [{:op :promise/resolve :var source :value 41}
+           {:op :fiber/poll}]
+   :expect {:initial/state :suspended
+            :terminal/state :completed
+            :terminal/display "[41 1]"}}
+
+  {:id :await/rejected-finally-before-outer-catch
+   :source "(do (def marker 0) (defn inner [p] (try (std.native.Coroutine/await p) (finally (set! marker 1)))) (try (inner source) (catch Exception error [error marker])))"
+   :setup {:source {:promise/state :pending}}
+   :drive [{:op :promise/reject :var source :message "failed"}
+           {:op :fiber/poll}]
+   :expect {:initial/state :suspended
+            :terminal/state :completed
+            :terminal/display "[\"failed\" 1]"}}
+
+  {:id :yield/resume-value
+   :source "(std.native.Coroutine/yield 41)"
+   :setup {}
+   :drive [{:op :fiber/resume-yield :value 42}]
+   :expect {:initial/state :yielded
+            :initial/display "41"
+            :terminal/state :completed
+            :terminal/display "42"}}
+
+  {:id :async/settled-result-promise
+   :source "(do (defn ^:async delayed [] (std.native.Coroutine/await source)) (delayed))"
+   :setup {:source {:promise/state :fulfilled :promise/value 42}}
+   :drive []
+   :expect {:initial/state :completed
+            :initial/value-type :promise
+            :result-promise/state :fulfilled
+            :result-promise/display "42"}}
+
+  {:id :async/pending-result-promise
+   :source "(do (defn ^:async delayed [] (std.native.Coroutine/await source)) (delayed))"
+   :setup {:source {:promise/state :pending}}
+   :drive [{:op :promise/resolve :var source :value 42}
+           {:op :scheduler/poll}]
+   :expect {:initial/state :completed
+            :initial/value-type :promise
+            :result-promise/initial-state :pending
+            :result-promise/terminal-state :fulfilled
+            :result-promise/display "42"}}
+
+  {:id :async/cancellation-propagates
+   :source "(do (defn ^:async delayed [] (std.native.Coroutine/await source)) (delayed))"
+   :setup {:source {:promise/state :pending
+                   :promise/cancel-hook :observe}}
+   :drive [{:op :result-promise/cancel}]
+   :expect {:result-promise/state :rejected
+            :result-promise/cancelled true
+            :source/cancel-hook-observed true}}
+
+  {:id :host/native-promise
+   :source "(do (defn ^:async delayed [] (std.native.Coroutine/await (Host/call \"timer\" \"sleep\" [1]))) (delayed))"
+   :setup {:host/call {:service "timer"
+                       :method "sleep"
+                       :arguments [1]
+                       :return {:promise/state :pending}}}
+   :drive [{:op :host-promise/resolve :value 42}
+           {:op :scheduler/poll}]
+   :expect {:host/call-count 1
+            :result-promise/state :fulfilled
+            :result-promise/display "42"}}
+
+  {:id :host/wasm32-promise
+   :source "(do (defn ^:async delayed [] (std.native.Coroutine/await (Host/call \"timer\" \"sleep\" [1]))) (delayed))"
+   :setup {:target :wasm32
+           :host/broker-return {:promise/state :pending}}
+   :drive [{:op :javascript/resolve-guest-promise :value 42}
+           {:op :runtime/poll}]
+   :expect {:result-promise/state :fulfilled
+            :result-promise/display "42"
+            :hbc/contains-javascript-promise false}}]}

@@ -1,0 +1,173 @@
+{:format :hara-native/language-conformance
+ :version 1
+ :owner :hara-native
+ :purpose :portable-parser-evaluator-and-lowered-native-abi-conformance
+ :inputs {:registry-import "language/imports.edn"
+          :lowering "lowering-v1.edn"}
+ :invariants {:artifact :hlc1
+              :artifact-execution :hbc0-only
+              :allowed-runtime-prefixes ["std.native." "std.protocol."]
+              :forbidden-runtime-prefixes ["std.foundation" "std.lib."]
+              :source-package-policy :excluded}
+ :cases
+ [{:id :parser/literal-integer
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :literal/integer}
+   :layer :parser
+   :program 42
+   :expect {:display "42"}
+   :browser-safe true}
+  {:id :parser/literal-string
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :literal/string}
+   :layer :parser
+   :program "hello world"
+   :expect {:display "\"hello world\""}
+   :browser-safe true}
+  {:id :parser/literal-keyword
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :literal/keyword}
+   :layer :parser
+   :program :keyword
+   :expect {:display ":keyword"}
+   :browser-safe true}
+  {:id :parser/literal-nil
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :literal/nil}
+   :layer :parser
+   :program nil
+   :expect {:display "nil"}
+   :browser-safe true}
+  {:id :parser/literal-boolean
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :literal/true}
+   :layer :parser
+   :program true
+   :expect {:display "true"}
+   :browser-safe true}
+  {:id :evaluator/arithmetic-nested
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :arith/nested}
+   :layer :evaluator
+   :program (+ 1 (* 2 3))
+   :expect {:display "7"}
+   :browser-safe true}
+  {:id :evaluator/arithmetic-variadic
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :arith/add-multi}
+   :layer :evaluator
+   :program (+ 1 2 3 4 5)
+   :expect {:display "15"}
+   :browser-safe true}
+  {:id :evaluator/comparison-chain
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :compare/less-chained}
+   :layer :evaluator
+   :program (< 1 2 3 4)
+   :expect {:display "true"}
+   :browser-safe true}
+  {:id :evaluator/if-truthiness
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :if/truthy-zero}
+   :layer :evaluator
+   :program (if 0 1 2)
+   :expect {:display "1"}
+   :browser-safe true}
+  {:id :evaluator/do-sequence
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :do/sequence}
+   :layer :evaluator
+   :program (do 1 2 3)
+   :expect {:display "3"}
+   :browser-safe true}
+  {:id :evaluator/let-sequential
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :let/sequential}
+   :layer :evaluator
+   :program (let [x 1 y (+ x 1) z (+ y 1)] z)
+   :expect {:display "3"}
+   :browser-safe true}
+  {:id :evaluator/let-shadowing
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :let/shadowing-restore}
+   :layer :evaluator
+   :program (let [x 1] (do (let [x 2] x) x))
+   :expect {:display "1"}
+   :browser-safe true}
+  {:id :evaluator/loop-recur
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :loop/many-iterations}
+   :layer :evaluator
+   :program (loop [i 0 acc 1] (if (< i 10) (recur (+ i 1) (* acc 2)) acc))
+   :expect {:display "1024"}
+   :browser-safe false}
+  {:id :evaluator/closure-capture
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :fn/capture}
+   :layer :evaluator
+   :program (let [x 10 f (fn [y] (+ x y))] (f 32))
+   :expect {:display "42"}
+   :browser-safe true}
+  {:id :evaluator/nested-closure
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :fn/nested-closure}
+   :layer :evaluator
+   :program (((fn [x] (fn [y] (+ x y))) 19) 23)
+   :expect {:display "42"}
+   :browser-safe true}
+  {:id :evaluator/divide-by-zero
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :error/divide-by-zero}
+   :layer :evaluator
+   :program (/ 1 0)
+   :expect {:error :division-by-zero}
+   :browser-safe true}
+  {:id :evaluator/string-arithmetic
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :error/string-arithmetic}
+   :layer :evaluator
+   :program (+ "a" 1)
+   :expect {:error :expects-numbers}
+   :browser-safe true}
+  {:id :lowered/count
+   :origin {:kind :lowering :case :lowered/count}
+   :layer :native-abi
+   :program (std.protocol.icount.ICount/count (std.native.Base/vector 1 2 3))
+   :expect {:display "3"}
+   :browser-safe true}
+  {:id :lowered/lookup
+   :origin {:kind :lowering :case :lowered/lookup}
+   :layer :native-abi
+   :program (std.protocol.ilookup.ILookup/lookup (std.native.Base/hash-map :answer 42) :answer)
+   :expect {:display "42"}
+   :browser-safe true}
+  {:id :lowered/assoc
+   :origin {:kind :lowering :case :lowered/assoc}
+   :layer :native-abi
+   :program (std.protocol.ilookup.ILookup/lookup
+             (std.protocol.iassoc.IAssoc/assoc (std.native.Base/hash-map :a 1) :b 2)
+             :b)
+   :expect {:display "2"}
+   :browser-safe true}
+  {:id :lowered/conj
+   :origin {:kind :lowering :case :lowered/conj}
+   :layer :native-abi
+   :program (std.protocol.iconj.IConj/conj (std.native.Base/vector 1) 2)
+   :expect {:display "[1 2]"}
+   :browser-safe true}
+  {:id :lowered/dissoc
+   :origin {:kind :lowering :case :lowered/dissoc}
+   :layer :native-abi
+   :program (std.protocol.idissoc.IDissoc/dissoc (std.native.Base/hash-map :a 1 :b 2) :b)
+   :expect {:display "{:a 1}"}
+   :browser-safe true}
+  {:id :lowered/empty
+   :origin {:kind :lowering :case :lowered/empty}
+   :layer :native-abi
+   :program (std.protocol.iempty.IEmpty/empty (std.native.Base/vector 1 2))
+   :expect {:display "[]"}
+   :browser-safe true}
+  {:id :lowered/nth
+   :origin {:kind :lowering :case :lowered/nth}
+   :layer :native-abi
+   :program (std.protocol.inth.INth/nth (std.native.Base/vector 41 42) 1)
+   :expect {:display "42"}
+   :browser-safe true}
+  {:id :lowered/iter
+   :origin {:kind :lowering :case :lowered/iter}
+   :layer :native-abi
+   :program (std.protocol.iiterator.IIterator/iter-next? (std.protocol.iiter.IIter/iter (std.native.Base/vector 41)))
+   :expect {:display "true"}
+   :browser-safe true}
+  {:id :lowered/definition-and-resolve
+   :origin {:kind :lowering :case :lowered/definition-and-resolve}
+   :layer :native-abi
+   :program (let [target (std.native.Base/namespace (std.native.Base/symbol "lowering.probe"))
+                  _ (std.native.Base/def target (std.native.Base/symbol "inc") (fn [x] (+ x 1)) nil)
+                  inc-var (std.native.Base/resolve target (std.native.Base/symbol "inc"))]
+              ((std.protocol.ideref.IDeref/deref inc-var) 41))
+   :expect {:display "42"}
+   :browser-safe true}]}

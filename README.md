@@ -53,13 +53,21 @@ package composition, registry publication policy, and end-user documentation.
 
 ## Conformance boundary
 
-`make test-conformance` runs the native/protocol HNC1 artifact serially in the
-Rust, JVM, and browser hosts. The editable first-layer specification is
-`core/rust/specs/native-protocol-v1.edn`; it contains structured forms, never
-HAL files or registry paths. Its generated artifact is integrity-checked and
-requires direct `std.native.*` and `std.protocol.*` calls—Foundation wrappers
-are rejected. Hara language and standard-library conformance are independent of
-this repository and do not consume HNC1.
+`make test-conformance` runs two Rust-produced, checksummed artifacts serially
+in the Rust, JVM, and browser/Wasm hosts. `HNC1` is the native/protocol ABI
+artifact generated from `core/rust/specs/native-protocol-v1.edn`. `HLC1` is the
+functional language artifact generated from
+`core/rust/specs/language-v1.edn`; each case records parser, evaluator, or
+lowered-native-ABI coverage and executes the canonical HBC0 bytes. Both
+specifications use structured forms, never HAL files. The imported registry
+fixtures under `core/rust/specs/language/registry` are verbatim provenance
+references only: they never execute directly, and every adopted case is checked
+against its imported fixture or `lowering-v1.edn` before HLC1 generation.
+
+HLC1 deliberately excludes Foundation and source-package behavior. Foundation
+wrappers are lowered into direct `std.native.*` and `std.protocol.*` calls where
+the ABI is lossless; source-owned wrappers, `require`, namespace aliases, and
+package loading remain outside this source-free host boundary.
 
 The corpus has two complementary layers. Hand-authored cases lower every
 portable native method into direct operations (numeric, strings, bytes,
@@ -78,7 +86,7 @@ Adding or removing a declaration therefore expands the executed corpus rather
 than silently changing an aggregate count.
 
 `make test-conformance` is the strict portable layer. It proves the same HNC1
-artifact in Rust, JVM, and browser/Wasm without external providers.
+and HLC1 artifacts in Rust, JVM, and browser/Wasm without external providers.
 `make test-conformance-full` adds the trusted provider-host profile; use it for
 capability-bound provider behavior such as filesystem adapters. Capability
 declarations are held in the native registry and their behavior belongs to a

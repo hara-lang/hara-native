@@ -1,0 +1,655 @@
+[{:case/id :hara.package.case/shared-wasm-import-and-host-flavor
+  :case/type :package-artifact
+  :case/input
+  {:wasm-imports
+   {:filesystem
+    {:variant/artifact
+     {:artifact/type :wasm
+      :artifact/abi :core.v1
+      :artifact/target :wasm32-wasi-preview1}
+     :variant/required-capabilities #{}}}
+   :flavors
+   {:jvm {:variant/artifact
+          {:artifact/type :jar
+           :artifact/abi :hara.provider.jvm.v1
+           :artifact/target :java-21}
+          :variant/required-capabilities #{}}}}}
+  :case/expected
+  {:wasm-imports [:filesystem]
+  :flavors [:jvm]}}
+ {:case/id :hara.package.case/single-manifest
+  :case/type :project
+  :case/input {:files ["project.edn" "src/app/core.hal"]
+               :project/extensions {app.native {:provider :wasm :abi :core.v1 :module "artifacts/app.wasm"}}}
+  :case/expected :valid}
+ {:case/id :hara.package.case/reject-parallel-manifest
+  :case/type :project
+  :case/input {:parallel-manifest "build.edn"}
+  :case/expected :reject}
+ {:case/id :hara.package.case/generated-lock
+  :case/type :project
+  :case/input {:project/dependencies {"hara:hara/graph" {:version "^1.2.0"}}}
+  :case/expected {:generated "project.lock.edn"}}
+ {:case/id :hara.package.case/runtime-profile-jvm
+  :case/type :project-runtime-profile
+  :case/input
+  {:runtime :jvm
+   :project
+   {:project/source-paths ["src"]
+    :project/test-paths ["test"]
+    :project/extension-paths ["extensions"]
+    :project/dependencies {"hara:hara/base" {:version "^1.0.0"}}
+    :project/runtime-profiles
+    {:jvm
+     {:runtime/source-paths ["src-jvm"]
+      :runtime/test-paths ["test-jvm"]
+      :runtime/extension-paths ["extensions-jvm"]
+      :runtime/native-source-paths ["src-java"]
+      :runtime/target-path "target/jvm/classes"
+      :runtime/dependencies
+      {:maven {org.postgresql/postgresql {:version "42.7.7"}}}}}}}
+  :case/expected
+  {:runtime :jvm
+   :source-paths ["src" "src-jvm"]
+   :test-paths ["test" "test-jvm"]
+   :extension-paths ["extensions" "extensions-jvm"]
+   :native-source-paths ["src-java"]
+   :target-path "target/jvm/classes"
+   :hara-dependencies {"hara:hara/base" {:version "^1.0.0"}}
+   :maven-dependencies {org.postgresql/postgresql {:version "42.7.7"}}}}
+ {:case/id :hara.package.case/runtime-profile-rust
+  :case/type :project-runtime-profile
+  :case/input
+  {:runtime :rust
+   :project
+   {:project/source-paths ["src"]
+    :project/test-paths ["test"]
+    :project/extension-paths []
+    :project/dependencies {"hara:hara/base" {:version "^1.0.0"}}
+    :project/runtime-profiles
+    {:rust
+     {:runtime/source-paths ["src-rust"]
+      :runtime/test-paths ["test-rust"]
+      :runtime/extension-paths ["extensions-rust"]
+      :runtime/dependencies
+      {:hara {"hara:hara/crypto" {:version "^1.0.0"}}}}}}}
+  :case/expected
+  {:runtime :rust
+   :source-paths ["src" "src-rust"]
+   :test-paths ["test" "test-rust"]
+   :extension-paths ["extensions-rust"]
+   :native-source-paths []
+   :hara-dependencies
+   {"hara:hara/base" {:version "^1.0.0"}
+    "hara:hara/crypto" {:version "^1.0.0"}}
+   :maven-dependencies {}}}
+ {:case/id :hara.package.case/runtime-profile-none
+  :case/type :project-runtime-profile
+  :case/input
+  {:runtime :rust
+   :project {:project/source-paths ["src"]
+             :project/test-paths ["test"]
+             :project/extension-paths []
+             :project/dependencies {}}}
+  :case/expected
+  {:runtime :rust
+   :source-paths ["src"]
+   :test-paths ["test"]
+   :extension-paths []
+   :native-source-paths []
+   :hara-dependencies {}
+   :maven-dependencies {}}}
+ {:case/id :hara.package.case/runtime-profile-disjoint-namespace
+  :case/type :project-runtime-profile
+  :case/input
+  {:namespaces {:jvm {"src-jvm/demo/adapter.hal" demo.adapter}
+                :rust {"src-rust/demo/adapter.hal" demo.adapter}}}
+  :case/expected :valid}
+ {:case/id :hara.package.case/runtime-profile-effective-duplicate
+  :case/type :project-runtime-profile
+  :case/input
+  {:runtime :jvm
+   :namespaces {"src/demo/adapter.hal" demo.adapter
+                "src-jvm/demo/adapter.hal" demo.adapter}}
+  :case/expected {:reject :duplicate-namespace}}
+ {:case/id :hara.package.case/runtime-profile-build-orthogonality
+  :case/type :project-runtime-profile
+  :case/input
+  {:runtime :rust
+   :build-profile :production
+   :project/profiles {:production {:profile/language :hara
+                                   :profile/build {:build/tree-shake true}}}
+   :project/runtime-profiles
+   {:rust {:runtime/source-paths ["src-rust"]}}}
+  :case/expected {:runtime :rust :build-profile :production}}
+ {:case/id :hara.package.case/runtime-profile-legacy-jvm-keys
+  :case/type :project-runtime-profile
+  :case/input {:jvm/source-paths ["src-java"]
+               :jvm/dependencies [[org.example/library "1.0.0"]]
+               :jvm/target-path "target/classes"}
+  :case/expected
+  {:reject :legacy-runtime-key
+   :replacements
+   {:jvm/source-paths [:project/runtime-profiles :jvm :runtime/native-source-paths]
+    :jvm/dependencies [:project/runtime-profiles :jvm :runtime/dependencies :maven]
+    :jvm/target-path [:project/runtime-profiles :jvm :runtime/target-path]}}}
+ {:case/id :hara.package.case/runtime-profile-hara-conflict
+  :case/type :project-runtime-profile
+  :case/input
+  {:runtime :rust
+   :project/dependencies {"hara:hara/crypto" {:version "^1.0.0"}}
+   :project/runtime-profiles
+   {:rust {:runtime/dependencies
+           {:hara {"hara:hara/crypto" {:version "^2.0.0"}}}}}}
+  :case/expected {:reject :runtime-profile-conflict}}
+ {:case/id :hara.package.case/runtime-profile-preserve-inactive-lock
+  :case/type :project-runtime-lock
+  :case/input {:active-runtime :jvm
+               :existing-sections {:jvm {:digest "old-jvm"}
+                                   :rust {:digest "keep-rust"}}}
+  :case/expected {:jvm {:digest :reconciled}
+                  :rust {:digest "keep-rust"}}}
+
+ ;; package.edn prebuilt route artifacts
+ {:case/id :hara.package.case/artifact-dual-runtime-select-hta-require
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :require
+   :module :provider-hta
+   :requirements {:targets #{"wasm32-wasi-preview1"}
+                  :abis #{"hta.v1"}
+                  :capabilities #{:db/connect}
+                  :host-calls #{:db/socket}}
+   :manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/provider"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/provider"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files
+    {"artifacts/provider.jar"
+     {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      :size 4}
+     "artifacts/provider.hta"
+     {:sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      :size 4}}
+    :flavors
+    {:jvm
+     {:variant/artifact
+      {:artifact/type :jar
+       :artifact/path "artifacts/provider.jar"
+       :artifact/sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       :artifact/target "java-21"
+       :artifact/abi "hara.provider.jvm.v1"
+       :artifact/entry-point "example.provider.HaraProvider"}
+      :variant/required-capabilities #{:db/connect}
+      :variant/host-calls #{}
+      :variant/exports #{:provider/open :provider/close}
+      :variant/dependencies
+      {:maven {org.example/provider-runtime {:version "1.0.0"}}}
+      :variant/lifecycle
+      {:lifecycle/load :idempotent
+       :lifecycle/close :idempotent
+       :lifecycle/session-isolation true
+       :lifecycle/async false
+       :lifecycle/cancellation false}}
+    }
+    :wasm-imports
+    {:provider-hta
+     {:variant/artifact
+      {:artifact/type :hta
+       :artifact/path "artifacts/provider.hta"
+       :artifact/sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       :artifact/target "wasm32-wasi-preview1"
+       :artifact/abi "hta.v1"
+       :artifact/entry-point "provider_init"}
+      :variant/required-capabilities #{:db/connect}
+      :variant/host-calls #{:db/socket}
+      :variant/exports #{:provider/open :provider/cancel :provider/close}
+      :variant/dependencies {}
+      :variant/lifecycle
+      {:lifecycle/load :idempotent
+       :lifecycle/close :idempotent
+       :lifecycle/session-isolation true
+       :lifecycle/async true
+       :lifecycle/cancellation true}}}}}
+  :case/expected
+  {:route :require
+   :module :provider-hta
+   :artifact/type :hta
+   :artifact/path "artifacts/provider.hta"
+   :artifact/entry-point "provider_init"}}
+
+ {:case/id :hara.package.case/artifact-dual-runtime-select-direct-wasm
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :import
+   :module :provider
+   :requirements {:targets #{"wasm32-unknown-unknown"}
+                  :abis #{"core.v1"}
+                  :capabilities #{}
+                  :host-calls #{}}
+   :manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/provider"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/provider"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files
+    {"artifacts/provider.jar"
+     {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      :size 4}
+     "artifacts/provider.wasm"
+     {:sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      :size 4}}
+    :flavors
+    {:jvm
+     {:variant/artifact
+      {:artifact/type :jar
+       :artifact/path "artifacts/provider.jar"
+       :artifact/sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       :artifact/target "java-21"
+       :artifact/abi "hara.provider.jvm.v1"
+       :artifact/entry-point "example.provider.HaraProvider"}
+      :variant/required-capabilities #{:db/connect}}
+    }
+    :wasm-imports
+    {:provider
+     {:variant/artifact
+      {:artifact/type :wasm
+       :artifact/path "artifacts/provider.wasm"
+       :artifact/sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       :artifact/target "wasm32-unknown-unknown"
+       :artifact/abi "core.v1"
+       :artifact/entry-point "provider_init"}
+      :variant/required-capabilities #{}
+      :variant/host-calls #{}
+      :variant/exports #{:provider/open}
+      :variant/lifecycle
+      {:lifecycle/load :idempotent
+       :lifecycle/close :idempotent
+       :lifecycle/session-isolation true
+       :lifecycle/async false
+       :lifecycle/cancellation false}}}}}
+  :case/expected
+  {:route :import
+   :module :provider
+   :artifact/type :wasm
+   :artifact/path "artifacts/provider.wasm"
+   :artifact/entry-point "provider_init"}}
+
+ {:case/id :hara.package.case/artifact-portable-only
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :require
+   :manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/portable" :version "1.0.0"}
+    :files {"src/example/portable.hal"
+            {:sha256 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+             :size 4}}
+    :resources {"example.portable" "src/example/portable.hal"}}}
+  :case/expected {:selection :portable}}
+
+ {:case/id :hara.package.case/artifact-jvm-only
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :flavor
+   :flavor :jvm
+   :requirements {:targets #{"java-21"}
+                  :abis #{"hara.provider.jvm.v1"}
+                  :capabilities #{}
+                  :host-calls #{}}
+   :manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/jvm-only"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/jvm-only"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files {"artifacts/provider.jar"
+            {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             :size 4}}
+    :flavors
+    {:jvm
+     {:variant/artifact
+      {:artifact/type :jar
+       :artifact/path "artifacts/provider.jar"
+       :artifact/sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       :artifact/target "java-21"
+       :artifact/abi "hara.provider.jvm.v1"
+       :artifact/entry-point "example.provider.HaraProvider"}
+      :variant/required-capabilities #{}}}}}
+  :case/expected {:route :flavor
+                  :flavor :jvm
+                  :artifact/type :jar}}
+
+ {:case/id :hara.package.case/artifact-wasm-only
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :import
+   :module :provider
+   :requirements {:targets #{"wasm32-unknown-unknown"}
+                  :abis #{"core.v1"}
+                  :capabilities #{}
+                  :host-calls #{}}
+   :manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/wasm-only"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/wasm-only"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files {"artifacts/provider.wasm"
+            {:sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+             :size 4}}
+    :wasm-imports
+    {:provider
+     {:variant/artifact
+      {:artifact/type :wasm
+       :artifact/path "artifacts/provider.wasm"
+       :artifact/sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       :artifact/target "wasm32-unknown-unknown"
+       :artifact/abi "core.v1"
+       :artifact/entry-point "provider_init"}
+      :variant/required-capabilities #{}}}}}
+  :case/expected {:route :import
+                  :module :provider
+                  :artifact/type :wasm}}
+
+ {:case/id :hara.package.case/artifact-missing-import-no-flavor-fallback
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :import
+   :module :provider
+   :manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/jvm-only"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/jvm-only"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files {"artifacts/provider.jar"
+            {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             :size 4}}
+    :flavors
+    {:jvm
+     {:variant/artifact
+      {:artifact/type :jar
+       :artifact/path "artifacts/provider.jar"
+       :artifact/sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       :artifact/target "java-21"
+       :artifact/abi "hara.provider.jvm.v1"
+       :artifact/entry-point "example.provider.HaraProvider"}
+      :variant/required-capabilities #{}}}}}
+  :case/expected {:reject :package/missing-wasm-import}}
+
+ {:case/id :hara.package.case/artifact-missing-require-no-fallback
+  :case/type :package-artifact-selection
+  :case/input
+  {:route :require
+   :module :provider
+   :manifest
+   {:harp/format "0.0.0-alpha"
+     :package {:identity "hara:example/no-hta"
+               :version "1.0.0"
+               :provenance {:repository "https://github.com/example/direct-only"
+                            :commit "0123456789abcdef0123456789abcdef01234567"}}
+     :files {"artifacts/provider.wasm"
+             {:sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              :size 4}
+             "artifacts/provider.jar"
+             {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              :size 4}}
+     :wasm-imports
+     {:other
+      {:variant/artifact
+       {:artifact/type :wasm
+        :artifact/path "artifacts/provider.wasm"
+        :artifact/sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        :artifact/target "wasm32-unknown-unknown"
+        :artifact/abi "core.v1"
+        :artifact/entry-point "provider_init"}
+       :variant/required-capabilities #{}}}
+     :flavors
+     {:jvm
+      {:variant/artifact
+       {:artifact/type :jar
+        :artifact/path "artifacts/provider.jar"
+        :artifact/sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        :artifact/target "java-21"
+        :artifact/abi "hara.provider.jvm.v1"
+        :artifact/entry-point "example.provider.HaraProvider"}
+       :variant/required-capabilities #{}}}}}
+  :case/expected {:reject :package/missing-require-artifact}}
+
+ {:case/id :hara.package.case/artifact-duplicate-flavor
+  :case/type :package-artifact-validation
+  :case/input
+  {:manifest/source
+   "{:harp/format \"0.0.0-alpha\" :package {:identity \"hara:example/duplicate\" :version \"1.0.0\" :provenance {:repository \"https://github.com/example/duplicate\" :commit \"0123456789abcdef0123456789abcdef01234567\"}} :files {} :flavors {:jvm {:variant/artifact {:artifact/type :jar :artifact/path \"a.jar\" :artifact/sha256 \"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" :artifact/target \"java-21\" :artifact/abi \"hara.provider.jvm.v1\" :artifact/entry-point \"A\"} :variant/required-capabilities #{}} :jvm {:variant/artifact {:artifact/type :jar :artifact/path \"b.jar\" :artifact/sha256 \"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" :artifact/target \"java-21\" :artifact/abi \"hara.provider.jvm.v1\" :artifact/entry-point \"B\"} :variant/required-capabilities #{}}}}"}
+  :case/expected {:reject :package/duplicate-flavor}}
+
+ {:case/id :hara.package.case/artifact-digest-declaration-mismatch
+  :case/type :package-artifact-validation
+  :case/input
+  {:manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/provider"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/provider"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files {"artifacts/provider.jar"
+            {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             :size 4}}
+    :flavors
+    {:jvm
+     {:variant/artifact
+      {:artifact/type :jar
+       :artifact/path "artifacts/provider.jar"
+       :artifact/sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       :artifact/target "java-21"
+       :artifact/abi "hara.provider.jvm.v1"
+       :artifact/entry-point "example.provider.HaraProvider"}
+      :variant/required-capabilities #{}}}}}
+  :case/expected {:reject :package/digest-mismatch}}
+
+ {:case/id :hara.package.case/artifact-bytes-digest-mismatch
+  :case/type :package-artifact-verification
+  :case/input
+  {:declared-sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   :artifact-bytes "different"}
+  :case/expected {:reject :package/digest-mismatch}}
+
+ {:case/id :hara.package.case/artifact-abi-mismatch
+  :case/type :package-artifact-selection
+  :case/input {:route :require
+               :module :provider-hta
+               :selected-abi "hta.v1"
+               :supported-abis #{"hta.v2"}}
+  :case/expected {:reject :package/abi-mismatch}}
+
+ {:case/id :hara.package.case/artifact-target-mismatch
+  :case/type :package-artifact-selection
+  :case/input {:route :flavor
+               :flavor :jvm
+               :selected-target "java-21"
+               :supported-targets #{"java-17"}}
+  :case/expected {:reject :package/target-mismatch}}
+
+ {:case/id :hara.package.case/artifact-capability-denied
+  :case/type :package-artifact-selection
+  :case/input {:required-capabilities #{:db/connect :network/egress}
+               :available-capabilities #{:db/connect}}
+  :case/expected {:reject :package/capability-denied
+                  :missing #{:network/egress}}}
+
+ {:case/id :hara.package.case/artifact-host-call-denied
+  :case/type :package-artifact-selection
+  :case/input {:declared-host-calls #{:db/socket :clock/monotonic}
+               :allowed-host-calls #{:clock/monotonic}}
+  :case/expected {:reject :package/host-call-denied
+                  :missing #{:db/socket}}}
+
+ {:case/id :hara.package.case/artifact-install-no-build
+  :case/type :package-artifact-installation
+  :case/input {:archive "provider.harp"
+               :operations [:verify-digest :extract-files :register-on-demand]
+               :build-tools [:cargo :maven :javac :rustc]}
+  :case/expected {:build-tools-invoked #{}
+                  :state :installed}}
+
+ {:case/id :hara.package.case/artifact-malformed-manifest
+  :case/type :package-artifact-validation
+  :case/input {:manifest/source "[]"}
+  :case/expected {:reject :package/invalid-manifest}}
+
+ {:case/id :hara.package.case/artifact-missing-jvm-flavor-no-import-fallback
+  :case/type :package-artifact-selection
+  :case/input {:route :flavor
+               :flavor :jvm
+               :manifest {:wasm-imports {:provider {:variant/artifact
+                                                    {:artifact/type :wasm}}}}}
+  :case/expected {:reject :package/missing-flavor}}
+
+ {:case/id :hara.package.case/artifact-illegal-import-hta
+  :case/type :package-artifact-selection
+  :case/input {:route :import
+               :module :provider
+               :selected-artifact/type :hta}
+  :case/expected {:reject :package/artifact-type-mismatch}}
+
+ {:case/id :hara.package.case/artifact-illegal-require-wasm
+  :case/type :package-artifact-selection
+  :case/input {:route :require
+               :module :provider
+               :selected-artifact/type :wasm}
+  :case/expected {:reject :package/artifact-type-mismatch}}
+
+ {:case/id :hara.package.case/artifact-wasm-not-a-flavor
+  :case/type :package-artifact-validation
+  :case/input
+  {:manifest
+   {:harp/format "0.0.0-alpha"
+    :package {:identity "hara:example/wasm-flavor"
+              :version "1.0.0"
+              :provenance {:repository "https://github.com/example/wasm-flavor"
+                           :commit "0123456789abcdef0123456789abcdef01234567"}}
+    :files {"artifacts/provider.jar"
+            {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             :size 4}
+            "artifacts/provider.wasm"
+            {:sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+             :size 4}}
+    :flavors
+    {:jvm
+     {:variant/artifact
+      {:artifact/type :jar
+       :artifact/path "artifacts/provider.jar"
+       :artifact/sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       :artifact/target "java-21"
+       :artifact/abi "hara.provider.jvm.v1"
+       :artifact/entry-point "example.provider.HaraProvider"}
+      :variant/required-capabilities #{}}
+     :wasm
+     {:variant/artifact
+      {:artifact/type :wasm
+       :artifact/path "artifacts/provider.wasm"
+       :artifact/sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       :artifact/target "wasm32-unknown-unknown"
+       :artifact/abi "core.v1"
+       :artifact/entry-point "provider_init"}
+      :variant/required-capabilities #{}}}}}
+  :case/expected {:reject :package/invalid-manifest}}
+
+ {:case/id :hara.package.case/artifact-duplicate-wasm-import
+  :case/type :package-artifact-validation
+  :case/input
+  {:manifest/source
+   "{:harp/format \"0.0.0-alpha\" :package {:identity \"hara:example/duplicate-import\" :version \"1.0.0\" :provenance {:repository \"https://github.com/example/duplicate-import\" :commit \"0123456789abcdef0123456789abcdef01234567\"}} :files {} :wasm-imports {:provider {:variant/artifact {:artifact/type :wasm :artifact/path \"a.wasm\" :artifact/sha256 \"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" :artifact/target \"wasm32-unknown-unknown\" :artifact/abi \"core.v1\" :artifact/entry-point \"a\"} :variant/required-capabilities #{}} :provider {:variant/artifact {:artifact/type :wasm :artifact/path \"b.wasm\" :artifact/sha256 \"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" :artifact/target \"wasm32-unknown-unknown\" :artifact/abi \"core.v1\" :artifact/entry-point \"b\"} :variant/required-capabilities #{}}}}"}
+  :case/expected {:reject :package/duplicate-wasm-import}}
+
+ {:case/id :hara.package.case/artifact-async-success
+  :case/type :package-artifact-lifecycle
+  :case/input {:events [[:load :session-a]
+                        [:call :operation-1]
+                        [:complete :operation-1]
+                        [:close :session-a]]}
+  :case/expected {:state :closed
+                  :outstanding #{}
+                  :handles #{}}}
+
+ {:case/id :hara.package.case/artifact-async-cancel
+  :case/type :package-artifact-lifecycle
+  :case/input {:events [[:load :session-a]
+                        [:call :operation-1]
+                        [:cancel :operation-1]
+                        [:cancelled :operation-1]
+                        [:close :session-a]]}
+  :case/expected {:state :closed
+                  :outstanding #{}
+                  :handles #{}}}
+
+ {:case/id :hara.package.case/artifact-initialization-failure
+  :case/type :package-artifact-lifecycle
+  :case/input {:events [[:load :session-a]
+                        [:initialization-failed :package/initialization-failed]]}
+  :case/expected {:state :unloaded
+                  :registration nil
+                  :handles #{}}}
+
+ {:case/id :hara.package.case/artifact-repeated-load
+  :case/type :package-artifact-lifecycle
+  :case/input {:events [[:load :session-a]
+                        [:load :session-a]]}
+  :case/expected {:load-count 1
+                  :state :loaded}}
+
+ {:case/id :hara.package.case/artifact-repeated-close
+  :case/type :package-artifact-lifecycle
+  :case/input {:events [[:load :session-a]
+                        [:close :session-a]
+                        [:close :session-a]]}
+  :case/expected {:close-count 1
+                  :state :closed}}
+
+ {:case/id :hara.package.case/artifact-session-isolation
+  :case/type :package-artifact-lifecycle
+  :case/input {:events [[:load :session-a]
+                        [:open-handle :session-a :handle-1]
+                        [:load :session-b]
+                        [:close :session-a]]}
+  :case/expected {:session-a {:state :closed :handles #{}}
+                  :session-b {:state :loaded :handles #{}}}}
+
+ {:case/id :hara.package.case/artifact-portable-descriptor-parity
+  :case/type :package-artifact-descriptor
+  :case/input
+  {:jvm {:operations [:provider/open :provider/query :provider/close]
+         :errors [:provider/unavailable :provider/cancelled]
+         :capabilities #{:db/connect}
+         :lifecycle {:load :idempotent :close :idempotent}}
+   :wasm {:operations [:provider/open :provider/query :provider/close]
+          :errors [:provider/unavailable :provider/cancelled]
+          :capabilities #{:db/connect}
+          :lifecycle {:load :idempotent :close :idempotent}}}
+  :case/expected :equal}
+
+ {:case/id :hara.package.case/artifact-descriptor-authority-rejected
+  :case/type :package-artifact-descriptor
+  :case/input {:descriptor {:credential "secret"
+                            :classloader "live-loader"
+                            :socket "raw-socket"
+                            :native-handle 42}}
+  :case/expected {:reject :package/invalid-descriptor}}
+
+ {:case/id :hara.package.case/artifact-canonical-idempotence
+  :case/type :package-artifact-canonicalization
+  :case/input
+  {:manifest
+   {:wasm-imports
+    {:provider {:variant/exports #{:provider/close :provider/open}
+                :variant/host-calls #{:clock/monotonic :db/socket}}}
+    :flavors
+    {:jvm {:variant/exports #{:provider/open :provider/close}
+           :variant/host-calls #{}}}}}
+  :case/expected {:canonicalize-twice :unchanged
+                  :map-order [:flavors :wasm-imports]
+                  :set-order :lexicographic}}]

@@ -1,0 +1,22 @@
+{:corpus/id :hal/hbc0-malformed
+ :corpus/spec :hal/hbc0-wire
+ :corpus/version "0-alpha"
+ :base :constant-42
+ :cases
+ [{:case/id :truncated-header
+   :artifact/hex "48424330"
+   :expect {:valid false :phase :envelope :category :truncated}}
+  {:case/id :bad-magic
+   :mutation {:offset 0 :xor 1}
+   :expect {:valid false :phase :envelope :category :invalid-magic}}
+  {:case/id :length-mismatch
+   :mutation {:offset 7 :xor 1}
+   :expect {:valid false :phase :envelope :category :length-mismatch}}
+  {:case/id :checksum-mismatch
+   :mutation {:offset 12 :xor 1}
+   :expect {:valid false :phase :authentication :category :checksum-mismatch}}
+  {:case/id :trailing-byte
+   :mutation {:append/hex "00"}
+   :expect {:valid false :phase :envelope :category :length-mismatch}}]
+ :rule "Every case is rejected before namespace or machine mutation."
+ :consumers [:rust-stack-vm :java-reference-vm :tool.vm/conform]}

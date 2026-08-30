@@ -144,5 +144,9 @@ path = "src/bin/hara-native.rs"
 name = "hara-native-conformance-artifact"
 path = "src/bin/hara-native-conformance-artifact.rs"
 
+[[bin]]
+name = "hara-native-language-conformance-artifact"
+path = "src/bin/hara-native-language-conformance-artifact.rs"
+
 [dev-dependencies]
 hara-hta = { version = "0.1.6", path = "crates/hta-codec" }

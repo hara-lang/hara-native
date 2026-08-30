@@ -1,0 +1,33 @@
+[{:case/id :hara.package.case/catalog-omitted
+  :case/type :schema-catalog-admission
+  :case/input {:schema/catalog nil}
+  :case/expected :accepted}
+ {:case/id :hara.package.case/catalog-valid
+  :case/type :schema-catalog-admission
+  :case/input {:schema/catalog {:format "std.typed.catalog/1"
+                                :path "catalog/std-typed-catalog.json"
+                                :sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+               :files {"catalog/std-typed-catalog.json"
+                       {:sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+  :case/expected :canonical-verifier-required}
+ {:case/id :hara.package.case/catalog-missing-file
+  :case/type :schema-catalog-admission
+  :case/input {:schema/catalog {:format "std.typed.catalog/1"
+                                :path "catalog/std-typed-catalog.json"
+                                :sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+               :files {}}
+  :case/expected :reject}
+ {:case/id :hara.package.case/catalog-digest-mismatch
+  :case/type :schema-catalog-admission
+  :case/input {:schema/catalog {:format "std.typed.catalog/1"
+                                :path "catalog/std-typed-catalog.json"
+                                :sha256 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+               :files {"catalog/std-typed-catalog.json"
+                       {:sha256 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}
+  :case/expected :reject}
+ {:case/id :hara.package.case/catalog-invalid-document
+  :case/type :schema-catalog-admission
+  :case/input {:schema/catalog {:format "std.typed.catalog/1"
+                                :path "catalog/std-typed-catalog.json"
+                                :sha256 "sha256:<declared-file-digest>"}}
+  :case/expected :reject-before-install-or-activation}]
