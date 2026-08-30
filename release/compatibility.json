@@ -1,6 +1,6 @@
 {
   "format": "hara-native/compatibility-v1",
-  "nativeVersion": "0.1.8",
+  "nativeVersion": "0.1.9",
   "harpFormat": "0.0.0-alpha",
   "hosts": {
     "rust": {
