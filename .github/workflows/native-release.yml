@@ -39,7 +39,9 @@ jobs:
             parents="$(git show -s --format=%P "$GITHUB_SHA")"
             read -r -a parents <<<"$parents"
             test "${#parents[@]}" = 2
-            git merge-base --is-ancestor "${parents[0]}" "${parents[1]}"
+            # A normal promotion merge retains the previous release as its
+            # first parent and the promoted main head as its second. Only the
+            # latter must remain in the current main lineage.
             git merge-base --is-ancestor "${parents[1]}" origin/main
           fi
           version="$(jq -er '.version' release/version.json)"
