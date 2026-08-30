@@ -30,7 +30,18 @@ jobs:
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
           git fetch --no-tags origin "$base" "$head"
-          git merge-base --is-ancestor "$base" "$head"
+          # A one-time re-anchor leaves release directly on a main commit. Later
+          # GitHub merge commits keep the prior release as their first parent and
+          # the promoted main commit as their second, so release itself is no
+          # longer an ancestor of the next main head.
+          if git merge-base --is-ancestor "$base" "$head"; then
+            exit 0
+          fi
+          parents="$(git show -s --format=%P "$base")"
+          read -r -a parents <<<"$parents"
+          test "${#parents[@]}" = 2
+          git merge-base --is-ancestor "${parents[0]}" "${parents[1]}"
+          git merge-base --is-ancestor "${parents[1]}" "$head"
 
   validate:
     needs: release-origin
