@@ -211,30 +211,6 @@ impl Machine {
                     next_ip = *target as usize;
                 }
             }
-            Instruction::DefProtocol(index)
-            | Instruction::ExtendType(index)
-            | Instruction::DefMulti(index)
-            | Instruction::DefMethod(index) => {
-                let Some(form) = program.constants.get(*index as usize) else {
-                    return Dispatch::Failed(
-                        self.error(function, format!("constant index {index} out of range")),
-                    );
-                };
-                let operator = match instruction {
-                    Instruction::DefProtocol(_) => "defprotocol",
-                    Instruction::ExtendType(_) => "extend-type",
-                    Instruction::DefMulti(_) => "defmulti",
-                    Instruction::DefMethod(_) => "defmethod",
-                    _ => unreachable!("declaration instruction was matched"),
-                };
-                match crate::core::eval_bytecode_declaration(operator, form) {
-                    Ok(value) => self.stack.push(value.into()),
-                    Err(message) => match self.raise(function, message) {
-                        Ok(target) => return Dispatch::Unwound(target),
-                        Err(error) => return Dispatch::Failed(error),
-                    },
-                }
-            }
             Instruction::IntrinsicValue(target) => {
                 let Some(name) = constant_string(program, *target) else {
                     return Dispatch::Failed(self.error(
@@ -445,12 +421,6 @@ impl Machine {
             }
             Instruction::DeclareGlobal(index) => {
                 guarded!(self.exec_declare_global(program, *index));
-            }
-            Instruction::DefStruct { name, fields } => {
-                guarded!(self.exec_def_struct(program, *name, *fields));
-            }
-            Instruction::DefMutable { name, fields } => {
-                guarded!(self.exec_def_mutable(program, *name, *fields));
             }
             Instruction::MutableFieldGet(index) => {
                 guarded!(self.exec_mutable_field_get(program, *index));

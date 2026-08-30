@@ -224,7 +224,7 @@ pub(crate) mod declarations {
         methods = [
             "list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "atom", "bytes", "pointer", "symbol",
             "keyword", "uuid", "reduced", "unreduced", "hash", "apply", "resolve",
-            "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "extend", "field",
+            "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "with-declaration", "extend", "multimethod", "method", "field",
             "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"
         ],
         whole_wasm_methods = [("number?", 1)],

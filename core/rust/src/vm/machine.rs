@@ -35,7 +35,7 @@ mod async_runtime;
 mod constants;
 #[path = "machine/coroutine_runtime.rs"]
 mod coroutine_runtime;
-use constants::{constant_named_fields, constant_string};
+use constants::constant_string;
 #[path = "machine/dispatch.rs"]
 mod dispatch;
 use dispatch::Dispatch;

@@ -110,35 +110,6 @@ pub(super) fn scan_program(program: &Program, analysis: &mut UnitAnalysis) {
                         );
                     }
                 }
-                Instruction::DefStruct { name, .. } | Instruction::DefMutable { name, .. } => {
-                    if let Some(name) = string_constant(program, *name) {
-                        let name = qualify(&analysis.module, name);
-                        analysis.native_roots.types.insert(name.clone());
-                        analysis.native_types.insert(name);
-                    }
-                    analysis
-                        .native_roots
-                        .runtime_shims
-                        .insert("hara.runtime/named-values".into());
-                }
-                Instruction::DefProtocol(_) => {
-                    analysis
-                        .native_roots
-                        .runtime_shims
-                        .insert("hara.runtime/protocol-registry".into());
-                }
-                Instruction::ExtendType(_) => {
-                    analysis
-                        .native_roots
-                        .runtime_shims
-                        .insert("hara.runtime/protocol-extension-registry".into());
-                }
-                Instruction::DefMulti(_) | Instruction::DefMethod(_) => {
-                    analysis
-                        .native_roots
-                        .runtime_shims
-                        .insert("hara.runtime/multimethod-registry".into());
-                }
                 Instruction::Await => {
                     analysis
                         .native_roots
@@ -172,9 +143,7 @@ pub(super) fn classify_effect(program: &Program, kind: UnitKind) -> Effect {
             | Instruction::DynamicBind(_)
             | Instruction::DynamicUnbind(_)
             | Instruction::HostCall
-            | Instruction::DotCall { .. }
-            | Instruction::ExtendType(_)
-            | Instruction::DefMethod(_) => return Effect::Effectful,
+            | Instruction::DotCall { .. } => return Effect::Effectful,
             Instruction::Call { .. }
             | Instruction::CallStatic { .. }
             | Instruction::Await
@@ -233,13 +202,29 @@ fn scan_declaration_roots(analysis: &mut UnitAnalysis) {
             _ => None,
         });
     match (operator.as_str(), name) {
+        ("defstruct" | "defmutable", Some(name)) => {
+            analysis.native_roots.types.insert(name.clone());
+            analysis.native_types.insert(name);
+            analysis
+                .native_roots
+                .runtime_shims
+                .insert("hara.runtime/named-values".into());
+        }
         ("defprotocol", Some(name)) => {
             analysis.native_roots.protocols.insert(name.clone());
             analysis.native_protocols.insert(name);
+            analysis
+                .native_roots
+                .runtime_shims
+                .insert("hara.runtime/protocol-registry".into());
         }
         ("extend-type", Some(name)) => {
             analysis.native_roots.types.insert(name);
             collect_native_symbols(&form, analysis);
+            analysis
+                .native_roots
+                .runtime_shims
+                .insert("hara.runtime/protocol-extension-registry".into());
         }
         ("defmulti" | "defmethod", Some(name)) => {
             analysis.native_roots.multimethods.insert(name.clone());
@@ -324,7 +309,7 @@ mod tests {
 
     #[test]
     fn declaration_roots_use_canonical_var_identities() {
-        let mut protocol = analysis("(defprotocol Greeter [greet [self]])");
+        let mut protocol = analysis("(defprotocol Greeter [ParentGreeter] (greet [self]))");
         scan_declaration_roots(&mut protocol);
         assert_eq!(
             protocol.native_roots.protocols,
@@ -345,6 +330,17 @@ mod tests {
             .native_protocols
             .iter()
             .any(|root| root.starts_with("multimethod:") && root.ends_with(":0")));
+
+        let mut extension = analysis("(extend-type Widget Greeter (greet [self] :hello))");
+        scan_declaration_roots(&mut extension);
+        assert_eq!(
+            extension.native_roots.types,
+            BTreeSet::from(["demo.core/Widget".into()])
+        );
+        assert!(extension
+            .native_roots
+            .runtime_shims
+            .contains("hara.runtime/protocol-extension-registry"));
     }
 
     #[test]

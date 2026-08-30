@@ -734,7 +734,14 @@ public final class HaraContext {
     base.define("struct", new VariadicBuiltin("std.native.Base/struct", this::nativeBaseStruct));
     base.define("mutable", new VariadicBuiltin("std.native.Base/mutable", this::nativeBaseMutable));
     base.define("protocol", new VariadicBuiltin("std.native.Base/protocol", this::nativeBaseProtocol));
+    base.define(
+        "with-declaration",
+        new VariadicBuiltin("std.native.Base/with-declaration", this::nativeBaseWithDeclaration));
     base.define("extend", new VariadicBuiltin("std.native.Base/extend", this::nativeBaseExtend));
+    base.define(
+        "multimethod",
+        new VariadicBuiltin("std.native.Base/multimethod", this::nativeBaseMultimethod));
+    base.define("method", new VariadicBuiltin("std.native.Base/method", this::nativeBaseMethod));
     base.define("field", new VariadicBuiltin("std.native.Base/field", this::nativeBaseField));
     base.define(
         "special-symbol?",
@@ -977,6 +984,18 @@ public final class HaraContext {
                 }));
   }
 
+  private Object nativeBaseWithDeclaration(Object[] values) {
+    if (values.length != 2) {
+      throw new HaraException("Base/with-declaration expects Namespace and a zero-argument function");
+    }
+    nativeBaseNamespaceValue(values[0], "with-declaration");
+    Object thunk = HaraBox.unwrap(values[1]);
+    if (!isNativeFunctionValue(thunk)) {
+      throw new HaraException("Base/with-declaration expects a zero-argument function");
+    }
+    return withDeclarationTransaction(() -> invokeCallable(thunk, new Object[0]));
+  }
+
   private HaraProtocolInvoker nativeBaseProtocolImplementation(Object value) {
     Object function = HaraBox.unwrap(value);
     if (!isNativeFunctionValue(function)) {
@@ -1027,6 +1046,46 @@ public final class HaraContext {
                     protocol.extend(type, entry.getKey(), entry.getValue());
                   }
                   return type;
+                }));
+  }
+
+  private Object nativeBaseMultimethod(Object[] values) {
+    if (values.length != 3) {
+      throw new HaraException("Base/multimethod expects Namespace, symbol, and dispatch function");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "multimethod");
+    Symbol symbol = nativeBaseSymbol(values[1], "multimethod");
+    Object dispatch = HaraBox.unwrap(values[2]);
+    if (!isNativeFunctionValue(dispatch)) {
+      throw new HaraException("Base/multimethod expects a dispatch function");
+    }
+    return withDeclarationTransaction(
+        () ->
+            inNativeBaseNamespace(
+                target, () -> define(symbol, new HaraMultiFunction(this, dispatch))));
+  }
+
+  private Object nativeBaseMethod(Object[] values) {
+    if (values.length != 4) {
+      throw new HaraException("Base/method expects Namespace, multimethod, dispatch value, and function");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "method");
+    Symbol symbol = nativeBaseSymbol(values[1], "method");
+    Object implementation = HaraBox.unwrap(values[3]);
+    if (!isNativeFunctionValue(implementation)) {
+      throw new HaraException("Base/method expects an implementation function");
+    }
+    return withDeclarationTransaction(
+        () ->
+            inNativeBaseNamespace(
+                target,
+                () -> {
+                  HaraVar variable = target.lookup(symbol.getName());
+                  if (variable == null || !(variable.deref() instanceof HaraMultiFunction multimethod)) {
+                    throw new HaraException("Base/method expects an existing multimethod");
+                  }
+                  multimethod.addMethod(HaraBox.unwrap(values[2]), implementation);
+                  return null;
                 }));
   }
 

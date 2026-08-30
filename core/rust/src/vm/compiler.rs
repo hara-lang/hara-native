@@ -5,8 +5,8 @@
 //! closures with capture-by-value upvalues (including variadic
 //! parameters), direct calls, exceptions, and the registry-direct global
 //! forms — `def`, `defn` (single- and multi-arity, interning real
-//! late-bound vars), `var`, `set!`, `declare`, `defstruct`, `defmutable`, `field`, and
-//! `instance?` (issue #223; see
+//! late-bound vars), `var`, `set!`, `declare`, `field`, and `instance?`
+//! (issue #223; see
 //! `specs/01-lang/010-bytecode/draft/hal-bytecode-vm.edn` `:vm/namespaces`).
 //! Anything else is a typed [`CompileError`] with source context; the
 //! compiler never emits fallback calls into the tree-walking evaluator.
@@ -613,6 +613,27 @@ impl Compiler {
                         self.declare_program_global(&format!("->{name}"));
                         self.declare_program_global(&format!("map->{name}"));
                     }
+                    if operator == "defprotocol" {
+                        let declarations = &items[2..];
+                        let methods = if matches!(
+                            declarations.first().map(crate::core::form_without_metadata),
+                            Some(Form::Vector(_))
+                        ) {
+                            &declarations[1..]
+                        } else {
+                            declarations
+                        };
+                        for declaration in methods {
+                            if let Some(Form::Symbol(method)) = match crate::core::form_without_metadata(declaration) {
+                                Form::List(parts) => parts.first().map(crate::core::form_without_metadata),
+                                _ => None,
+                            } {
+                                if !method.contains('/') {
+                                    self.declare_program_global(method);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -655,6 +676,54 @@ impl Compiler {
                     {
                         if !name.contains('/') {
                             self.declare_program_global(name);
+                        }
+                    }
+                }
+                if operator == "defmulti" {
+                    if let Some(Form::Symbol(name)) =
+                        items.get(1).map(crate::core::form_without_metadata)
+                    {
+                        if !name.contains('/') {
+                            self.declare_program_global(name);
+                        }
+                    }
+                }
+                if matches!(operator.as_str(), "defstruct" | "defmutable") {
+                    if let Some(Form::Symbol(name)) =
+                        items.get(1).map(crate::core::form_without_metadata)
+                    {
+                        if !name.contains('/') {
+                            self.declare_program_global(name);
+                            self.declare_program_global(&format!("->{name}"));
+                            self.declare_program_global(&format!("map->{name}"));
+                        }
+                    }
+                }
+                if operator == "defprotocol" {
+                    if let Some(Form::Symbol(name)) =
+                        items.get(1).map(crate::core::form_without_metadata)
+                    {
+                        if !name.contains('/') {
+                            self.declare_program_global(name);
+                        }
+                    }
+                    let declarations = &items[2..];
+                    let methods = if matches!(
+                        declarations.first().map(crate::core::form_without_metadata),
+                        Some(Form::Vector(_))
+                    ) {
+                        &declarations[1..]
+                    } else {
+                        declarations
+                    };
+                    for declaration in methods {
+                        if let Some(Form::Symbol(method)) = match crate::core::form_without_metadata(declaration) {
+                            Form::List(parts) => parts.first().map(crate::core::form_without_metadata),
+                            _ => None,
+                        } {
+                            if !method.contains('/') {
+                                self.declare_program_global(method);
+                            }
                         }
                     }
                 }
@@ -1079,37 +1148,6 @@ impl Compiler {
             Form::List(elements) => {
                 let children = self.list_children(elements, span, children);
                 match &elements[0] {
-                    Form::Symbol(name)
-                        if matches!(
-                            name.as_str(),
-                            "defprotocol" | "extend-type" | "defmulti" | "defmethod"
-                        ) =>
-                    {
-                        if matches!(name.as_str(), "defprotocol" | "defmulti") {
-                            if let Some(Form::Symbol(declared)) = elements.get(1) {
-                                self.declare_program_global(declared);
-                            }
-                        }
-                        let value = crate::core::form_to_value(form).map_err(|message| {
-                            CompileError::new(
-                                CompileErrorKind::UnsupportedForm,
-                                message,
-                                Some(span.start),
-                            )
-                        })?;
-                        let index = self.constant_index_of(value, span)?;
-                        self.emit(
-                            match name.as_str() {
-                                "defprotocol" => Instruction::DefProtocol(index),
-                                "extend-type" => Instruction::ExtendType(index),
-                                "defmulti" => Instruction::DefMulti(index),
-                                "defmethod" => Instruction::DefMethod(index),
-                                _ => unreachable!("declaration operator was checked"),
-                            },
-                            Some(span.start),
-                        );
-                        Ok(())
-                    }
                     Form::Symbol(name) if self.is_coroutine_var(name, "await") => {
                         self.compile_await(&children, span)
                     }
@@ -1194,9 +1232,6 @@ impl Compiler {
                     }
                     Form::Symbol(name) if name == "var" => self.compile_var(&children, span),
                     Form::Symbol(name) if name == "set!" => self.compile_set(&children, span),
-                    Form::Symbol(name) if name == "defstruct" || name == "defmutable" => {
-                        self.compile_named_definition(&children, span, name == "defmutable")
-                    }
                     Form::Symbol(name)
                         if name == "require" || (matches!(name.as_str(), "ns" | "ns+") && !top) =>
                     {

@@ -16,7 +16,7 @@
 /// - `CallStatic`: pops `argc`, pushes 1 (net `1 - argc`).
 /// - `Jump`: no change.
 /// - `Throw`, `Rethrow`: pop 1; terminal (unwind).
-/// - `GetGlobal`, `VarGlobal`, `DefStruct`, `DefMutable`, `DeclareGlobal`: push 1.
+/// - `GetGlobal`, `VarGlobal`, `DeclareGlobal`: push 1.
 /// - `DefGlobal`, `SetGlobal`, `MutableFieldGet`: pop 1, push 1 (net 0).
 /// - `MutableFieldSet`: pops receiver and replacement, pushes replacement (net -1).
 /// - `InstanceOf`: pops 2, pushes 1 (net -1).
@@ -99,20 +99,6 @@ pub enum Instruction {
     /// when the name is not already bound (`declare`), pushing nil.
     /// Never resets an existing var.
     DeclareGlobal(u32),
-    /// Creates the struct type named by the constant at `name` (qualified
-    /// to the current namespace), interns the constructor vars, and
-    /// pushes the type value. `fields` indexes a vector constant of
-    /// field-name strings.
-    DefStruct {
-        name: u32,
-        fields: u32,
-    },
-    /// Creates the mutable named type at `name`, interns its constructors,
-    /// and pushes nil. Appended after the original HBC0 opcode set.
-    DefMutable {
-        name: u32,
-        fields: u32,
-    },
     /// Pops a mutable instance and pushes the declared field value named by
     /// the string constant at `constants[index]` (`field`).
     MutableFieldGet(u32),
@@ -145,14 +131,6 @@ pub enum Instruction {
         name: u32,
         metadata: Option<u16>,
     },
-    /// Defines a protocol from a validated structured declaration constant.
-    DefProtocol(u32),
-    /// Extends a struct type from a validated structured declaration constant.
-    ExtendType(u32),
-    /// Defines a multimethod from a validated structured declaration constant.
-    DefMulti(u32),
-    /// Adds one multimethod implementation from a validated declaration.
-    DefMethod(u32),
     /// Pushes a first-class callable for a runtime intrinsic.
     IntrinsicValue(u32),
     /// Pushes a first-class callable implemented by the structural runtime.
@@ -230,13 +208,7 @@ impl Instruction {
             Instruction::Call { argc } => -i32::from(*argc),
             Instruction::GetGlobal(_)
             | Instruction::VarGlobal(_)
-            | Instruction::DefStruct { .. }
-            | Instruction::DefMutable { .. }
             | Instruction::DeclareGlobal(_) => 1,
-            Instruction::DefProtocol(_)
-            | Instruction::ExtendType(_)
-            | Instruction::DefMulti(_)
-            | Instruction::DefMethod(_) => 1,
             Instruction::IntrinsicValue(_) => 1,
             Instruction::BuiltinValue(_) => 1,
             Instruction::NamespaceValue(_) | Instruction::NamespaceOperation(_) => 1,
@@ -301,12 +273,6 @@ impl std::fmt::Display for Instruction {
             Instruction::SetGlobal(index) => write!(formatter, "SetGlobal {index}"),
             Instruction::VarGlobal(index) => write!(formatter, "VarGlobal {index}"),
             Instruction::DeclareGlobal(index) => write!(formatter, "DeclareGlobal {index}"),
-            Instruction::DefStruct { name, fields } => {
-                write!(formatter, "DefStruct {name} fields {fields}")
-            }
-            Instruction::DefMutable { name, fields } => {
-                write!(formatter, "DefMutable {name} fields {fields}")
-            }
             Instruction::MutableFieldGet(index) => {
                 write!(formatter, "MutableFieldGet {index}")
             }
@@ -327,10 +293,6 @@ impl std::fmt::Display for Instruction {
                 Some(metadata) => write!(formatter, "DefMacro {name} meta {metadata}"),
                 None => write!(formatter, "DefMacro {name}"),
             },
-            Instruction::DefProtocol(index) => write!(formatter, "DefProtocol {index}"),
-            Instruction::ExtendType(index) => write!(formatter, "ExtendType {index}"),
-            Instruction::DefMulti(index) => write!(formatter, "DefMulti {index}"),
-            Instruction::DefMethod(index) => write!(formatter, "DefMethod {index}"),
             Instruction::IntrinsicValue(target) => {
                 write!(formatter, "IntrinsicValue target {target}")
             }

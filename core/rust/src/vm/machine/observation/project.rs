@@ -142,14 +142,6 @@ pub(super) fn instruction_snapshot(instruction: &Instruction) -> InstructionSnap
         Instruction::SetGlobal(index) => ("set-global", vec![Unsigned(*index as u64)]),
         Instruction::VarGlobal(index) => ("var-global", vec![Unsigned(*index as u64)]),
         Instruction::DeclareGlobal(index) => ("declare-global", vec![Unsigned(*index as u64)]),
-        Instruction::DefStruct { name, fields } => (
-            "def-struct",
-            vec![Unsigned(*name as u64), Unsigned(*fields as u64)],
-        ),
-        Instruction::DefMutable { name, fields } => (
-            "def-mutable",
-            vec![Unsigned(*name as u64), Unsigned(*fields as u64)],
-        ),
         Instruction::MutableFieldGet(index) => ("mutable-field-get", vec![Unsigned(*index as u64)]),
         Instruction::MutableFieldSet(index) => ("mutable-field-set", vec![Unsigned(*index as u64)]),
         Instruction::InstanceOf => ("instance-of", vec![]),
@@ -170,10 +162,6 @@ pub(super) fn instruction_snapshot(instruction: &Instruction) -> InstructionSnap
             }
             ("def-macro", operands)
         }
-        Instruction::DefProtocol(index) => ("def-protocol", vec![Unsigned(*index as u64)]),
-        Instruction::ExtendType(index) => ("extend-type", vec![Unsigned(*index as u64)]),
-        Instruction::DefMulti(index) => ("def-multi", vec![Unsigned(*index as u64)]),
-        Instruction::DefMethod(index) => ("def-method", vec![Unsigned(*index as u64)]),
         Instruction::IntrinsicValue(target) => ("intrinsic-value", vec![Unsigned(*target as u64)]),
         Instruction::BuiltinValue(index) => ("builtin-value", vec![Unsigned(*index as u64)]),
         Instruction::NamespaceValue(index) => ("namespace-value", vec![Unsigned(*index as u64)]),

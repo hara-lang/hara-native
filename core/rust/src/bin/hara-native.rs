@@ -14,6 +14,7 @@ use hara_native::{
     package_manifest::PackageManifest,
     project, Runtime,
 };
+use hara_native::kernel::{read_forms, Form};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::env;
@@ -552,6 +553,10 @@ impl TestCounts {
         self.failed + self.error + self.timeout
     }
 
+    fn total(&self) -> usize {
+        self.passed + self.failed + self.error + self.timeout + self.skipped + self.cancelled
+    }
+
     fn add(&mut self, other: &Self) {
         self.passed += other.passed;
         self.failed += other.failed;
@@ -647,11 +652,41 @@ fn test_counts_from_checks(value: Value) -> Result<TestCounts, String> {
 }
 
 fn test_file_counts(value: Value) -> Result<TestCounts, String> {
-    match value {
+    let counts = match value {
         Value::Map(_) => test_counts_from_summary(value),
         Value::Vector(_) | Value::Tuple(_) => test_counts_from_checks(value),
         _ => Err("test file must return a Test/run summary or Test/check Result vector".into()),
+    }?;
+    if counts.total() == 0 {
+        return Err("test file must contain Test/check cases or Test/register facts".into());
     }
+    Ok(counts)
+}
+
+fn form_without_metadata(mut form: &Form) -> &Form {
+    while let Form::Metadata(_, value) = form {
+        form = value;
+    }
+    form
+}
+
+fn reject_top_level_test_run(source: &str) -> Result<(), String> {
+    let forms = read_forms(source).map_err(|error| error.to_string())?;
+    for form in forms {
+        let Form::List(values) = form_without_metadata(&form.form) else {
+            continue;
+        };
+        let Some(Form::Symbol(name)) = values.first().map(form_without_metadata) else {
+            continue;
+        };
+        if matches!(name.as_str(), "Test/run" | "std.native.Test/run") {
+            return Err(format!(
+                "Test/run is runner-owned; use Test/check or Test/register at namespace top level (line {})",
+                form.span.start.line
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn selected_test_files(
@@ -718,12 +753,14 @@ fn run_project_tests(
         let outcome = (|| -> Result<TestCounts, String> {
             let source = fs::read_to_string(&path)
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            reject_top_level_test_run(&source)?;
             let mut runtime = Runtime::core();
             runtime.register_source_catalog(&catalog);
             if source_foundation {
                 runtime.bootstrap_source_foundation()?;
             }
-            test_file_counts(runtime.eval_native_value(&source)?)
+            runtime.eval_native_value(&source)?;
+            test_file_counts(runtime.eval_native_value("(std.native.Test/run)")?)
         })();
         let file = match outcome {
             Ok(counts) => ProjectTestFile {
@@ -975,8 +1012,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_arguments, parse_test_suite, run_id, run_project_tests, run_test_suite,
-        select_test_cases, signer, Command,
+        parse_arguments, parse_test_suite, reject_top_level_test_run, run_id, run_project_tests,
+        run_test_suite, select_test_cases, signer, Command,
     };
     use hara_native::{identity_tool, package, package_manifest::PackageManifest, tap};
     use std::cell::RefCell;
@@ -1373,18 +1410,18 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("test/fixture/registered_test.hal"),
-            "(ns fixture.registered-test (:require [fixture.math :as math]))\n(Test/register {:desc \"advance increments\" :test (fn [] (math/advance 41)) :expected 42 :meta {:refer (quote fixture.math/advance) :id (quote advance-increments)}})\n(Test/run)\n",
+            "(ns fixture.registered-test (:require [fixture.math :as math]))\n(Test/register {:desc \"advance increments\" :test (fn [] (math/advance 41)) :expected 42 :meta {:refer (quote fixture.math/advance) :id (quote advance-increments)}})\n",
         )
         .unwrap();
         fs::write(
             root.join("test/fixture/check_test.hal"),
-            "(ns fixture.check-test)\n(Test/check [{:desc \"check result\" :test (fn [] (+ 20 22)) :expected 42}])\n",
+            "(ns fixture.check-test)\n(Test/check [{:desc \"first check result\" :test (fn [] (+ 20 22)) :expected 42}])\n(Test/check [{:desc \"second check result\" :test (fn [] (+ 1 1)) :expected 2}])\n",
         )
         .unwrap();
 
         let report = run_project_tests(&root, &[]).unwrap();
         assert_eq!(report.files.len(), 2);
-        assert_eq!(report.counts.passed, 2);
+        assert_eq!(report.counts.passed, 3);
         assert_eq!(report.counts.failing(), 0);
 
         let selected = run_project_tests(
@@ -1393,7 +1430,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selected.files.len(), 1);
-        assert_eq!(selected.counts.passed, 1);
+        assert_eq!(selected.counts.passed, 2);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1431,7 +1468,7 @@ mod tests {
         }
         fs::write(
             root.join("test/fixture/foundation_test.hal"),
-            "(ns fixture.foundation-test (:require [std.foundation :as foundation] [std.foundation.string :as str]))\n(Test/register {:desc \"loads source Foundation\" :test (fn [] [(foundation/root-answer) (str/upper \"hara\")]) :expected [42 \"hara\"] :meta {:refer (quote std.foundation/root-answer) :id (quote source-foundation)}})\n(Test/run)\n",
+            "(ns fixture.foundation-test (:require [std.foundation :as foundation] [std.foundation.string :as str]))\n(Test/register {:desc \"loads source Foundation\" :test (fn [] [(foundation/root-answer) (str/upper \"hara\")]) :expected [42 \"hara\"] :meta {:refer (quote std.foundation/root-answer) :id (quote source-foundation)}})\n",
         )
         .unwrap();
 
@@ -1474,6 +1511,20 @@ mod tests {
         assert!(error.contains("not a .hal file beneath this project's test paths"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_test_runner_reserves_top_level_test_run_for_the_cli() {
+        let error = reject_top_level_test_run(
+            "(ns fixture.legacy-test)\n^{:refer fixture/legacy}\n(Test/run)\n",
+        )
+        .unwrap_err();
+        assert!(error.contains("Test/run is runner-owned"));
+        assert!(error.contains("line 2"));
+        assert!(reject_top_level_test_run(
+            "(ns fixture.helper)\n(defn invoke-runner [] (Test/run))\n",
+        )
+        .is_ok());
     }
 
     #[test]

@@ -401,6 +401,17 @@ pub struct Function {
 }
 
 impl Function {
+    pub(crate) fn accepts_arity(&self, argument_count: usize) -> bool {
+        if !self.clauses.is_empty() {
+            return self
+                .clauses
+                .iter()
+                .any(|clause| clause.accepts_arity(argument_count));
+        }
+        self.variadic.is_some() && argument_count >= self.params.len()
+            || self.variadic.is_none() && argument_count == self.params.len()
+    }
+
     /// Returns the symbol that identifies this callable's definition.
     /// Named source functions use their defining namespace as the origin;
     /// native callables may already carry a qualified display name.
@@ -1726,14 +1737,8 @@ pub(crate) fn syntax_symbol(name: &str) -> bool {
         "declare",
         "def",
         "defmacro",
-        "defmethod",
-        "defmulti",
-        "defmutable",
         "defn",
-        "defprotocol",
-        "defstruct",
         "do",
-        "extend-type",
         "field",
         "fn",
         "if",
@@ -1959,51 +1964,6 @@ pub(crate) fn value_to_form(value: &Value) -> Result<Form, String> {
         ),
         None => form,
     })
-}
-
-/// Evaluates code retained as an immutable bytecode constant. This is used
-/// for namespace-level declarations whose effect mutates runtime protocol or
-/// multimethod registries and therefore cannot be reduced to ordinary stack
-/// instructions.
-pub(crate) fn eval_bytecode_declaration(
-    expected_operator: &str,
-    value: &Value,
-) -> Result<Value, String> {
-    let form = value_to_form(value)?;
-    if !matches!(
-        &form,
-        Form::List(items)
-            if matches!(items.first(), Some(Form::Symbol(operator)) if operator == expected_operator)
-    ) {
-        return Err(format!(
-            "{expected_operator} instruction contains the wrong declaration"
-        ));
-    }
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    if direct_native_execution() {
-        return eval_direct_native_declaration(expected_operator, &form);
-    }
-    let mut env = HashMap::new();
-    if let Ok(registry) = namespace_registry() {
-        env.extend(
-            registry
-                .current()
-                .mappings()
-                .into_iter()
-                .map(|(name, var)| (name.as_str().to_owned(), Value::Var(var))),
-        );
-        refresh_namespace_environment(&registry, &mut env);
-    }
-    let result = eval(&form, &mut env).map_err(|error| {
-        let namespace = namespace_registry()
-            .map(|registry| registry.current().name().as_str().to_owned())
-            .unwrap_or_else(|_| "<unavailable>".into());
-        format!("{expected_operator} in {namespace}: {error}")
-    })?;
-    if let Ok(registry) = namespace_registry() {
-        save_namespace_environment(&registry, &mut env);
-    }
-    Ok(result)
 }
 
 pub(crate) fn bytecode_dynamic_bind(name: &str, value: Value) -> Result<(), String> {

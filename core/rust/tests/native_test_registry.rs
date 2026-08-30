@@ -18,6 +18,25 @@ fn test_check_is_the_case_level_api_and_run_rejects_case_vectors() {
 }
 
 #[test]
+fn test_run_summarizes_top_level_checks_once() {
+    let mut runtime = Runtime::core();
+    let first = runtime
+        .eval_native(
+            "(ns test.check-summary) \
+             (Test/reset) \
+             (Test/check [{:desc \"top-level check\" :test (fn [] (+ 20 22)) :expected 42}]) \
+             (Test/run)",
+        )
+        .unwrap();
+    assert!(first.contains(":passed 1"));
+    assert!(first.contains("top-level check"));
+
+    let second = runtime.eval_native("(Test/run)").unwrap();
+    assert!(second.contains(":passed 1"));
+    assert!(!second.contains(":passed 2"));
+}
+
+#[test]
 fn test_registry_preserves_code_test_metadata_and_summary_shape() {
     let mut runtime = Runtime::core();
     let summary = runtime

@@ -268,11 +268,6 @@ fn write_instruction(out: &mut Writer, instruction: &Instruction) {
             out.byte(19);
             out.u32(*value);
         }
-        DefStruct { name, fields } => {
-            out.byte(20);
-            out.u32(*name);
-            out.u32(*fields);
-        }
         InstanceOf => out.byte(22),
         MakeMultiArity { name, count } => {
             out.byte(23);
@@ -312,22 +307,6 @@ fn write_instruction(out: &mut Writer, instruction: &Instruction) {
             out.u16(*count);
         }
         ToVector => out.byte(35),
-        DefProtocol(index) => {
-            out.byte(41);
-            out.u32(*index);
-        }
-        ExtendType(index) => {
-            out.byte(42);
-            out.u32(*index);
-        }
-        DefMulti(index) => {
-            out.byte(43);
-            out.u32(*index);
-        }
-        DefMethod(index) => {
-            out.byte(44);
-            out.u32(*index);
-        }
         IntrinsicValue(target) => {
             out.byte(51);
             out.u32(*target);
@@ -358,11 +337,6 @@ fn write_instruction(out: &mut Writer, instruction: &Instruction) {
             out.u32(*index);
         }
         Yield => out.byte(46),
-        DefMutable { name, fields } => {
-            out.byte(47);
-            out.u32(*name);
-            out.u32(*fields);
-        }
         MutableFieldGet(value) => {
             out.byte(48);
             out.u32(*value);
@@ -412,10 +386,11 @@ fn read_instruction(reader: &mut Reader<'_>) -> Result<Instruction, String> {
         17 => Instruction::SetGlobal(reader.u32()?),
         18 => Instruction::VarGlobal(reader.u32()?),
         19 => Instruction::DeclareGlobal(reader.u32()?),
-        20 => Instruction::DefStruct {
-            name: reader.u32()?,
-            fields: reader.u32()?,
-        },
+        20 => {
+            return Err(
+                "bytecode artifact uses retired DefStruct opcode 20; rebuild required".into(),
+            )
+        }
         21 => {
             return Err(
                 "bytecode artifact uses retired StructField opcode 21; rebuild required".into(),
@@ -454,19 +429,36 @@ fn read_instruction(reader: &mut Reader<'_>) -> Result<Instruction, String> {
         38 => Instruction::BuiltinValue(reader.u32()?),
         39 => Instruction::DynamicBind(reader.u32()?),
         40 => Instruction::DynamicUnbind(reader.u32()?),
-        41 => Instruction::DefProtocol(reader.u32()?),
-        42 => Instruction::ExtendType(reader.u32()?),
-        43 => Instruction::DefMulti(reader.u32()?),
-        44 => Instruction::DefMethod(reader.u32()?),
+        41 => {
+            return Err(
+                "bytecode artifact uses retired DefProtocol opcode 41; rebuild required".into(),
+            )
+        }
+        42 => {
+            return Err(
+                "bytecode artifact uses retired ExtendType opcode 42; rebuild required".into(),
+            )
+        }
+        43 => {
+            return Err(
+                "bytecode artifact uses retired DefMulti opcode 43; rebuild required".into(),
+            )
+        }
+        44 => {
+            return Err(
+                "bytecode artifact uses retired DefMethod opcode 44; rebuild required".into(),
+            )
+        }
         45 => Instruction::DotCall {
             method: reader.u32()?,
             argc: reader.byte()?,
         },
         46 => Instruction::Yield,
-        47 => Instruction::DefMutable {
-            name: reader.u32()?,
-            fields: reader.u32()?,
-        },
+        47 => {
+            return Err(
+                "bytecode artifact uses retired DefMutable opcode 47; rebuild required".into(),
+            )
+        }
         48 => Instruction::MutableFieldGet(reader.u32()?),
         49 => Instruction::MutableFieldSet(reader.u32()?),
         50 => Instruction::IntrinsicCall {

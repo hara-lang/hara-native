@@ -1,12 +1,9 @@
-//! Global, struct, and multi-arity instruction helpers.
+//! Global and multi-arity instruction helpers.
 
 use crate::lang::data::Symbol;
 use std::rc::Rc;
 
-use super::{
-    constant_named_fields, constant_string, Machine, Program, Value, VmClosure, VmMultiArity,
-    VmSlot,
-};
+use super::{constant_string, Machine, Program, Value, VmClosure, VmMultiArity, VmSlot};
 
 impl Machine {
     #[inline(never)]
@@ -172,42 +169,6 @@ impl Machine {
         };
         crate::core::vm_declare_global(name)?;
         self.stack.push(VmSlot::Nil);
-        Ok(())
-    }
-
-    #[inline(never)]
-    pub(super) fn exec_def_struct(
-        &mut self,
-        program: &Program,
-        name: u32,
-        fields: u32,
-    ) -> Result<(), String> {
-        let Some(name) = constant_string(program, name) else {
-            return Err(format!("constant index {name} out of range"));
-        };
-        let Some(field_names) = constant_named_fields(program, fields, "defstruct")? else {
-            return Err(format!("constant index {fields} out of range"));
-        };
-        let value = crate::core::vm_defstruct(name, field_names)?;
-        self.stack.push(value.into());
-        Ok(())
-    }
-
-    #[inline(never)]
-    pub(super) fn exec_def_mutable(
-        &mut self,
-        program: &Program,
-        name: u32,
-        fields: u32,
-    ) -> Result<(), String> {
-        let Some(name) = constant_string(program, name) else {
-            return Err(format!("constant index {name} out of range"));
-        };
-        let Some(field_names) = constant_named_fields(program, fields, "defmutable")? else {
-            return Err(format!("constant index {fields} out of range"));
-        };
-        let value = crate::core::vm_defmutable(name, field_names)?;
-        self.stack.push(value.into());
         Ok(())
     }
 

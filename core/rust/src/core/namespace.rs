@@ -732,8 +732,7 @@ pub(crate) fn prepare_namespace_form(form: &Form) -> Result<(), String> {
 }
 
 /// Applies a namespace-management form retained in a validated bytecode
-/// constant. This is intentionally separate from `eval_bytecode_declaration`:
-/// `ns`, `ns+`, and `require` need the namespace registry's management
+/// constant. `ns`, `ns+`, and `require` need the namespace registry's management
 /// semantics, but must not re-enter the tree evaluator when a VM or direct
 /// native program executes them.
 pub(crate) fn eval_bytecode_management(value: &Value) -> Result<Value, String> {
