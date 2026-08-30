@@ -527,9 +527,6 @@ pub fn publish_path_with_signer_and_identity<F>(
 where
     F: Fn(&[u8]) -> Result<(String, String), String>,
 {
-    if skip_signed_tag && !dry_run {
-        return Err("publish --skip-signed-tag requires --dry-run".into());
-    }
     let tap_name = if tap_name == "official" {
         "hara"
     } else {
@@ -573,7 +570,7 @@ where
 {
     let policy = tap::fetch_verified_policy(trusted_tap, scratch_root)?;
     let tag = project.release_tag.clone();
-    let commit = source_release_commit(&project.root, &tag, skip_signed_tag)?;
+    let (source_reference, commit) = source_release(&project.root, &tag, skip_signed_tag)?;
     let repository = tap::git(&project.root, ["config", "--get", "remote.origin.url"])?;
     let recipe = validate_recipe(project)?;
     build_archive(project, &scratch_root.join("publish.harp"))?;
@@ -584,7 +581,7 @@ where
         &coordinate,
         &project.version.to_string(),
         &repository,
-        &tag,
+        &source_reference,
         &commit,
         &project_sha256,
         &recipe_sha256,
@@ -609,7 +606,7 @@ where
     }
     if dry_run {
         let status = if skip_signed_tag {
-            "local publish preflight (signed tag skipped)"
+            "untagged-source publish preflight (remote default head verified)"
         } else {
             "publish recipe verified"
         };
@@ -664,20 +661,66 @@ where
     ))
 }
 
-/// Resolves the commit that a publication intent names. A tag-skipping caller
-/// must be a local dry run; callers enforce that boundary before reaching this
-/// helper.
+/// Resolves the commit that a publication intent names. Untagged publication
+/// requires a clean checkout whose HEAD is exactly the origin default branch.
 pub fn source_release_commit(
     root: &Path,
     tag: &str,
     skip_signed_tag: bool,
 ) -> Result<String, String> {
-    if skip_signed_tag {
-        return tap::git(root, ["rev-parse", "HEAD"]);
+    source_release(root, tag, skip_signed_tag).map(|(_, commit)| commit)
+}
+
+fn source_release(
+    root: &Path,
+    tag: &str,
+    skip_signed_tag: bool,
+) -> Result<(String, String), String> {
+    if !skip_signed_tag {
+        tap::git(root, ["tag", "-v", tag])
+            .map_err(|error| format!("publish requires a valid signed tag {tag}: {error}"))?;
+        return Ok((tag.into(), tap::git(root, ["rev-list", "-n", "1", tag])?));
     }
-    tap::git(root, ["tag", "-v", tag])
-        .map_err(|error| format!("publish requires a valid signed tag {tag}: {error}"))?;
-    tap::git(root, ["rev-list", "-n", "1", tag])
+
+    let status = tap::git(root, ["status", "--porcelain", "--untracked-files=all"])?;
+    if !status.is_empty() {
+        return Err("publish without a signed tag requires a clean worktree".into());
+    }
+    let commit = tap::git(root, ["rev-parse", "HEAD"])?;
+    let remote_head =
+        tap::git(root, ["ls-remote", "--symref", "origin", "HEAD"]).map_err(|error| {
+            format!("publish without a signed tag cannot resolve origin default branch: {error}")
+        })?;
+    let branch = remote_head
+        .lines()
+        .find_map(|line| {
+            let (reference, name) = line.split_once('\t')?;
+            if name == "HEAD" {
+                reference.strip_prefix("ref: refs/heads/")
+            } else {
+                None
+            }
+        })
+        .ok_or("publish without a signed tag cannot determine origin default branch")?;
+    let remote_ref = format!("refs/heads/{branch}");
+    let remote_commit = tap::git(root, ["ls-remote", "origin", remote_ref.as_str()])
+        .map_err(|error| {
+            format!(
+                "publish without a signed tag cannot read origin default branch {branch}: {error}"
+            )
+        })?
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| {
+            format!("publish without a signed tag cannot read origin default branch {branch}")
+        })?
+        .to_owned();
+    if remote_commit != commit {
+        return Err(format!(
+            "publish without a signed tag requires HEAD {commit} to match origin remote default branch {branch} at {remote_commit}"
+        ));
+    }
+    Ok((format!("untagged:{branch}"), commit))
 }
 
 fn option_value(args: &[String], flag: &str) -> Result<String, String> {
