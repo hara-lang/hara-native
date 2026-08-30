@@ -88,14 +88,15 @@ Commands:
                   --public-key HEX --github-subject ID --coordinate COORDINATE
                   --authorization-public-key HEX [--dry-run]
                                 offline-root-sign one reviewed exact publisher grant
-  publish [--tap TAP] [--dry-run [--skip-signed-tag]] [PROJECT]
+  publish [--tap TAP] [--dry-run] [--skip-signed-tag] [PROJECT]
                                 sign and submit a source-package publication request
 
 `publish --dry-run` performs every local identity, source-tag, recipe, and
 registry-policy check without submitting a request. `publish` submits the
 signed request; the protected registry deploys the final attested release.
-`--skip-signed-tag` is limited to a local dry run and never produces a
-publishable preflight."#
+`--skip-signed-tag` uses a clean checkout whose HEAD exactly matches origin's
+default branch instead of a signed Git tag. The publisher's Ed25519 signature
+binds that remote source commit to the request."#
     );
 }
 
@@ -301,9 +302,6 @@ fn cli_command(request: &Request) -> Result<Command, String> {
             }
             let dry_run = enabled("dry-run")?;
             let skip_signed_tag = enabled("skip-signed-tag")?;
-            if skip_signed_tag && !dry_run {
-                return Err("hara-native publish --skip-signed-tag requires --dry-run".into());
-            }
             Ok(Command::Publish {
                 project: non_empty(argument("project")?)
                     .map(PathBuf::from)
@@ -994,9 +992,12 @@ mod tests {
 
     fn test_git(
         root: &std::path::Path,
-        arguments: impl IntoIterator<Item = &'static str>,
+        arguments: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
     ) -> Result<String, String> {
-        let arguments = arguments.into_iter().collect::<Vec<_>>();
+        let arguments = arguments
+            .into_iter()
+            .map(|argument| argument.as_ref().to_owned())
+            .collect::<Vec<_>>();
         let output = ProcessCommand::new("git")
             .args(&arguments)
             .current_dir(root)
@@ -1005,7 +1006,11 @@ mod tests {
         if !output.status.success() {
             return Err(format!(
                 "git {} failed: {}",
-                arguments.join(" "),
+                arguments
+                    .iter()
+                    .map(|argument| argument.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
@@ -1123,10 +1128,9 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_signed_tag_skip_for_a_local_publish_dry_run() {
+    fn accepts_signed_tag_skip_for_a_publish_request() {
         let parsed = parse_arguments([
             "publish".into(),
-            "--dry-run".into(),
             "--skip-signed-tag".into(),
             "examples/smoke-answer".into(),
         ]);
@@ -1135,13 +1139,23 @@ mod tests {
             Ok(Command::Publish {
                 project,
                 tap,
-                dry_run: true,
+                dry_run: false,
                 skip_signed_tag: true,
             }) if project == std::path::PathBuf::from("examples/smoke-answer") && tap == "hara"
         ));
 
-        let error = parse_arguments(["publish".into(), "--skip-signed-tag".into()]).unwrap_err();
-        assert!(error.contains("--skip-signed-tag requires --dry-run"));
+        assert!(matches!(
+            parse_arguments([
+                "publish".into(),
+                "--dry-run".into(),
+                "--skip-signed-tag".into(),
+            ]),
+            Ok(Command::Publish {
+                dry_run: true,
+                skip_signed_tag: true,
+                ..
+            })
+        ));
     }
 
     #[cfg(unix)]
@@ -1194,12 +1208,18 @@ mod tests {
     }
 
     #[test]
-    fn signed_tag_skip_uses_head_only_for_a_local_preflight() {
+    fn untagged_source_requires_a_clean_remote_default_head() {
         let root = std::env::temp_dir().join(format!(
-            "hara-native-publish-tag-skip-{}",
-            std::process::id()
+            "hara-native-publish-untagged-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
+        let remote = root.with_extension("origin.git");
         let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&remote);
 
         let result = (|| -> Result<(), String> {
             fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -1209,21 +1229,44 @@ mod tests {
             fs::write(root.join("README"), "fixture\n").map_err(|error| error.to_string())?;
             test_git(&root, ["add", "README"])?;
             test_git(&root, ["commit", "-m", "fixture"])?;
+            test_git(&root, ["branch", "-M", "main"])?;
+            let remote_path = remote
+                .to_str()
+                .ok_or("temporary remote path is not valid UTF-8")?;
+            test_git(&root, ["init", "--bare", remote_path])?;
+            test_git(&root, ["remote", "add", "origin", remote_path])?;
+            test_git(&root, ["push", "--set-upstream", "origin", "main"])?;
+            test_git(&remote, ["symbolic-ref", "HEAD", "refs/heads/main"])?;
 
             let head = test_git(&root, ["rev-parse", "HEAD"])?;
             let skipped = package::source_release_commit(&root, "v0.1.0", true)?;
             if skipped != head {
-                return Err(format!("tag skip resolved {skipped}, expected {head}"));
+                return Err(format!(
+                    "untagged source resolved {skipped}, expected {head}"
+                ));
             }
-            let error = package::source_release_commit(&root, "v0.1.0", false).unwrap_err();
-            if !error.contains("valid signed tag v0.1.0") {
-                return Err(format!("signed-tag check failed unexpectedly: {error}"));
+
+            fs::write(root.join("README"), "dirty\n").map_err(|error| error.to_string())?;
+            let error = package::source_release_commit(&root, "v0.1.0", true).unwrap_err();
+            if !error.contains("clean worktree") {
+                return Err(format!("dirty worktree check failed unexpectedly: {error}"));
+            }
+            test_git(&root, ["checkout", "--", "README"])?;
+
+            fs::write(root.join("UNPUSHED"), "fixture\n").map_err(|error| error.to_string())?;
+            test_git(&root, ["add", "UNPUSHED"])?;
+            test_git(&root, ["commit", "-m", "unpublished"])?;
+            let error = package::source_release_commit(&root, "v0.1.0", true).unwrap_err();
+            if !error.contains("remote default branch") {
+                return Err(format!("remote head check failed unexpectedly: {error}"));
             }
             Ok(())
         })();
         let cleanup = fs::remove_dir_all(&root);
+        let remote_cleanup = fs::remove_dir_all(&remote);
 
         cleanup.map_err(|error| error.to_string()).unwrap();
+        remote_cleanup.map_err(|error| error.to_string()).unwrap();
         result.unwrap();
     }
 

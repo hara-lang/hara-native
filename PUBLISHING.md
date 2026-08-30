@@ -163,8 +163,8 @@ that will sign and submit the request:
 HARA_DIST_HOME="$(mktemp -d)" "$HARA_NATIVE" bundle verify /tmp/acme-widgets-1.2.3.harp
 ```
 
-The publisher binds a release to a Git tag named exactly the package version
-(for example, `1.2.3`). `:project/release-tag` can override that default for a
+The preferred source proof is a Git tag named exactly the package version (for
+example, `1.2.3`). `:project/release-tag` can override that default for a
 monorepo. Ensure the worktree is clean, push the source commit, create a signed
 tag, and verify it locally and on the remote before requesting publication:
 
@@ -180,20 +180,41 @@ git ls-remote --tags origin refs/tags/1.2.3
 Use your repository’s normal protected-branch/release policy when the source
 branch or tag requires review. Do not move or reuse a published version tag.
 
-### Local preflight before signing the tag
+### Publish without a signed Git tag
 
-While preparing a real package repository, this local-only diagnostic can run
-the remaining preflight checks before a release tag exists:
+When Git-tag signing is unavailable, `--skip-signed-tag` uses the existing
+publisher Ed25519 key as the source authorization. It is permitted for both a
+dry run and a publication request only when the package is built from a clean
+checkout whose `HEAD` exactly matches `origin`'s default branch. The signed
+intent then carries `untagged:<default-branch>` as its source reference and the
+exact remote commit. This prevents unpublished or local-only source from being
+released.
+
+If the active worktree contains unrelated work, create a clean worktree at the
+remote default branch and publish the package path from there instead:
+
+```text
+git fetch origin
+git worktree add --detach ../acme-widgets-release origin/main
+"$HARA_NATIVE" publish --tap hara --skip-signed-tag ../acme-widgets-release
+```
+
+Run the untagged preflight:
 
 ```text
 "$HARA_NATIVE" publish --tap hara --dry-run --skip-signed-tag .
 ```
 
-It uses the current Git `HEAD` only to construct a local diagnostic intent. It
-does not verify source-release provenance, is rejected unless `--dry-run` is
-also present, and can never submit a publication. It still checks the trusted
-policy, origin, recipe, signer, and coordinate grant. Create and verify the
-signed version tag before using the complete preflight below.
+Then submit the authorized request:
+
+```text
+"$HARA_NATIVE" publish --tap hara --skip-signed-tag .
+```
+
+Use a signed Git tag whenever your repository policy requires it. An untagged
+request still requires the trusted identity policy, an authorized publisher
+key, a detached Ed25519 intent signature, recipe validation, and registry
+attestation.
 
 ## Request publication
 
@@ -203,9 +224,10 @@ First perform the complete non-mutating publisher preflight:
 "$HARA_NATIVE" publish --tap hara --dry-run .
 ```
 
-The dry run verifies the trusted tap policy, the signed `1.2.3` source tag,
-the origin repository, recipe digest, detached publisher signature, and the
-coordinate grant. It does not contact the publication endpoint.
+The dry run verifies the trusted tap policy, signed-tag or remote-default-head
+source provenance, the origin repository, recipe digest, detached publisher
+signature, and the coordinate grant. It does not contact the publication
+endpoint.
 
 When the dry run succeeds and the release is authorized, request publication:
 
@@ -217,7 +239,8 @@ The CLI posts the signed canonical intent to
 `https://packages.hara-lang.org/v1/publications`. Record the returned request
 or release identifier. Treat it as a request—not as a published package—until
 the registry has rebuilt the archive from the signed tag, validated the recipe,
-and returned its attestation.
+and returned its attestation. For an untagged request, the registry rebuilds
+from the named remote-default commit rather than a Git tag.
 
 ## Verify the published result
 
@@ -230,20 +253,19 @@ HARA_DIST_HOME="$(mktemp -d)" /path/to/hara-native bundle verify downloaded.harp
 HARA_DIST_HOME="$(mktemp -d)" /path/to/hara-native bundle run downloaded.harp --entry acme.widgets.main/main
 ```
 
-Compare the final coordinate, version, signed source tag/commit, recipe digest,
-archive SHA-256, publisher key id, and registry attestation to the release
-request. A failed rebuild, missing grant, changed tag, or digest mismatch is a
-failed publication: publish a new version after correction rather than
-overwriting the requested release.
+Compare the final coordinate, version, signed source tag or untagged source
+reference/commit, recipe digest, archive SHA-256, publisher key id, and
+registry attestation to the release request. A failed rebuild, missing grant,
+changed source reference, or digest mismatch is a failed publication: publish
+a new version after correction rather than overwriting the requested release.
 
 ## Current limitations
 
 `smoke-answer` contains the minimal typed recipe used for the first protected
-namespace rollout. `publish --dry-run examples/smoke-answer` intentionally
-requires the enclosing source repository to have a valid signed `0.1.0` tag
-before it reaches recipe and grant checks. Use `make test-examples` for local
-fixture verification. `--skip-signed-tag` can inspect later local checks in an
-untagged repository, but it never makes a request releasable.
+namespace rollout. `publish --dry-run examples/smoke-answer` verifies its
+signed `0.1.0` tag by default. Use `--skip-signed-tag` from a clean checkout at
+the remote default head to use the Ed25519-backed untagged-source flow. Use
+`make test-examples` for local fixture verification.
 Do not bypass the identity and registry protocol by uploading a local archive:
 `hara-native publish` always sends a signed source-package request, and the
 registry remains the authority that deploys the immutable release.
