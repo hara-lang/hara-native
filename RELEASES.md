@@ -5,31 +5,43 @@ browser packages, and trusted provider adapters. Canonical HAL, provider package
 manifests, HARP archives, and the user-facing `hara` CLI remain in the Hara
 source/package repositories.
 
-1. Update `release/compatibility.json` for the new native version and ABI.
-2. Run the native stacks in [core/rust/TESTING.md](core/rust/TESTING.md).
-3. Update the Rust, Maven, and npm package versions together, then push a `v*`
-   tag or run the **Native release** workflow for an existing tag.
-4. The workflow builds `hara-native` for Linux x86_64, macOS x86_64, and macOS
-   arm64; builds the JVM JAR; and packs both browser host packages.
-5. The tagged release publishes the repository-owned Rust dependency chain
-   (`hara-abi`, `hara-protocol-macros`, then `hara-native`) to crates.io. The
-   first release requires a `CRATES_IO_TOKEN` in the protected `crates-io`
-   environment; later releases may move to crates.io trusted publishing.
-   The other `core/rust/crates/*` packages remain internal or separate product
-   surfaces. PostgreSQL support is deliberately outside this core release
-   train; a core runtime rejects PostgreSQL authority rather than loading an
-   extension from another repository.
-6. The same release builds and verifies a multi-platform OCI image containing
-   the `hara-native` executable, then publishes it as
-   `ghcr.io/hara-lang/hara-native:<version>` and records the immutable digest
-   in the release payload.
-7. The tagged release publishes `hara-native-jvm` to Maven and the browser/HTA
-   packages to npm at `packages.hara-lang.org`. It requires the protected
-   `packages` environment secrets `PACKAGES_MAVEN_USERNAME`,
-   `PACKAGES_MAVEN_PASSWORD`, and `PACKAGES_NPM_TOKEN`.
-8. The final publish job rejects source-bearing payloads, computes
-   `SHA256SUMS`, and attaches `release-manifest.json` with each asset name,
-   size, and exact SHA-256 to the GitHub release.
+1. Make every release change on `main`, including the single canonical version
+   in `release/version.json`. It must agree with every public Cargo, Maven,
+   npm, compatibility, and JVM version declaration.
+2. Promote that reviewed commit with a pull request from `main` to the protected
+   `release` branch. The release preflight runs the full native-host suite,
+   validates the version contract, packages public artifacts, and checks the
+   OCI build without publishing anything.
+3. After the `release` preflight succeeds, dispatch **Native release promotion**
+   on the current `release` branch. It refuses another ref, retests the commit,
+   creates immutable `v<version>` draft-release intent, and serializes releases
+   for that branch.
+4. The promotion publishes the repository-owned Rust dependency chain
+   (`hara-abi`, `hara-hta`, `hara-protocol-macros`, then `hara-native`) to
+   crates.io using `CRATES_IO_TOKEN` from the protected `crates-io` environment. Other
+   `core/rust/crates/*` packages remain internal or separate product surfaces.
+5. It publishes `hara-native-jvm` to Maven and the browser/HTA packages to npm
+   at `packages.hara-lang.org`, using the protected `packages` environment
+   secrets `PACKAGES_MAVEN_USERNAME`, `PACKAGES_MAVEN_PASSWORD`, and
+   `PACKAGES_NPM_TOKEN`.
+6. It also publishes and pull-runs the multi-platform image
+   `ghcr.io/hara-lang/hara-native:<version>`. The workflow creates Linux and
+   macOS CLI archives, verifies fresh crates.io/Maven/npm consumers, records
+   registry integrities and the immutable OCI digest, then finalizes the GitHub
+   release with `SHA256SUMS` and `release-manifest.json`.
+
+If a registry publication fails after the draft intent is created, correct only
+the delivery problem and rerun the same `release` commit. The workflow permits
+an existing artifact only for that exact draft/tag recovery path; a source or
+version change requires a new version on `main`.
+
+Repository administrators bootstrap this once: create `release` from the
+current `main` head; require the **Native release preflight / release ready**
+check and pull requests on `release`; and restrict the `crates-io` and
+`packages` environments to approved release maintainers. `crates-io` stores
+`CRATES_IO_TOKEN`; `packages` stores `PACKAGES_MAVEN_USERNAME`,
+`PACKAGES_MAVEN_PASSWORD`, and `PACKAGES_NPM_TOKEN`. Publication stays a
+manual workflow dispatch from `release`; pushing a tag cannot publish.
 
 Maven and npm host packages are configured for
 `packages.hara-lang.org` (`/maven/releases` and `/npm/`). Browser HARP package

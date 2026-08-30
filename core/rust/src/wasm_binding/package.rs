@@ -30,7 +30,7 @@ const BUILD_PRODUCT_FILE: &str = "hara.build-product.edn";
 const CONFORMANCE_FILE: &str = "conformance/bindings.edn";
 const ADAPTER_FILE: &str = "adapter.wasm";
 const ADAPTER_MANIFEST_FILE: &str = "adapter.edn";
-const GENERATED_VERSION: &str = "0.1.0";
+const GENERATED_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 

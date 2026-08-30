@@ -21,7 +21,7 @@ Foundation package.
 
 ```text
 make test-jvm
-java -jar core/java/target/hara-native-jvm-0.1.0.jar eval "(+ 20 22)"
+java -jar core/java/target/hara-native-jvm-0.1.6.jar eval "(+ 20 22)"
 ```
 
 The Maven suite is explicitly scoped to the native CLI serial runner and HARP
