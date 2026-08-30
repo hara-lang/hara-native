@@ -491,6 +491,25 @@ fn publish(args: &[String]) -> Result<(), String> {
 }
 
 pub fn publish_path(path: &Path, tap_name: &str, dry_run: bool) -> Result<String, String> {
+    publish_path_with_signer(path, tap_name, dry_run, false, tap::sign)
+}
+
+/// Publish a package through a caller-owned detached-intent signer. Embedders
+/// use this form when the signer is part of the host executable rather than a
+/// child process named by `HARA_SIGNER`.
+pub fn publish_path_with_signer<F>(
+    path: &Path,
+    tap_name: &str,
+    dry_run: bool,
+    skip_signed_tag: bool,
+    signer: F,
+) -> Result<String, String>
+where
+    F: Fn(&[u8]) -> Result<(String, String), String>,
+{
+    if skip_signed_tag && !dry_run {
+        return Err("publish --skip-signed-tag requires --dry-run".into());
+    }
     let tap_name = if tap_name == "official" {
         "hara"
     } else {
@@ -507,22 +526,32 @@ pub fn publish_path(path: &Path, tap_name: &str, dry_run: bool) -> Result<String
     }
     let trusted_tap = tap::trusted_or_builtin(&tap::config_root(), &tap_name)?;
     let scratch = scratch("publish")?;
-    let result = publish_inner(&project, &trusted_tap, dry_run, &scratch);
+    let result = publish_inner(
+        &project,
+        &trusted_tap,
+        dry_run,
+        skip_signed_tag,
+        &scratch,
+        &signer,
+    );
     let _ = fs::remove_dir_all(&scratch);
     result
 }
 
-fn publish_inner(
+fn publish_inner<F>(
     project: &Project,
     trusted_tap: &Tap,
     dry_run: bool,
+    skip_signed_tag: bool,
     scratch_root: &Path,
-) -> Result<String, String> {
+    signer: &F,
+) -> Result<String, String>
+where
+    F: Fn(&[u8]) -> Result<(String, String), String>,
+{
     let policy = tap::fetch_verified_policy(trusted_tap, scratch_root)?;
     let tag = format!("v{}", project.version);
-    tap::git(&project.root, ["tag", "-v", &tag])
-        .map_err(|error| format!("publish requires a valid signed tag {tag}: {error}"))?;
-    let commit = tap::git(&project.root, ["rev-list", "-n", "1", &tag])?;
+    let commit = source_release_commit(&project.root, &tag, skip_signed_tag)?;
     let repository = tap::git(&project.root, ["config", "--get", "remote.origin.url"])?;
     let recipe = validate_recipe(project)?;
     build_archive(project, &scratch_root.join("publish.harp"))?;
@@ -538,12 +567,17 @@ fn publish_inner(
         &trusted_tap.name,
         &policy.revision,
     );
-    let (key_id, signature) = tap::sign(intent.as_bytes())?;
+    let (key_id, signature) = signer(intent.as_bytes())?;
     tap::authorize(&policy, &key_id, &coordinate, intent.as_bytes(), &signature)?;
     if dry_run {
+        let status = if skip_signed_tag {
+            "local publish preflight (signed tag skipped)"
+        } else {
+            "publish recipe verified"
+        };
         return Ok(format!(
-            "publish recipe verified: {} {} tap={} recipe=sha256:{}",
-            coordinate, project.version, trusted_tap.name, recipe_sha256
+            "{status}: {} {} tap={} recipe=sha256:{}",
+            coordinate, project.version, trusted_tap.name, recipe_sha256,
         ));
     }
     let endpoint = trusted_tap
@@ -579,6 +613,22 @@ fn publish_inner(
         "publish requested: {}",
         String::from_utf8_lossy(&output.stdout).trim()
     ))
+}
+
+/// Resolves the commit that a publication intent names. A tag-skipping caller
+/// must be a local dry run; callers enforce that boundary before reaching this
+/// helper.
+pub fn source_release_commit(
+    root: &Path,
+    tag: &str,
+    skip_signed_tag: bool,
+) -> Result<String, String> {
+    if skip_signed_tag {
+        return tap::git(root, ["rev-parse", "HEAD"]);
+    }
+    tap::git(root, ["tag", "-v", tag])
+        .map_err(|error| format!("publish requires a valid signed tag {tag}: {error}"))?;
+    tap::git(root, ["rev-list", "-n", "1", tag])
 }
 
 fn option_value(args: &[String], flag: &str) -> Result<String, String> {

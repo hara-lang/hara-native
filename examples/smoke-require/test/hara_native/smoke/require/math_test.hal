@@ -1,0 +1,8 @@
+(ns hara-native.smoke.require.math-test
+  (:require [hara-native.smoke.require.math :as math]))
+
+^{:refer hara-native.smoke.require.math/advance}
+(Test/run
+ [{:name "advances the portable smoke value"
+   :test (fn [] (math/advance 41))
+   :expected 42}])

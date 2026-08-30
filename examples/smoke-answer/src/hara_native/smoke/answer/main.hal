@@ -1,0 +1,7 @@
+(ns hara-native.smoke.answer.main
+  (:config {:role :internal}))
+
+(defn main []
+  (+ 19 23))
+
+(main)

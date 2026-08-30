@@ -187,7 +187,8 @@ pub(crate) mod declarations {
         namespace = "std.native",
         name = "Test",
         methods = [
-            "catalog", "config", "context", "events", "compare", "run", "result", "passed?", "actual",
+            "catalog", "config", "context", "events", "compare", "check", "register", "facts", "get",
+            "remove", "purge", "reset", "run-fact", "run", "summary", "result", "passed?", "actual",
             "expected", "failures", "failure-seq", "failure-count", "failure", "failure?"
         ],
         provider = native_test_provider

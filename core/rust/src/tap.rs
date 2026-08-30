@@ -87,7 +87,7 @@ pub fn bootstrap_with_official_root(
         "hara" | "official" => Tap {
             name: "hara".into(),
             registry: vec!["https://packages.hara-lang.org".into()],
-            identity: vec!["https://id.hara-lang.org".into()],
+            identity: vec!["https://github.com/hara-lang/hara-identity.git".into()],
             identity_key: identity_key.into(),
             trust: TrustMode::SignedRoot,
         },
@@ -181,7 +181,7 @@ pub fn trusted_or_builtin(root: &Path, name: &str) -> Result<Tap, String> {
         return Ok(Tap {
             name: "hara".into(),
             registry: vec!["https://packages.hara-lang.org".into()],
-            identity: vec!["https://id.hara-lang.org".into()],
+            identity: vec!["https://github.com/hara-lang/hara-identity.git".into()],
             identity_key: official_root_fingerprint()?,
             trust: TrustMode::SignedRoot,
         });

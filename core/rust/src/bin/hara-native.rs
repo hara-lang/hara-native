@@ -4,7 +4,7 @@
 //! verified HARP archive.  The user-facing `hara` command is intentionally a
 //! source-package wrapper and is not built into this binary.
 
-use hara_native::{package, package_manifest::PackageManifest, project, Runtime};
+use hara_native::{core::Value, identity_tool, package, package_manifest::PackageManifest, project, Runtime};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::env;
@@ -12,14 +12,25 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+#[path = "hara-signer.rs"]
+mod signer;
+
 #[derive(Debug)]
 enum Command {
     Eval(String),
     Run(PathBuf),
     Repl,
     Test {
+        project: PathBuf,
+        files: Vec<PathBuf>,
+    },
+    TestJson {
         suite: PathBuf,
         groups: Vec<String>,
+    },
+    BundleBuild {
+        project: PathBuf,
+        output: Option<PathBuf>,
     },
     BundleVerify(PathBuf),
     BundleInstall(PathBuf),
@@ -27,24 +38,51 @@ enum Command {
         archive: PathBuf,
         entry: Option<String>,
     },
+    Signer(Vec<String>),
+    Id(Vec<String>),
+    Publish {
+        project: PathBuf,
+        tap: String,
+        dry_run: bool,
+        skip_signed_tag: bool,
+    },
     Help,
     Version,
 }
 
 fn usage() {
     println!(
-        "hara-native <command>\n\n\
-         Commands:\n\
-           eval FORM                     evaluate one core-language form\n\
-           run FILE                      evaluate a source file without libraries\n\
-           repl                          start a core-language REPL\n\
-           test SUITE.json [GROUP...]    run selected host tests serially in one runtime\n\
-           bundle verify ARCHIVE.harp    verify archive paths, digests, and metadata\n\
-           bundle install ARCHIVE.harp   verify and install a content-addressed package\n\
-           bundle run ARCHIVE.harp [--entry NAMESPACE/SYMBOL]\n\
-                                       mount an installed package and evaluate its main\n\n\
-         Hara language libraries and the full `hara` CLI are source packages;\n\
-         install them through a verified .harp archive."
+        r#"hara-native <command>
+
+Commands:
+  eval FORM                     evaluate one core-language form
+  run FILE                      evaluate a source file without libraries
+  repl                          start a core-language REPL
+  test [--project PATH] [--file PATH]...
+                                run project Test/* files in fresh runtimes
+  test-json SUITE.json [GROUP...]
+                                run selected JSON host tests in one runtime
+  bundle build PROJECT [--output ARCHIVE.harp]
+                                package a source project into a HARP archive
+  bundle verify ARCHIVE.harp    verify archive paths, digests, and metadata
+  bundle install ARCHIVE.harp   verify and install a content-addressed package
+  bundle run ARCHIVE.harp [--entry NAMESPACE/SYMBOL]
+                                mount an installed package and evaluate its main
+  signer generate --key-file PATH
+                                create a local development Ed25519 key
+  signer public-key --key-file PATH
+                                print the key's lowercase public-key hex
+  signer sign                   sign a canonical intent from stdin
+  id <login|enroll|status|key|namespace> ...
+                                manage a publisher identity with the integrated signer
+  publish [--tap TAP] [--dry-run [--skip-signed-tag]] [PROJECT]
+                                sign and submit a source-package publication request
+
+`publish --dry-run` performs every local identity, source-tag, recipe, and
+registry-policy check without submitting a request. `publish` submits the
+signed request; the protected registry deploys the final attested release.
+`--skip-signed-tag` is limited to a local dry run and never produces a
+publishable preflight."#
     );
 }
 
@@ -68,13 +106,78 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Comman
             }
             Ok(Command::Repl)
         }
-        "test" => Ok(Command::Test {
-            suite: required_path(&mut arguments, "test")?,
+        "test" => parse_project_test(arguments),
+        "test-json" => Ok(Command::TestJson {
+            suite: required_path(&mut arguments, "test-json")?,
             groups: arguments.collect(),
         }),
         "bundle" => parse_bundle(arguments),
+        "signer" => Ok(Command::Signer(arguments.collect())),
+        "id" => Ok(Command::Id(arguments.collect())),
+        "publish" => parse_publish(arguments),
         other => Err(format!("unknown hara-native command: {other}")),
     }
+}
+
+fn parse_project_test(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
+    let mut project = PathBuf::from(".");
+    let mut files = Vec::new();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--project" => {
+                project = required_path(&mut arguments, "test --project")?;
+            }
+            "--file" => files.push(required_path(&mut arguments, "test --file")?),
+            option if option.starts_with('-') => {
+                return Err(format!("unknown hara-native test option: {option}"));
+            }
+            argument => {
+                return Err(format!(
+                    "hara-native test does not accept {argument}; use --project or --file"
+                ));
+            }
+        }
+    }
+    Ok(Command::Test { project, files })
+}
+
+fn parse_publish(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
+    let mut tap = "hara".to_owned();
+    let mut dry_run = false;
+    let mut skip_signed_tag = false;
+    let mut project = None;
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--tap" => {
+                tap = arguments
+                    .next()
+                    .ok_or_else(|| "hara-native publish --tap requires a tap name".to_owned())?;
+                if tap.is_empty() || tap.starts_with('-') {
+                    return Err("hara-native publish --tap requires a tap name".into());
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--skip-signed-tag" => skip_signed_tag = true,
+            option if option.starts_with('-') => {
+                return Err(format!("unknown hara-native publish option: {option}"));
+            }
+            path if project.is_none() => project = Some(PathBuf::from(path)),
+            path => {
+                return Err(format!(
+                    "hara-native publish accepts one project path, not {path}"
+                ))
+            }
+        }
+    }
+    if skip_signed_tag && !dry_run {
+        return Err("hara-native publish --skip-signed-tag requires --dry-run".into());
+    }
+    Ok(Command::Publish {
+        project: project.unwrap_or_else(|| PathBuf::from(".")),
+        tap,
+        dry_run,
+        skip_signed_tag,
+    })
 }
 
 fn required_path(
@@ -90,12 +193,19 @@ fn required_path(
 fn parse_bundle(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
     let operation = arguments
         .next()
-        .ok_or_else(|| "hara-native bundle requires verify, install, or run".to_owned())?;
-    let archive = required_path(&mut arguments, "bundle")?;
+        .ok_or_else(|| "hara-native bundle requires build, verify, install, or run".to_owned())?;
     match operation.as_str() {
-        "verify" => no_extra(arguments, Command::BundleVerify(archive)),
-        "install" => no_extra(arguments, Command::BundleInstall(archive)),
+        "build" => parse_bundle_build(arguments),
+        "verify" => {
+            let archive = required_path(&mut arguments, "bundle verify")?;
+            no_extra(arguments, Command::BundleVerify(archive))
+        }
+        "install" => {
+            let archive = required_path(&mut arguments, "bundle install")?;
+            no_extra(arguments, Command::BundleInstall(archive))
+        }
         "run" => {
+            let archive = required_path(&mut arguments, "bundle run")?;
             let entry = match arguments.next() {
                 None => None,
                 Some(option) if option == "--entry" => Some(arguments.next().ok_or_else(|| {
@@ -110,9 +220,25 @@ fn parse_bundle(mut arguments: impl Iterator<Item = String>) -> Result<Command, 
             no_extra(arguments, Command::BundleRun { archive, entry })
         }
         other => Err(format!(
-            "unknown hara-native bundle operation: {other}; expected verify, install, or run"
+            "unknown hara-native bundle operation: {other}; expected build, verify, install, or run"
         )),
     }
+}
+
+fn parse_bundle_build(mut arguments: impl Iterator<Item = String>) -> Result<Command, String> {
+    let project = required_path(&mut arguments, "bundle build")?;
+    let output = match arguments.next() {
+        None => None,
+        Some(option) if option == "--output" => {
+            Some(required_path(&mut arguments, "bundle build --output")?)
+        }
+        Some(option) => {
+            return Err(format!(
+                "unknown hara-native bundle build option: {option}; expected --output"
+            ));
+        }
+    };
+    no_extra(arguments, Command::BundleBuild { project, output })
 }
 
 fn no_extra(
@@ -130,10 +256,27 @@ fn run(command: Command) -> Result<(), String> {
         Command::Eval(source) => evaluate(&source),
         Command::Run(path) => evaluate_file(&path),
         Command::Repl => repl(),
-        Command::Test { suite, groups } => run_test_suite(&suite, &groups),
+        Command::Test { project, files } => run_project_tests(&project, &files).map(|_| ()),
+        Command::TestJson { suite, groups } => run_test_suite(&suite, &groups),
+        Command::BundleBuild { project, output } => build_bundle(&project, output.as_deref()),
         Command::BundleVerify(archive) => verify_bundle(&archive),
         Command::BundleInstall(archive) => install_bundle(&archive).map(|_| ()),
         Command::BundleRun { archive, entry } => run_bundle(&archive, entry.as_deref()),
+        Command::Signer(arguments) => signer::run(arguments),
+        Command::Id(arguments) => run_id(&arguments),
+        Command::Publish {
+            project,
+            tap,
+            dry_run,
+            skip_signed_tag,
+        } => package::publish_path_with_signer(
+            &project,
+            &tap,
+            dry_run,
+            skip_signed_tag,
+            signer::sign_intent_from_environment,
+        )
+        .map(|result| println!("{result}")),
         Command::Help => {
             usage();
             Ok(())
@@ -142,6 +285,19 @@ fn run(command: Command) -> Result<(), String> {
             println!("hara-native {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+    }
+}
+
+fn run_id(arguments: &[String]) -> Result<(), String> {
+    if matches!(arguments.first().map(String::as_str), Some("enroll")) {
+        let public_key = signer::public_key_from_environment()?;
+        identity_tool::enroll_with_signer(
+            &arguments[1..],
+            &public_key,
+            signer::sign_intent_from_environment,
+        )
+    } else {
+        identity_tool::run(arguments)
     }
 }
 
@@ -183,6 +339,12 @@ fn verify_bundle(archive: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn build_bundle(project: &Path, output: Option<&Path>) -> Result<(), String> {
+    let archive = package::build_path(project, output)?;
+    println!("built {}", archive.display());
+    Ok(())
+}
+
 fn install_bundle(archive: &Path) -> Result<PathBuf, String> {
     verify_bundle(archive)?;
     let installed = package::install_path(archive)?;
@@ -206,6 +368,246 @@ fn run_bundle(archive: &Path, entry: Option<&str>) -> Result<(), String> {
     };
     println!("{result}");
     Ok(())
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TestCounts {
+    passed: usize,
+    failed: usize,
+    error: usize,
+    timeout: usize,
+    skipped: usize,
+    cancelled: usize,
+}
+
+impl TestCounts {
+    fn failing(&self) -> usize {
+        self.failed + self.error + self.timeout
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.passed += other.passed;
+        self.failed += other.failed;
+        self.error += other.error;
+        self.timeout += other.timeout;
+        self.skipped += other.skipped;
+        self.cancelled += other.cancelled;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectTestFile {
+    path: PathBuf,
+    counts: TestCounts,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ProjectTestReport {
+    files: Vec<ProjectTestFile>,
+    counts: TestCounts,
+}
+
+fn value_map_get(value: &Value, key: &str) -> Option<Value> {
+    let key = Value::Keyword(key.into());
+    match value {
+        Value::Map(values) => values.get(&key).cloned(),
+        _ => None,
+    }
+}
+
+fn value_count(value: Option<Value>, key: &str) -> Result<usize, String> {
+    match value {
+        Some(Value::Number(value)) if value >= 0 => Ok(value as usize),
+        _ => Err(format!("test summary :counts requires non-negative :{key}")),
+    }
+}
+
+fn test_counts_from_summary(value: Value) -> Result<TestCounts, String> {
+    let status = value_map_get(&value, "status");
+    if !matches!(status, Some(Value::Keyword(ref status)) if matches!(status.as_str(), "passed" | "failed"))
+    {
+        return Err("test summary requires :status :passed or :failed".into());
+    }
+    let counts = value_map_get(&value, "counts")
+        .ok_or_else(|| "test summary requires a :counts map".to_owned())?;
+    if !matches!(counts, Value::Map(_)) {
+        return Err("test summary :counts must be a map".into());
+    }
+    Ok(TestCounts {
+        passed: value_count(value_map_get(&counts, "passed"), "passed")?,
+        failed: value_count(value_map_get(&counts, "failed"), "failed")?,
+        error: value_count(value_map_get(&counts, "error"), "error")?,
+        timeout: value_count(value_map_get(&counts, "timeout"), "timeout")?,
+        skipped: value_count(value_map_get(&counts, "skipped"), "skipped")?,
+        cancelled: value_count(value_map_get(&counts, "cancelled"), "cancelled")?,
+    })
+}
+
+fn test_counts_from_checks(value: Value) -> Result<TestCounts, String> {
+    let checks = match value {
+        Value::Vector(values) => values.iter().cloned().collect::<Vec<_>>(),
+        Value::Tuple(values) => values.iter().cloned().collect::<Vec<_>>(),
+        _ => {
+            return Err(
+                "test file must return a Test/run summary or Test/check Result vector".into(),
+            )
+        }
+    };
+    let mut counts = TestCounts::default();
+    for check in checks {
+        let Value::Result(result) = check else {
+            return Err("Test/check output must contain only native Result values".into());
+        };
+        if result.is_success() && matches!(result.data, Value::Bool(true)) {
+            counts.passed += 1;
+        } else if result.is_error() {
+            if result.is_timeout()
+                || result
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.message == "asynchronous test did not settle")
+            {
+                counts.timeout += 1;
+            } else {
+                counts.error += 1;
+            }
+        } else {
+            counts.failed += 1;
+        }
+    }
+    Ok(counts)
+}
+
+fn test_file_counts(value: Value) -> Result<TestCounts, String> {
+    match value {
+        Value::Map(_) => test_counts_from_summary(value),
+        Value::Vector(_) | Value::Tuple(_) => test_counts_from_checks(value),
+        _ => Err("test file must return a Test/run summary or Test/check Result vector".into()),
+    }
+}
+
+fn selected_test_files(
+    project: &project::Project,
+    requested: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
+    let all = project::files_in(&project.root, &project.test_paths)?;
+    if requested.is_empty() {
+        if all.is_empty() {
+            return Err(format!(
+                "project {} has no .hal test files",
+                project.root.display()
+            ));
+        }
+        return Ok(all);
+    }
+    let canonical_all = all
+        .iter()
+        .map(|path| {
+            path.canonicalize()
+                .map(|canonical| (canonical, path.clone()))
+                .map_err(|error| format!("cannot resolve test file {}: {error}", path.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut selected = Vec::new();
+    for requested_path in requested {
+        let candidate = if requested_path.is_absolute() {
+            requested_path.clone()
+        } else {
+            project.root.join(requested_path)
+        };
+        let canonical = candidate.canonicalize().map_err(|error| {
+            format!(
+                "cannot resolve --file {}: {error}",
+                requested_path.display()
+            )
+        })?;
+        let Some((_, matched)) = canonical_all
+            .iter()
+            .find(|(available, _)| available == &canonical)
+        else {
+            return Err(format!(
+                "--file {} is not a .hal file beneath this project's test paths",
+                requested_path.display()
+            ));
+        };
+        selected.push(matched.clone());
+    }
+    selected.sort();
+    selected.dedup();
+    Ok(selected)
+}
+
+fn run_project_tests(
+    project_path: &Path,
+    requested: &[PathBuf],
+) -> Result<ProjectTestReport, String> {
+    let project = project::discover(project_path)?;
+    let files = selected_test_files(&project, requested)?;
+    let catalog = project::source_catalog(&project)?;
+    let mut report = ProjectTestReport::default();
+    for path in files {
+        let outcome = (|| -> Result<TestCounts, String> {
+            let source = fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let mut runtime = Runtime::core();
+            runtime.register_source_catalog(&catalog);
+            test_file_counts(runtime.eval_native_value(&source)?)
+        })();
+        let file = match outcome {
+            Ok(counts) => ProjectTestFile {
+                path,
+                counts,
+                detail: None,
+            },
+            Err(error) => ProjectTestFile {
+                path,
+                counts: TestCounts {
+                    error: 1,
+                    ..TestCounts::default()
+                },
+                detail: Some(error),
+            },
+        };
+        report.counts.add(&file.counts);
+        let status = if file.counts.failing() == 0 {
+            "PASS"
+        } else {
+            "FAIL"
+        };
+        println!(
+            "{status}  {} passed={} failed={} error={} timeout={} skipped={} cancelled={}",
+            file.path.display(),
+            file.counts.passed,
+            file.counts.failed,
+            file.counts.error,
+            file.counts.timeout,
+            file.counts.skipped,
+            file.counts.cancelled,
+        );
+        if let Some(detail) = &file.detail {
+            println!("      {detail}");
+        }
+        report.files.push(file);
+    }
+    println!(
+        "SUMMARY files={} passed={} failed={} error={} timeout={} skipped={} cancelled={}",
+        report.files.len(),
+        report.counts.passed,
+        report.counts.failed,
+        report.counts.error,
+        report.counts.timeout,
+        report.counts.skipped,
+        report.counts.cancelled,
+    );
+    if report.counts.failing() == 0 {
+        Ok(report)
+    } else {
+        Err(format!(
+            "project tests failed: {} failing fact(s) or file(s)",
+            report.counts.failing()
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,7 +785,13 @@ fn suite_case_count(
 }
 
 fn main() {
-    let command = parse_arguments(env::args().skip(1)).unwrap_or_else(|error| {
+    let arguments: Vec<_> = env::args().skip(1).collect();
+    let command = if arguments.is_empty() && signer::is_configured() {
+        Ok(Command::Signer(Vec::new()))
+    } else {
+        parse_arguments(arguments)
+    }
+    .unwrap_or_else(|error| {
         eprintln!("hara-native: {error}");
         std::process::exit(2);
     });
@@ -395,9 +803,14 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_arguments, parse_test_suite, run_test_suite, select_test_cases, Command};
-    use hara_native::{package, package_manifest::PackageManifest};
+    use super::{
+        parse_arguments, parse_test_suite, run_project_tests, run_test_suite, select_test_cases,
+        Command,
+    };
+    use hara_native::{identity_tool, package, package_manifest::PackageManifest, tap};
+    use std::cell::RefCell;
     use std::fs;
+    use std::process::Command as ProcessCommand;
 
     fn suite_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -406,11 +819,53 @@ mod tests {
         ))
     }
 
+    fn test_git(
+        root: &std::path::Path,
+        arguments: impl IntoIterator<Item = &'static str>,
+    ) -> Result<String, String> {
+        let arguments = arguments.into_iter().collect::<Vec<_>>();
+        let output = ProcessCommand::new("git")
+            .args(&arguments)
+            .current_dir(root)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "git {} failed: {}",
+                arguments.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
     #[test]
     fn parses_source_and_bundle_commands() {
         assert!(matches!(
             parse_arguments(["eval".into(), "(+ 20 22)".into()]),
             Ok(Command::Eval(source)) if source == "(+ 20 22)"
+        ));
+        assert!(matches!(
+            parse_arguments([
+                "test".into(),
+                "--project".into(),
+                "demo".into(),
+                "--file".into(),
+                "test/demo/one_test.hal".into(),
+                "--file".into(),
+                "test/demo/two_test.hal".into(),
+            ]),
+            Ok(Command::Test { project, files })
+                if project == std::path::PathBuf::from("demo")
+                    && files == [
+                        std::path::PathBuf::from("test/demo/one_test.hal"),
+                        std::path::PathBuf::from("test/demo/two_test.hal"),
+                    ]
+        ));
+        assert!(matches!(
+            parse_arguments(["test-json".into(), "suite.json".into(), "smoke".into()]),
+            Ok(Command::TestJson { suite, groups })
+                if suite == std::path::PathBuf::from("suite.json") && groups == ["smoke"]
         ));
         assert!(matches!(
             parse_arguments([
@@ -423,6 +878,51 @@ mod tests {
             Ok(Command::BundleRun { archive, entry: Some(entry) })
                 if archive.to_string_lossy() == "hara-cli.harp" && entry == "tool.cli.main/run"
         ));
+        assert!(matches!(
+            parse_arguments([
+                "bundle".into(),
+                "build".into(),
+                "examples/smoke-answer".into(),
+                "--output".into(),
+                "target/smoke-answer.harp".into(),
+            ]),
+            Ok(Command::BundleBuild { project, output: Some(output) })
+                if project == std::path::PathBuf::from("examples/smoke-answer")
+                    && output == std::path::PathBuf::from("target/smoke-answer.harp")
+        ));
+        assert!(matches!(
+            parse_arguments([
+                "signer".into(),
+                "public-key".into(),
+                "--key-file".into(),
+                "/private/key".into(),
+            ]),
+            Ok(Command::Signer(arguments))
+                if arguments == ["public-key", "--key-file", "/private/key"]
+        ));
+        assert!(matches!(
+            parse_arguments(["id".into(), "enroll".into(), "--owner".into(), "octo".into()]),
+            Ok(Command::Id(arguments)) if arguments == ["enroll", "--owner", "octo"]
+        ));
+        assert!(matches!(
+            parse_arguments([
+                "publish".into(),
+                "--tap".into(),
+                "partner".into(),
+                "--dry-run".into(),
+                "package-root".into(),
+            ]),
+            Ok(Command::Publish {
+                project,
+                tap,
+                dry_run,
+                skip_signed_tag,
+            })
+                if project == std::path::PathBuf::from("package-root")
+                    && tap == "partner"
+                    && dry_run
+                    && !skip_signed_tag
+        ));
     }
 
     #[test]
@@ -430,6 +930,136 @@ mod tests {
         let error =
             parse_arguments(["bundle".into(), "publish".into(), "x.harp".into()]).unwrap_err();
         assert!(error.contains("unknown hara-native bundle operation"));
+        let error = parse_arguments([
+            "bundle".into(),
+            "build".into(),
+            "examples/smoke-answer".into(),
+            "--archive".into(),
+        ])
+        .unwrap_err();
+        assert!(error.contains("unknown hara-native bundle build option"));
+    }
+
+    #[test]
+    fn rejects_unknown_publish_options() {
+        let error = parse_arguments(["publish".into(), "--archive".into()]).unwrap_err();
+        assert!(error.contains("unknown hara-native publish option"));
+        let error =
+            parse_arguments(["publish".into(), "--tap".into(), "--dry-run".into()]).unwrap_err();
+        assert!(error.contains("publish --tap requires a tap name"));
+    }
+
+    #[test]
+    fn accepts_a_signed_tag_skip_for_a_local_publish_dry_run() {
+        let parsed = parse_arguments([
+            "publish".into(),
+            "--dry-run".into(),
+            "--skip-signed-tag".into(),
+            "examples/smoke-answer".into(),
+        ]);
+        assert!(matches!(
+            parsed,
+            Ok(Command::Publish {
+                project,
+                tap,
+                dry_run: true,
+                skip_signed_tag: true,
+            }) if project == std::path::PathBuf::from("examples/smoke-answer") && tap == "hara"
+        ));
+
+        let error = parse_arguments(["publish".into(), "--skip-signed-tag".into()])
+            .unwrap_err();
+        assert!(error.contains("--skip-signed-tag requires --dry-run"));
+    }
+
+    #[test]
+    fn signed_tag_skip_uses_head_only_for_a_local_preflight() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-publish-tag-skip-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+
+        let result = (|| -> Result<(), String> {
+            fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+            test_git(&root, ["init"])?;
+            test_git(&root, ["config", "user.name", "Hara Native Test"])?;
+            test_git(&root, ["config", "user.email", "test@invalid"])?;
+            fs::write(root.join("README"), "fixture\n").map_err(|error| error.to_string())?;
+            test_git(&root, ["add", "README"])?;
+            test_git(&root, ["commit", "-m", "fixture"])?;
+
+            let head = test_git(&root, ["rev-parse", "HEAD"])?;
+            let skipped = package::source_release_commit(&root, "v0.1.0", true)?;
+            if skipped != head {
+                return Err(format!("tag skip resolved {skipped}, expected {head}"));
+            }
+            let error = package::source_release_commit(&root, "v0.1.0", false).unwrap_err();
+            if !error.contains("valid signed tag v0.1.0") {
+                return Err(format!("signed-tag check failed unexpectedly: {error}"));
+            }
+            Ok(())
+        })();
+        let cleanup = fs::remove_dir_all(&root);
+
+        cleanup.map_err(|error| error.to_string()).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn official_tap_fetches_its_signed_policy_from_the_policy_repository() {
+        let root =
+            std::env::temp_dir().join(format!("hara-native-official-tap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let fingerprint = format!("sha256:{}", "11".repeat(32));
+
+        let result = (|| -> Result<(), String> {
+            let configured = tap::bootstrap_with_official_root(&root, "hara", &fingerprint)?;
+            if configured.identity.as_slice() != ["https://github.com/hara-lang/hara-identity.git"]
+            {
+                return Err(format!(
+                    "unexpected official policy endpoint: {:?}",
+                    configured.identity
+                ));
+            }
+            if tap::load(&root)?.get("hara").map(|tap| &tap.identity) != Some(&configured.identity)
+            {
+                return Err("official policy endpoint was not persisted".into());
+            }
+            Ok(())
+        })();
+        let cleanup = fs::remove_dir_all(&root);
+
+        cleanup.map_err(|error| error.to_string()).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn enrollment_dry_run_signs_the_exact_canonical_request_in_process() {
+        let args = vec![
+            "--owner".into(),
+            "alice".into(),
+            "--tap".into(),
+            "hara".into(),
+            "--challenge".into(),
+            "challenge-1".into(),
+            "--dry-run".into(),
+        ];
+        let signed = RefCell::new(None);
+        identity_tool::enroll_with_signer(&args, &"ab".repeat(32), |intent| {
+            *signed.borrow_mut() = Some(String::from_utf8(intent.to_vec()).unwrap());
+            Ok(("alice-2026".into(), "cd".repeat(64)))
+        })
+        .unwrap();
+        assert_eq!(
+            signed.into_inner(),
+            Some(identity_tool::canonical_enrollment(
+                "hara",
+                "alice",
+                &"ab".repeat(32),
+                "challenge-1"
+            ))
+        );
     }
 
     #[test]
@@ -458,6 +1088,84 @@ mod tests {
         .unwrap();
         assert!(run_test_suite(&path, &["serial".into(), "failure".into()]).is_ok());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn project_test_runner_discovers_files_requires_sources_and_normalizes_structured_outputs() {
+        let root =
+            std::env::temp_dir().join(format!("hara-native-project-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/fixture")).unwrap();
+        fs::create_dir_all(root.join("test/fixture")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/fixture/math.hal"),
+            "(ns fixture.math)\n(defn advance [value] (+ value 1))\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/registered_test.hal"),
+            "(ns fixture.registered-test (:require [fixture.math :as math]))\n(Test/register {:desc \"advance increments\" :test (fn [] (math/advance 41)) :expected 42 :meta {:refer (quote fixture.math/advance) :id (quote advance-increments)}})\n(Test/run)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/check_test.hal"),
+            "(ns fixture.check-test)\n(Test/check [{:desc \"check result\" :test (fn [] (+ 20 22)) :expected 42}])\n",
+        )
+        .unwrap();
+
+        let report = run_project_tests(&root, &[]).unwrap();
+        assert_eq!(report.files.len(), 2);
+        assert_eq!(report.counts.passed, 2);
+        assert_eq!(report.counts.failing(), 0);
+
+        let selected = run_project_tests(
+            &root,
+            &[std::path::PathBuf::from("test/fixture/check_test.hal")],
+        )
+        .unwrap();
+        assert_eq!(selected.files.len(), 1);
+        assert_eq!(selected.counts.passed, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_test_runner_rejects_plain_values_and_files_outside_test_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-project-test-rejection-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/fixture")).unwrap();
+        fs::create_dir_all(root.join("test/fixture")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/rejection :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/fixture/plain.hal"),
+            "(ns fixture.plain)\n42\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/plain_test.hal"),
+            "(ns fixture.plain-test)\n42\n",
+        )
+        .unwrap();
+
+        let error = run_project_tests(&root, &[]).unwrap_err();
+        assert!(error.contains("project tests failed"));
+        let error = run_project_tests(&root, &[std::path::PathBuf::from("src/fixture/plain.hal")])
+            .unwrap_err();
+        assert!(error.contains("not a .hal file beneath this project's test paths"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

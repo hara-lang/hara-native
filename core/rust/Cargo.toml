@@ -1,6 +1,6 @@
 [package]
 name = "hara-native"
-version = "0.1.0"
+version = "0.1.6"
 edition = "2021"
 description = "HAL-free native host runtime and package launcher for Hara"
 license = "Apache-2.0"
@@ -41,9 +41,6 @@ members = [
 ]
 default-members = ["."]
 resolver = "2"
-
-[patch."https://github.com/hara-lang/hara.git"]
-hara-abi = { path = "crates/abi" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -102,7 +99,7 @@ panic = "abort"
 strip = "symbols"
 
 [dependencies]
-hara-protocol-macros = { version = "0.1.0", path = "crates/protocol-macros" }
+hara-protocol-macros = { version = "0.1.6", path = "crates/protocol-macros" }
 wasm-bindgen = "0.2"
 inventory = "0.3"
 md5 = "0.8"
@@ -121,6 +118,7 @@ num-traits = "0.2"
 semver = "1.0"
 hara-abi = { version = "0.1.6", path = "crates/abi" }
 wasm-encoder = "0.41.2"
+zeroize = "1.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
@@ -160,6 +158,10 @@ required-features = ["bytecode-vm"]
 [[bin]]
 name = "hara-native-language-conformance-artifact"
 path = "src/bin/hara-native-language-conformance-artifact.rs"
+
+[[test]]
+name = "native-test-registry"
+path = "tests/native_test_registry.rs"
 
 [dev-dependencies]
 hara-hta = { version = "0.1.6", path = "crates/hta-codec" }

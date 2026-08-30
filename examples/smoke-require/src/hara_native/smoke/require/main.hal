@@ -1,0 +1,8 @@
+(ns hara-native.smoke.require.main
+  (:config {:role :internal})
+  (:require [hara-native.smoke.require.math :as math]))
+
+(defn main []
+  (math/advance 41))
+
+(main)

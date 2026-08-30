@@ -1,0 +1,8 @@
+(ns hara-native.smoke.answer.main-test
+  (:require [hara-native.smoke.answer.main :as main]))
+
+^{:refer hara-native.smoke.answer.main/main}
+(Test/run
+ [{:name "returns the expected smoke value"
+   :test (fn [] (main/main))
+   :expected 42}])
