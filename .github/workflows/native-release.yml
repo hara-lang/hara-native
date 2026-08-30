@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   validate:
@@ -179,9 +180,101 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_NPM_TOKEN }}
 
+  publish-crates:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [validate, release-version]
+    runs-on: ubuntu-22.04
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require crates.io publication authority
+        run: test -n "$CARGO_REGISTRY_TOKEN"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      - name: Publish repository-owned Cargo packages in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish_if_missing() {
+            local manifest="$1"
+            local package="$2"
+            local version
+            version="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r --arg package "$package" '.packages[] | select(.name == $package) | .version')"
+            if curl --fail --silent --show-error "https://crates.io/api/v1/crates/${package}/${version}" >/dev/null; then
+              echo "${package} ${version} is already published"
+            else
+              cargo publish --manifest-path "$manifest" --locked
+            fi
+          }
+          publish_if_missing core/rust/crates/abi/Cargo.toml hara-abi
+          publish_if_missing core/rust/crates/protocol-macros/Cargo.toml hara-protocol-macros
+          publish_if_missing core/rust/Cargo.toml hara-native
+
+  publish-container:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [publish-crates, release-version]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        name: Select immutable image identity
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          printf 'name=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "${tag#v}" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: core/rust
+          file: core/rust/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ steps.image.outputs.version }}
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
+            ${{ steps.image.outputs.name }}:latest
+      - name: Record the published OCI digest
+        run: |
+          mkdir -p dist
+          printf '%s@%s\n' '${{ steps.image.outputs.name }}' '${{ steps.build.outputs.digest }}' \
+            > dist/hara-native-container.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hara-native-container
+          path: dist/hara-native-container.txt
+          if-no-files-found: error
+
+  verify-container:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [publish-container, release-version]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull and exercise the released executable image
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${version}"
+          docker pull "$image"
+          test "$(docker run --rm "$image" --version)" = "hara-native ${version}"
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [rust-cli, jvm, browser, release-version, publish-maven, publish-npm]
+    needs: [rust-cli, jvm, browser, release-version, publish-maven, publish-npm, publish-crates, verify-container]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

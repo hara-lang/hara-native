@@ -292,6 +292,11 @@ impl RuntimeBroker {
         source_catalog: Option<crate::project::SourceCatalog>,
     ) -> Result<Self, String> {
         crate::validate_execution_backend(execution_backend)?;
+        if allow_postgres {
+            return Err(
+                "PostgreSQL support is not included in the core hara-native crate".to_owned(),
+            );
+        }
         let execution_backend = execution_backend.to_owned();
         let (sender, receiver) = mpsc::channel();
         std::thread::Builder::new()
@@ -568,11 +573,7 @@ fn runtime(
     runtime
         .configure_execution_backend(execution_backend)
         .expect("validated execution backend must configure");
-    if allow_postgres {
-        runtime
-            .install_native_module(hara_db_postgres::module())
-            .expect("db.postgres native module must install once per runtime");
-    }
+    let _ = allow_postgres;
     runtime
 }
 

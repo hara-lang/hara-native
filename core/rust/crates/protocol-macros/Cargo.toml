@@ -2,8 +2,11 @@
 name = "hara-protocol-macros"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 rust-version = "1.78"
-publish = false
+description = "Protocol implementation macros for Hara Native"
+repository = "https://github.com/hara-lang/hara-native"
+homepage = "https://www.hara-lang.org"
 
 [lib]
 proc-macro = true

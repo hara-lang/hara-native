@@ -1,31 +1,10 @@
 name: Native benchmark evidence
 
 on:
-  pull_request:
-    paths:
-      - 'core/rust/Cargo.toml'
-      - 'core/rust/Cargo.lock'
-      - 'core/rust/assets/native-benchmark-*.json'
-      - 'core/rust/src/bin/hara-native-benchmark*.rs'
-      - 'core/rust/src/jit/**'
-      - 'core/rust/src/vm/**'
-      - 'core/rust/src/whole_wasm/**'
-      - 'Makefile'
-      - '.github/workflows/native-benchmark.yml'
+  # Full benchmark evidence is collected only for a versioned release candidate.
   push:
-    branches: [main]
-    paths:
-      - 'core/rust/Cargo.toml'
-      - 'core/rust/Cargo.lock'
-      - 'core/rust/assets/native-benchmark-*.json'
-      - 'core/rust/src/bin/hara-native-benchmark*.rs'
-      - 'core/rust/src/jit/**'
-      - 'core/rust/src/vm/**'
-      - 'core/rust/src/whole_wasm/**'
-      - 'Makefile'
-      - '.github/workflows/native-benchmark.yml'
-  schedule:
-    - cron: '17 3 * * *'
+    tags:
+      - 'v*-rc.*'
   workflow_dispatch:
     inputs:
       profile:
@@ -40,7 +19,7 @@ permissions:
 
 jobs:
   benchmark:
-    name: native tiers (${{ github.event_name == 'schedule' && 'standard' || inputs.profile || 'guard' }})
+    name: native tiers (${{ inputs.profile || 'standard' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -51,12 +30,10 @@ jobs:
       - id: profile
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = schedule ]; then
-            value=standard
-          elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
             value="${{ inputs.profile }}"
           else
-            value=guard
+            value=standard
           fi
           printf 'value=%s\n' "$value" >> "$GITHUB_OUTPUT"
       - name: Build workers and collect same-run evidence
