@@ -68,7 +68,11 @@ jobs:
           evidence="core/rust/target/native-benchmark/evidence-${{ steps.profile.outputs.value }}.json"
           printf '## Native benchmark evidence (%s)\n\n' "${{ steps.profile.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -f "$evidence" ]; then
-            jq -r '"Schema: `\(.schema)`  \nCorpus: `\(.corpus.id)`  \nComparability: `\(.protocol.comparability)`\n\n| Tier | Workload | p50 ns | p95 ns | CV ppm | Native entry |\n|---|---:|---:|---:|---:|---:|\n" + (.measurements[] | "| \(.tier) | \(.workload) | \(.analysis.p50_ns) | \(.analysis.p95_ns) | \(.analysis.cv_ppm) | \(.native_entry // \"n/a\") |")' "$evidence" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '
+              "Schema: `\(.schema)`  \nCorpus: `\(.corpus.id)`  \nComparability: `\(.protocol.comparability)`\n\n| Tier | Workload | p50 ns | p95 ns | CV ppm | Native entry |\n|---|---:|---:|---:|---:|---:|",
+              (.measurements[] |
+                "| \(.tier) | \(.workload) | \(.analysis.p50_ns) | \(.analysis.p95_ns) | \(.analysis.cv_ppm) | \(if .native_entry == null then "n/a" else (.native_entry | tostring) end) |")
+            ' "$evidence" >> "$GITHUB_STEP_SUMMARY"
           else
             printf 'No evidence file was produced. See the failed benchmark step.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
