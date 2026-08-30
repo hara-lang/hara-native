@@ -7596,8 +7596,14 @@ public final class HaraContext {
       throw new HaraException(
           "protocol/arity: " + protocolName + "/" + methodName + " expects a receiver");
     }
-    HaraVar variable = resolve(Symbol.create(protocolName));
-    if (variable == null || !(variable.get() instanceof HaraProtocol)) {
+    HaraProtocol protocol = protocol(protocolName);
+    if (protocol == null) {
+      HaraVar variable = resolve(Symbol.create(protocolName));
+      if (variable != null && variable.get() instanceof HaraProtocol resolved) {
+        protocol = resolved;
+      }
+    }
+    if (protocol == null) {
       throw new HaraException("Missing protocol: " + protocolName);
     }
     Object receiver = HaraBox.unwrap(values[0]);
@@ -7643,7 +7649,7 @@ public final class HaraContext {
             pointer, HaraBox.unwrap(arguments[0]), "pointer/invoke", invokeArguments);
       }
     }
-    return ((HaraProtocol) variable.get()).invoke(methodName, receiver, arguments);
+    return protocol.invoke(methodName, receiver, arguments);
   }
 
   private hara.lang.data.Pointer requirePointer(Object value, String operation) {

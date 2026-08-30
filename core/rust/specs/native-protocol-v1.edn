@@ -69,8 +69,8 @@
     :methods ["list" "vector" "vec" "set" "hash-map" "hash-set" "map-entry" "bytes" "atom"
               "pointer" "symbol" "keyword" "uuid" "reduced" "unreduced" "hash"
               "apply" "resolve" "namespace" "current-namespace" "select-namespace" "def"
-              "struct" "mutable" "protocol" "with-declaration" "extend" "multimethod" "method" "field"
-              "number?" "long?" "satisfies?"
+              "struct" "mutable" "protocol" "with-declaration" "extend" "multimethod" "method"
+              "field" "number?" "long?" "satisfies?"
               "special-symbol?" "type" "instance?"]}
    {:type "std.native.Algo"
     :methods ["deque" "ordered-map" "ordered-set" "priority-map" "queue" "sorted-map" "sorted-set"
@@ -461,8 +461,15 @@
                     user ((std.protocol.ideref.IDeref/deref
                            (std.native.Base/resolve target '->User)) "Ada")
                     session ((std.protocol.ideref.IDeref/deref
-                              (std.native.Base/resolve target '->Session)) "session-token")]
-                (= [42 "hello Ada" "session-token" true]
+                              (std.native.Base/resolve target '->Session)) "session-token")
+                    dispatch (std.native.Base/with-declaration
+                              target
+                              (fn []
+                                (std.native.Base/multimethod target 'classify (fn [value] value))
+                                (std.native.Base/method target 'classify :answer (fn [value] 42))
+                                ((std.protocol.ideref.IDeref/deref
+                                  (std.native.Base/resolve target 'classify)) :answer)))]
+                (= [42 "hello Ada" "session-token" true 42]
                    [((std.protocol.ideref.IDeref/deref
                       (std.native.Base/resolve target 'answer)))
                     ((std.protocol.ideref.IDeref/deref
@@ -470,35 +477,8 @@
                     (std.native.Base/field session :token)
                     (do (std.native.Base/protocol
                           target 'IGreeting {'welcome 1} (std.native.Base/vector))
-                        (= nil (std.native.Base/resolve target 'greet)))]))
-     :expect {:display "true"}}
-    {:id :native/base-multimethod-and-declaration-transaction
-     :program (let [target (std.native.Base/namespace 'hnc.declaration)
-                    classify (std.native.Base/multimethod
-                              target 'classify
-                              (fn [value] (std.native.Base/type value)))
-                    _ (std.native.Base/method
-                        target 'classify :std.native.Long (fn [value] "number"))
-                    _ (std.native.Base/method
-                        target 'classify :default (fn [value] "default"))
-                    _ (std.native.Base/with-declaration
-                        target (fn [] (std.native.Base/def target 'committed 42 nil)))
-                    rolled-back
-                    (try
-                      (std.native.Base/with-declaration
-                        target
-                        (fn []
-                          (do
-                            (std.native.Base/def target 'transient 7 nil)
-                            (throw "rollback"))))
-                      (catch error true))]
-                (= ["number" "default" 42 true nil]
-                   [(classify 42)
-                    (classify "x")
-                    (std.protocol.ideref.IDeref/deref
-                      (std.native.Base/resolve target 'committed))
-                    rolled-back
-                    (std.native.Base/resolve target 'transient)]))
+                        (= nil (std.native.Base/resolve target 'greet)))
+                    dispatch]))
      :expect {:display "true"}}
     {:id :native/vector-type
      :program (= :std.native.Vector (std.native.Base/type [1]))

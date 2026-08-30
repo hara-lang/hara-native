@@ -2914,13 +2914,12 @@ mod tests {
         runtime
             .start_fiber(
                 1,
-                "(let [target (std.native.Base/namespace 'user) \
-                       box (std.native.Base/mutable target 'Box \
-                            (std.native.Base/vector 'value)) \
-                       reader (std.native.Base/protocol target 'ReadBox \
-                               {'read-box 1} (std.native.Base/vector))] \
-                   (std.native.Base/extend target box reader \
-                     {'read-box (fn [self] (std.native.Base/field self :value))}) \
+                "(let [target (std.native.Base/current-namespace) \
+                       box (std.native.Base/struct target 'Box (std.native.Base/vector 'value)) \
+                       protocol (std.native.Base/protocol target 'ReadBox {'read-box 1} (std.native.Base/vector)) \
+                       _ (std.native.Base/extend \
+                           target box protocol \
+                           {'read-box (fn [self] (std.protocol.ilookup.ILookup/lookup self :value))})] \
                    :ok)",
             )
             .unwrap();
@@ -2929,9 +2928,7 @@ mod tests {
             Value::Keyword(_)
         ));
 
-        runtime
-            .start_fiber(2, "(user/read-box (user/->Box 42))")
-            .unwrap();
+        runtime.start_fiber(2, "(read-box (Box 42))").unwrap();
         assert_eq!(completion_value(&mut runtime, 2), Value::Number(42));
     }
 
