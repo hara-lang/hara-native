@@ -61,11 +61,14 @@ jobs:
           cargo_version() {
             cargo metadata --manifest-path "$1" --no-deps --format-version 1 | jq -er --arg package "$2" '.packages[] | select(.name == $package) | .version'
           }
+          pom_version() {
+            node -e 'const pom = require("fs").readFileSync(process.argv[1], "utf8"); const match = pom.match(/<project\b[\s\S]*?<version>([^<]+)<\/version>/); if (!match) process.exit(1); process.stdout.write(match[1]);' "$1"
+          }
           expect hara-abi "$(cargo_version core/rust/crates/abi/Cargo.toml hara-abi)"
           expect hara-hta "$(cargo_version core/rust/crates/hta-codec/Cargo.toml hara-hta)"
           expect hara-protocol-macros "$(cargo_version core/rust/crates/protocol-macros/Cargo.toml hara-protocol-macros)"
           expect hara-native "$(cargo_version core/rust/Cargo.toml hara-native)"
-          expect hara-native-jvm "$(xmllint --xpath '/*[local-name()="project"]/*[local-name()="version"][1]/text()' core/java/pom.xml)"
+          expect hara-native-jvm "$(pom_version core/java/pom.xml)"
           expect native-browser "$(node -p 'require("./core/rust/web/packages/browser/package.json").version')"
           expect hta "$(node -p 'require("./core/rust/web/packages/hta/package.json").version')"
           expect compatibility "$(jq -er '.nativeVersion' release/compatibility.json)"
