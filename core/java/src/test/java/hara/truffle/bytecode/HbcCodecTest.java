@@ -734,59 +734,99 @@ public class HbcCodecTest {
   }
 
   @Test
-  public void executesEverySourceFreeSuccessResultRustProducedHbcArtifact() throws Exception {
-    List<HbcConformanceCorpus.Case> cases =
-        HbcConformanceCorpus.decode(
-            Files.readAllBytes(Path.of("rust/assets/bytecode-conformance.hcc")));
-    assertTrue(cases.size() >= 80);
+  public void executesNativeProtocolConformanceArtifactSerially() throws Exception {
+    List<HbcConformanceCorpus.Suite> suites =
+        HbcConformanceCorpus.decodeNativeProtocol(
+            Files.readAllBytes(Path.of("rust/assets/native-protocol-conformance.hnc")));
+    assertEquals(List.of("native", "protocol"), suites.stream().map(HbcConformanceCorpus.Suite::id).toList());
+    int expected = suites.stream().mapToInt(suite -> suite.cases().size()).sum();
     int executed = 0;
-    int failureOwnershipRequired = 0;
     try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
-      for (HbcConformanceCorpus.Case testCase : cases) {
-        if (testCase.id().startsWith("error/")) {
-          failureOwnershipRequired++;
-          continue;
-        }
-        HbcProgram program = HbcCodec.decode(testCase.artifact());
+      for (HbcConformanceCorpus.Suite suite : suites) {
+        HbcProgram setup = HbcCodec.decode(suite.setup());
         assertFalse(
-            testCase.id() + " must not require a Foundation package",
-            requiresMountedFoundationPackage(program));
+            suite.id() + " setup must not require Foundation",
+            requiresMountedFoundationPackage(setup));
         Source source =
             Source.newBuilder(
                     HaraLanguage.ID,
-                    ByteSequence.create(testCase.artifact()),
-                    testCase.id() + ".hbc")
+                    ByteSequence.create(suite.setup()),
+                    suite.id() + "-setup.hbc")
                 .mimeType(HaraLanguage.BYTECODE_MIME_TYPE)
                 .build();
-        org.graalvm.polyglot.Value actual;
-        try {
-          actual = context.eval(source);
-        } catch (RuntimeException failure) {
-          throw new AssertionError(
-              testCase.id()
-                  + "\nconstants="
-                  + program.constants()
-                  + "\n"
-                  + HbcDisassembler.disassemble(program),
-              failure);
+        context.eval(source);
+        for (HbcConformanceCorpus.Case testCase : suite.cases()) {
+          HbcProgram program = HbcCodec.decode(testCase.artifact());
+          assertFalse(
+              testCase.id() + " must not require Foundation",
+              requiresMountedFoundationPackage(program));
+          Source testSource =
+              Source.newBuilder(
+                      HaraLanguage.ID,
+                      ByteSequence.create(testCase.artifact()),
+                      testCase.id() + ".hbc")
+                  .mimeType(HaraLanguage.BYTECODE_MIME_TYPE)
+                  .build();
+          String expectedError = HbcConformanceCorpus.expectedErrorCategory(testCase.expectedDisplay());
+          try {
+            org.graalvm.polyglot.Value actual = context.eval(testSource);
+            if (expectedError != null) {
+              throw new AssertionError(
+                  testCase.id() + " expected normalized error " + expectedError + " but returned "
+                      + HbcConformanceCorpus.display(actual));
+            }
+            String display = HbcConformanceCorpus.display(actual);
+            assertEquals(testCase.id(), testCase.expectedDisplay(), display);
+          } catch (RuntimeException failure) {
+            if (expectedError != null) {
+              assertEquals(
+                  testCase.id() + " failure=" + failure,
+                  expectedError,
+                  HbcConformanceCorpus.normalizedErrorCategory(failure));
+              executed++;
+              continue;
+            }
+            throw new AssertionError(
+                testCase.id()
+                    + "\nconstants="
+                    + program.constants()
+                    + "\n"
+                    + HbcDisassembler.disassemble(program),
+                failure);
+          }
+          executed++;
         }
-        String display = HbcConformanceCorpus.display(actual);
-        assertEquals(testCase.id(), testCase.expectedDisplay(), display);
-        executed++;
       }
     }
+    assertEquals("all declared native/protocol cases ran", expected, executed);
+  }
+
+  @Test
+  public void nativeProtocolOutcomeCategoriesRejectWrongExpectations() {
+    assertEquals("protocol/arity", HbcConformanceCorpus.expectedErrorCategory("!error:protocol/arity"));
+    assertEquals(null, HbcConformanceCorpus.expectedErrorCategory("true"));
     assertEquals(
-        "only failure-ownership vectors may be held outside the source-free success lane",
-        cases.size() - failureOwnershipRequired,
-        executed);
-    assertTrue(
-        "the corpus must retain failure-ownership HBC0 vectors", failureOwnershipRequired > 0);
+        "protocol/unsupported-receiver",
+        HbcConformanceCorpus.normalizedErrorCategory(
+            new RuntimeException("protocol/unsupported-receiver: missing protocol implementation")));
+    assertEquals(
+        "native/arity",
+        HbcConformanceCorpus.normalizedErrorCategory(
+            new RuntimeException("abs expects one numeric value")));
+    assertEquals(
+        "native/arity",
+        HbcConformanceCorpus.normalizedErrorCategory(
+            new RuntimeException("Expected 1 arguments, received 0")));
+    assertEquals(
+        "native/type",
+        HbcConformanceCorpus.normalizedErrorCategory(
+            new RuntimeException("abs expects a numeric value")));
   }
 
   private static boolean requiresMountedFoundationPackage(HbcProgram program) {
     return program.constants().stream()
         .map(Object::toString)
-        .anyMatch(value -> value.matches("std\\.foundation/[^/].*"));
+        .anyMatch(value -> value.matches("std\\.foundation(?:\\.|/)[^/].*"));
   }
 
   private static byte[] takeBundleField(ByteBuffer input) {

@@ -58,6 +58,9 @@ fn os_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
             if !values.is_empty() {
                 return Err("os/cwd expects no arguments".into());
             }
+            #[cfg(target_arch = "wasm32")]
+            return Ok(Value::String("/".into()));
+            #[cfg(not(target_arch = "wasm32"))]
             return std::env::current_dir()
                 .map(|path| Value::String(path.to_string_lossy().into_owned()))
                 .map_err(|error| format!("os/cwd failed: {error}"));
@@ -66,6 +69,9 @@ fn os_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
             if !values.is_empty() {
                 return Err("os/env expects no arguments".into());
             }
+            #[cfg(target_arch = "wasm32")]
+            return Ok(Value::Map(PMap::new()));
+            #[cfg(not(target_arch = "wasm32"))]
             return Ok(Value::Map(PMap::from_iter(
                 std::env::vars().map(|(key, value)| (Value::String(key), Value::String(value))),
             )));
@@ -77,6 +83,12 @@ fn os_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
             let Value::String(name) = &values[0] else {
                 return Err("os/getenv expects a string".into());
             };
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = name;
+                return Ok(Value::Nil);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             return Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil));
         }
         "process?" => {

@@ -14,7 +14,7 @@ fn vm_tool_keywords(values: &[&str]) -> Value {
     vm_tool_vector(values.iter().map(|value| vm_tool_keyword(value)))
 }
 
-fn vm_tool_provider_descriptor() -> Value {
+fn native_instrument_descriptor() -> Value {
     #[cfg(all(feature = "bytecode-vm", feature = "halc-encoder"))]
     let operations = &[
         "validate",
@@ -117,7 +117,7 @@ fn vm_tool_transform_format<'a>(value: &'a Value, field: &str) -> Result<&'a str
             Ok(format.get_name())
         }
         _ => Err(format!(
-            "tool.vm.provider/transform expects :hal, :halc, or :hbc as {field}"
+            "std.native.Instrument/transform expects :hal, :halc, or :hbc as {field}"
         )),
     }
 }
@@ -125,7 +125,7 @@ fn vm_tool_transform_format<'a>(value: &'a Value, field: &str) -> Result<&'a str
 fn vm_tool_source(value: &Value) -> Result<String, String> {
     match value {
         Value::String(source) => Ok(source.clone()),
-        _ => Err("tool.vm.provider/transform expects HAL source as a String".into()),
+        _ => Err("std.native.Instrument/transform expects HAL source as a String".into()),
     }
 }
 
@@ -151,18 +151,18 @@ fn vm_tool_namespace(forms: &[crate::kernel::Form]) -> Result<String, String> {
 
 fn vm_tool_resource(options: &Value, default: String) -> Result<String, String> {
     let entries = map_entries(options)
-        .ok_or_else(|| "tool.vm.provider/transform expects options as a map".to_owned())?;
+        .ok_or_else(|| "std.native.Instrument/transform expects options as a map".to_owned())?;
     for (key, _) in entries {
         if key != vm_tool_keyword("resource") {
             return Err(format!(
-                "tool.vm.provider/transform does not support option {}",
+                "std.native.Instrument/transform does not support option {}",
                 key.display()
             ));
         }
     }
     match map_value(options, &vm_tool_keyword("resource")) {
         Some(Value::String(resource)) => Ok(resource.clone()),
-        Some(_) => Err("tool.vm.provider/transform expects :resource as a String".into()),
+        Some(_) => Err("std.native.Instrument/transform expects :resource as a String".into()),
         None => Ok(default),
     }
 }
@@ -188,7 +188,7 @@ fn vm_tool_transform(
             {
                 let _ = input;
                 Err(
-                    "tool.vm.provider does not support :hal -> :halc in this runtime profile"
+                    "std.native.Instrument does not support :hal -> :halc in this runtime profile"
                         .into(),
                 )
             }
@@ -204,7 +204,7 @@ fn vm_tool_transform(
             #[cfg(not(all(feature = "bytecode-vm", feature = "halc-encoder")))]
             {
                 let _ = input;
-                Err("tool.vm.provider does not support :hal -> :hbc in this runtime profile".into())
+                Err("std.native.Instrument does not support :hal -> :hbc in this runtime profile".into())
             }
         }
         ("halc", "hbc") => {
@@ -222,23 +222,23 @@ fn vm_tool_transform(
             {
                 let _ = input;
                 Err(
-                    "tool.vm.provider does not support :halc -> :hbc in this runtime profile"
+                    "std.native.Instrument does not support :halc -> :hbc in this runtime profile"
                         .into(),
                 )
             }
         }
         _ => Err(format!(
-            "tool.vm.provider does not support :{from} -> :{to} in this runtime profile"
+            "std.native.Instrument does not support :{from} -> :{to} in this runtime profile"
         )),
     }
 }
 
 fn vm_tool_empty_options(options: &Value, operation: &str) -> Result<(), String> {
     let entries = map_entries(options)
-        .ok_or_else(|| format!("tool.vm.provider/{operation} expects options as a map"))?;
+        .ok_or_else(|| format!("std.native.Instrument/{operation} expects options as a map"))?;
     if let Some((key, _)) = entries.first() {
         return Err(format!(
-            "tool.vm.provider/{operation} does not support option {}",
+            "std.native.Instrument/{operation} does not support option {}",
             key.display()
         ));
     }
@@ -289,7 +289,7 @@ fn vm_tool_execute(format: &str, bytes: &[u8], options: &Value) -> Result<Value,
             {
                 let _ = bytes;
                 Err(
-                    "tool.vm.provider does not support HALC execution in this runtime profile"
+                    "std.native.Instrument does not support HALC execution in this runtime profile"
                         .into(),
                 )
             }
@@ -304,7 +304,7 @@ fn vm_tool_execute(format: &str, bytes: &[u8], options: &Value) -> Result<Value,
             {
                 let _ = bytes;
                 Err(
-                    "tool.vm.provider does not support HBC execution in this runtime profile"
+                    "std.native.Instrument does not support HBC execution in this runtime profile"
                         .into(),
                 )
             }
@@ -321,7 +321,7 @@ fn vm_tool_format<'a>(value: &'a Value, operation: &str) -> Result<&'a str, Stri
             Ok(format.get_name())
         }
         _ => Err(format!(
-            "tool.vm.provider/{operation} expects :halc or :hbc as its format"
+            "std.native.Instrument/{operation} expects :halc or :hbc as its format"
         )),
     }
 }
@@ -330,7 +330,7 @@ fn vm_tool_bytes(value: &Value, operation: &str) -> Result<Vec<u8>, String> {
     match value {
         Value::Bytes(bytes) => Ok(bytes.clone()),
         Value::ByteBuffer(bytes) => Ok(bytes.borrow().clone()),
-        _ => Err(format!("tool.vm.provider/{operation} expects Bytes")),
+        _ => Err(format!("std.native.Instrument/{operation} expects Bytes")),
     }
 }
 
@@ -345,7 +345,7 @@ fn vm_tool_validate(format: &str, bytes: &[u8]) -> Result<(), String> {
             #[cfg(not(feature = "bytecode-vm"))]
             {
                 let _ = bytes;
-                Err("tool.vm.provider does not support :hbc in this runtime profile".into())
+                Err("std.native.Instrument does not support :hbc in this runtime profile".into())
             }
         }
         _ => Err(format!("unknown tool.vm format: :{format}")),
@@ -480,7 +480,7 @@ fn vm_tool_inspect(format: &str, bytes: &[u8]) -> Result<Value, String> {
             #[cfg(not(feature = "bytecode-vm"))]
             {
                 let _ = bytes;
-                Err("tool.vm.provider does not support :hbc in this runtime profile".into())
+                Err("std.native.Instrument does not support :hbc in this runtime profile".into())
             }
         }
         _ => Err(format!("unknown tool.vm format: :{format}")),
@@ -496,59 +496,60 @@ fn vm_tool_disassemble(bytes: &[u8]) -> Result<String, String> {
     #[cfg(not(feature = "bytecode-vm"))]
     {
         let _ = bytes;
-        Err("tool.vm.provider does not support HBC disassembly in this runtime profile".into())
+        Err("std.native.Instrument does not support HBC disassembly in this runtime profile".into())
     }
 }
 
-pub(crate) fn vm_tool_provider_values() -> Vec<(&'static str, Value)> {
-    vec![
-        (
-            "provider",
-            native_function("tool.vm.provider/provider", 0, |_| {
-                Ok(vm_tool_provider_descriptor())
-            }),
-        ),
-        (
-            "validate",
-            native_function("tool.vm.provider/validate", 2, |arguments| {
-                let format = vm_tool_format(&arguments[0], "validate")?;
-                let bytes = vm_tool_bytes(&arguments[1], "validate")?;
+pub(crate) fn native_instrument_values(
+    operation: &str,
+    arguments: Vec<Value>,
+) -> Result<Value, String> {
+    match operation {
+        "provider" => {
+            if !arguments.is_empty() {
+                return Err("std.native.Instrument/provider expects no arguments".into());
+            }
+            Ok(native_instrument_descriptor())
+        }
+        "validate" => match arguments.as_slice() {
+            [format, bytes] => {
+                let format = vm_tool_format(format, "validate")?;
+                let bytes = vm_tool_bytes(bytes, "validate")?;
                 vm_tool_validate(format, &bytes)?;
                 Ok(Value::Bool(true))
-            }),
-        ),
-        (
-            "inspect",
-            native_function("tool.vm.provider/inspect", 2, |arguments| {
-                let format = vm_tool_format(&arguments[0], "inspect")?;
-                let bytes = vm_tool_bytes(&arguments[1], "inspect")?;
+            }
+            _ => Err("std.native.Instrument/validate expects a format and Bytes".into()),
+        },
+        "inspect" => match arguments.as_slice() {
+            [format, bytes] => {
+                let format = vm_tool_format(format, "inspect")?;
+                let bytes = vm_tool_bytes(bytes, "inspect")?;
                 vm_tool_inspect(format, &bytes)
-            }),
-        ),
-        (
-            "disassemble",
-            native_function("tool.vm.provider/disassemble", 1, |arguments| {
-                let bytes = vm_tool_bytes(&arguments[0], "disassemble")?;
-                vm_tool_disassemble(&bytes).map(Value::String)
-            }),
-        ),
-        (
-            "transform",
-            native_function("tool.vm.provider/transform", 4, |arguments| {
-                let from = vm_tool_transform_format(&arguments[0], "source format")?;
-                let to = vm_tool_transform_format(&arguments[1], "target format")?;
-                vm_tool_transform(from, to, &arguments[2], &arguments[3]).map(Value::Bytes)
-            }),
-        ),
-        (
-            "execute",
-            native_function("tool.vm.provider/execute", 3, |arguments| {
-                let format = vm_tool_format(&arguments[0], "execute")?;
-                let bytes = vm_tool_bytes(&arguments[1], "execute")?;
-                vm_tool_execute(format, &bytes, &arguments[2])
-            }),
-        ),
-    ]
+            }
+            _ => Err("std.native.Instrument/inspect expects a format and Bytes".into()),
+        },
+        "disassemble" => match arguments.as_slice() {
+            [bytes] => vm_tool_disassemble(&vm_tool_bytes(bytes, "disassemble")?).map(Value::String),
+            _ => Err("std.native.Instrument/disassemble expects Bytes".into()),
+        },
+        "transform" => match arguments.as_slice() {
+            [from, to, input, options] => {
+                let from = vm_tool_transform_format(from, "source format")?;
+                let to = vm_tool_transform_format(to, "target format")?;
+                vm_tool_transform(from, to, input, options).map(Value::Bytes)
+            }
+            _ => Err("std.native.Instrument/transform expects from, to, input, and options".into()),
+        },
+        "execute" => match arguments.as_slice() {
+            [format, bytes, options] => {
+                let format = vm_tool_format(format, "execute")?;
+                let bytes = vm_tool_bytes(bytes, "execute")?;
+                vm_tool_execute(format, &bytes, options)
+            }
+            _ => Err("std.native.Instrument/execute expects a format, Bytes, and options".into()),
+        },
+        _ => Err(format!("unknown std.native.Instrument operation: {operation}")),
+    }
 }
 
 #[cfg(test)]
@@ -571,7 +572,7 @@ mod vm_tool_tests {
 
     #[test]
     fn provider_reports_exact_feature_sensitive_capabilities() {
-        let provider = vm_tool_provider_descriptor();
+        let provider = native_instrument_descriptor();
         assert_eq!(field(&provider, "provider/id").display(), ":rust");
         #[cfg(all(feature = "bytecode-vm", feature = "halc-encoder"))]
         assert_eq!(
@@ -618,6 +619,14 @@ mod vm_tool_tests {
         );
         #[cfg(not(feature = "bytecode-vm"))]
         assert_eq!(field(&provider, "provider/engines").display(), "{}");
+    }
+
+    #[test]
+    fn instrument_is_exposed_through_the_annotated_native_surface() {
+        let function = native_type_function_value("Instrument", "provider").unwrap();
+        let provider = call_value(function, Vec::new()).unwrap();
+        assert_eq!(field(&provider, "provider/id").display(), ":rust");
+        assert!(native_type_function_value("Instrument", "missing").is_err());
     }
 
     #[cfg(feature = "bytecode-vm")]
@@ -726,7 +735,7 @@ mod vm_tool_tests {
                 &unknown,
             )
             .unwrap_err(),
-            "tool.vm.provider/transform does not support option :fallback"
+            "std.native.Instrument/transform does not support option :fallback"
         );
     }
 

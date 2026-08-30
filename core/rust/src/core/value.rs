@@ -1164,6 +1164,14 @@ fn native_package_provider(native_type: &str, method: &str) -> Result<Value, Str
     }))
 }
 
+fn native_instrument_provider(native_type: &str, method: &str) -> Result<Value, String> {
+    let display_name = native_display_name(native_type, method);
+    let method = method.to_owned();
+    Ok(native_variadic_function(&display_name, move |arguments| {
+        native_instrument_values(&method, arguments)
+    }))
+}
+
 fn native_os_provider(native_type: &str, method: &str) -> Result<Value, String> {
     let display_name = native_display_name(native_type, method);
     let native_type = native_type.to_owned();

@@ -21,6 +21,7 @@ include = [
   "clippy.toml",
   "examples/**",
   "resources/**",
+  "specs/**",
   "scripts/**",
   "src/**",
   "tests/**",
@@ -138,6 +139,10 @@ rand = "0.10"
 [[bin]]
 name = "hara-native"
 path = "src/bin/hara-native.rs"
+
+[[bin]]
+name = "hara-native-conformance-artifact"
+path = "src/bin/hara-native-conformance-artifact.rs"
 
 [dev-dependencies]
 hara-hta = { version = "0.1.6", path = "crates/hta-codec" }

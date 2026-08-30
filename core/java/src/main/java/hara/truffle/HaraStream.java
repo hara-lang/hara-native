@@ -23,7 +23,10 @@ final class HaraStream implements IStream {
     if (pending) return context.rejectedPromise("stream/pending-pull: only one Stream/next may be pending");
     pending = true;
     CompletableFuture<Object> result = new CompletableFuture<>();
-    Thread.ofVirtual().name("hara-stream-pull").start(() -> pull(result));
+    // A guest pull advances the coroutine to its next yield boundary before
+    // returning the promise.  When the callback settles immediately, as it
+    // does for a portable `Promise/from`, the public promise is settled too.
+    pull(result);
     return context.promiseValue(result);
   }
 

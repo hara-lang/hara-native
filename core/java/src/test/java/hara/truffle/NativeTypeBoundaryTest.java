@@ -70,4 +70,43 @@ public class NativeTypeBoundaryTest {
               .toString());
     }
   }
+
+  @Test
+  public void baseDeclarationsUseExplicitNamespaceHandles() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).allowAllAccess(true).build()) {
+      assertEquals(
+          "[42 \"hello Ada\" \"session-token\" :std.native.Nil]",
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(let [target (std.native.Base/namespace 'example.native) "
+                      + "user-type (std.native.Base/struct target 'User (std.native.Base/vector 'name)) "
+                      + "session-type (std.native.Base/mutable target 'Session (std.native.Base/vector 'token)) "
+                      + "_ (std.native.Base/def target 'answer (fn [] 42) nil) "
+                      + "greeting (std.native.Base/protocol target 'IGreeting {'greet 1} (std.native.Base/vector)) "
+                      + "_ (std.native.Base/extend target user-type greeting {'greet (fn [user] \"hello Ada\")}) "
+                      + "user ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target '->User)) \"Ada\") "
+                      + "session ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target '->Session)) \"session-token\")] "
+                      + "[((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target 'answer))) "
+                      + "((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target 'greet)) user) "
+                      + "(std.native.Base/field session :token) "
+                      + "(do (std.native.Base/protocol target 'IGreeting {'welcome 1} (std.native.Base/vector)) "
+                      + "(type (std.native.Base/resolve target 'greet)))])")
+              .toString());
+    }
+  }
+
+  @Test
+  public void baseDefRegistersMacrosInTheExplicitTargetNamespace() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).allowAllAccess(true).build()) {
+      context.eval(
+          HaraLanguage.ID,
+          "(let [target (std.native.Base/namespace 'example.macro)] "
+              + "(std.native.Base/def target 'identity-form "
+              + "(fn [form environment value] value) {:macro true}))");
+      assertEquals(
+          "42", context.eval(HaraLanguage.ID, "(example.macro/identity-form 42)").toString());
+    }
+  }
+
 }

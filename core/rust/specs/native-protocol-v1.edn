@@ -1,0 +1,830 @@
+{:format :hara-native/native-protocol-conformance
+ :version 1
+ :coverage
+ {:native/portable
+  [{:type "std.native.Maths"
+    :methods ["abs" "acos" "acosh" "asin" "asinh" "atan" "atan2" "atanh"
+              "ceil" "cos" "cosh" "exp" "floor" "pow" "sin" "sinh" "sqrt"
+              "tan" "tanh"]}
+   {:type "std.native.Num"
+    :methods ["long" "double" "parse-long" "parse-double"]}
+   {:type "std.native.Bits"
+    :methods ["and" "or" "xor" "not" "shift-left" "shift-right"]}
+   {:type "std.native.String"
+    :methods ["length" "blank?" "includes?" "starts-with?" "ends-with?" "char-at"
+              "slice" "index-of" "last-index-of" "join" "split" "split-lines"
+              "repeat" "replace" "replace-first" "trim" "trim-left" "trim-right"
+              "upper" "lower" "capitalize" "decapitalize" "pad-left" "pad-right"
+              "reverse" "encode-utf8" "decode-utf8" "to-fixed"]}
+   {:type "std.native.Bytes"
+    :methods ["new" "count" "get" "set" "copy" "slice" "u8" "s8"]}
+   {:type "std.native.Crypto"
+    :methods ["sha256" "sha512" "hmac-sha256" "hmac-sha512" "random-bytes" "secure-equal?"
+              "ed25519-keypair" "ed25519-public" "ed25519-sign" "ed25519-verify"
+              "x25519-keypair" "x25519-public" "x25519-shared" "p256-keypair" "p256-public"
+              "p256-sign" "p256-verify" "p256-shared"]}
+   {:type "std.native.Promise"
+    :methods ["run" "new" "from" "all" "delay"]}
+   {:type "std.native.Coroutine"
+    :methods ["create" "yield" "await"]}
+   {:type "std.native.Stream"
+    :methods ["create" "generate" "next"]}
+   {:type "std.native.Arr"
+    :methods ["new" "get" "set" "push-first" "push-last" "pop-first" "pop-last" "insert"
+              "remove" "clone" "slice" "map" "filter" "fold-left" "fold-right"]}
+   {:type "std.native.Obj"
+    :methods ["new" "get" "set" "has?" "delete" "clone" "assign" "keys" "vals" "pairs"]}
+   {:type "std.native.Runtime"
+    :methods ["load-string" "macroexpand-1" "gensym" "ns-publics" "ns-aliases" "ns-find"
+              "ns-create" "ns-name" "var-sym" "current" "snapshot" "vars" "namespaces"
+              "namespace" "module" "alias-state" "intern-var" "eval-in" "eval"]}
+   {:type "std.native.Printer"
+    :methods ["p" "println" "capture"]}
+   {:type "std.native.Document"
+    :methods ["element" "text" "fragment" "annotate" "pass" "escaped" "group" "line" "break"
+              "nest" "align" "normalize" "valid?" "render"]}
+   {:type "std.native.Edn"
+    :methods ["read" "read-forms" "write" "pretty"]}
+   {:type "std.native.Json"
+    :methods ["read" "write" "pretty"]}
+   {:type "std.native.Instrument"
+    :methods ["provider" "validate" "inspect" "disassemble" "transform" "execute"]}
+   {:type "std.native.Test"
+    :methods ["catalog" "config" "context" "events" "compare" "run" "result" "passed?" "actual"
+              "expected" "failures" "failure-seq" "failure-count" "failure" "failure?"]}
+   {:type "std.native.RegExp"
+    :methods ["compile" "pattern" "find?" "find" "matches" "replace" "split"]}
+   {:type "std.native.Result"
+    :methods ["create" "synchronize" "success?" "error?" "status" "data"
+              "error-value" "context" "with-context"]}
+   {:type "std.native.Schema"
+    :methods ["compile" "of" "kind" "form" "ast" "origin"]}
+   {:type "std.native.Exception"
+    :methods ["new" "message" "class"]}
+   {:type "std.native.Base"
+    :methods ["list" "vector" "vec" "set" "hash-map" "hash-set" "map-entry" "bytes" "atom"
+              "pointer" "symbol" "keyword" "uuid" "reduced" "unreduced" "hash"
+              "apply" "resolve" "namespace" "current-namespace" "select-namespace" "def"
+              "struct" "mutable" "protocol" "extend" "field" "number?" "long?" "satisfies?"
+              "special-symbol?" "type" "instance?"]}
+   {:type "std.native.Algo"
+    :methods ["deque" "ordered-map" "ordered-set" "priority-map" "queue" "sorted-map" "sorted-set"
+              "trie" "deque?" "ordered-map?" "ordered-set?" "priority-map?" "queue?" "sorted-map?"
+              "sorted-set?" "trie?"]}
+   {:type "std.native.Iter"
+    :methods ["seq" "iter" "iter-finite?" "iter-materialize" "iter-next?" "iter-next"
+              "iter-close" "iter-concat" "iter-map" "iter-filter" "iter-mapcat"
+              "iter-take-while" "iter-drop-while" "iter-keep" "iter-interpose" "iter-interleave"
+              "iter-every?" "iter-any?" "iter-take" "iter-drop" "iter-zip" "iter-cycle"
+              "iter-partition-pair" "iter-partition-all" "iter-partition" "iter-range" "iter-constantly"
+              "iter-repeatedly" "iter-iterate"]}]
+  }
+ :suites
+ [{:id :native
+   :setup nil
+   :cases
+   [{:id :native/maths-abs
+     :program (= 2 (std.native.Maths/abs -2))
+     :expect {:display "true"}}
+    {:id :native/maths-abs-arity
+     :program (std.native.Maths/abs)
+     :expect {:error :native/arity}}
+    {:id :native/maths-abs-type
+     :program (std.native.Maths/abs "not-a-number")
+     :expect {:error :native/type}}
+    {:id :native/maths-portable-surface
+     :program (= [0 0 0 0 0 0 0 2 1 1 1 1 8 0 0 2 0 0 2]
+                 [(std.native.Maths/acos 1)
+                  (std.native.Maths/acosh 1)
+                  (std.native.Maths/asin 0)
+                  (std.native.Maths/asinh 0)
+                  (std.native.Maths/atan 0)
+                  (std.native.Maths/atan2 0 1)
+                  (std.native.Maths/atanh 0)
+                  (std.native.Maths/ceil (std.native.Num/parse-double "1.5"))
+                  (std.native.Maths/cos 0)
+                  (std.native.Maths/cosh 0)
+                  (std.native.Maths/exp 0)
+                  (std.native.Maths/floor (std.native.Num/parse-double "1.5"))
+                  (std.native.Maths/pow 2 3)
+                  (std.native.Maths/sin 0)
+                  (std.native.Maths/sinh 0)
+                  (std.native.Maths/sqrt 4)
+                  (std.native.Maths/tan 0)
+                  (std.native.Maths/tanh 0)
+                  (std.native.Maths/abs -2)])
+     :expect {:display "true"}}
+    {:id :native/num-and-bits-portable-surface
+     :program (= [2 true 42 true 2 7 5 -2 8 2]
+                 [(std.native.Num/long (std.native.Num/parse-double "2.0"))
+                  (std.native.Base/number? (std.native.Num/double 2))
+                  (std.native.Num/parse-long "42")
+                  (std.native.Base/number? (std.native.Num/parse-double "4.5"))
+                  (std.native.Bits/and 6 3)
+                  (std.native.Bits/or 6 3)
+                  (std.native.Bits/xor 6 3)
+                  (std.native.Bits/not 1)
+                  (std.native.Bits/shift-left 1 3)
+                  (std.native.Bits/shift-right 8 2)])
+     :expect {:display "true"}}
+    {:id :native/string-portable-surface
+     :program (= [3 true true true true \a "ar" 1 3 "a,b" ["a" "b"] ["a" "b"] "abab" "xbx" "xba" "a" "a  " "  a" "HARA" "hara" "Hara" "hara" "00a" "a00" "arah" "λ" "1.50"]
+                 [(std.native.String/length "abc")
+                  (std.native.String/blank? "  \n")
+                  (std.native.String/includes? "hara" "ar")
+                  (std.native.String/starts-with? "hara" "ha")
+                  (std.native.String/ends-with? "hara" "ra")
+                  (std.native.String/char-at "hara" 1)
+                  (std.native.String/slice "hara" 1 3)
+                  (std.native.String/index-of "hara" "ar")
+                  (std.native.String/last-index-of "ababa" "ba")
+                  (std.native.String/join "," ["a" "b"])
+                  (std.native.String/split "a,b" ",")
+                  (std.native.String/split-lines "a\nb")
+                  (std.native.String/repeat "ab" 2)
+                  (std.native.String/replace "aba" "a" "x")
+                  (std.native.String/replace-first "aba" "a" "x")
+                  (std.native.String/trim "  a  ")
+                  (std.native.String/trim-left "  a  ")
+                  (std.native.String/trim-right "  a  ")
+                  (std.native.String/upper "hara")
+                  (std.native.String/lower "HARA")
+                  (std.native.String/capitalize "hara")
+                  (std.native.String/decapitalize "Hara")
+                  (std.native.String/pad-left "a" 3 "0")
+                  (std.native.String/pad-right "a" 3 "0")
+                  (std.native.String/reverse "hara")
+                  (std.native.String/decode-utf8 (std.native.String/encode-utf8 "λ"))
+                  (std.native.String/to-fixed (std.native.Num/parse-double "1.5") 2)])
+     :expect {:display "true"}}
+    {:id :native/bytes-portable-surface
+     :program (let [source (std.native.Bytes/new 1 2 -1)
+                    copy (std.native.Bytes/copy source)
+                    _ (std.native.Bytes/set copy 0 9)]
+                (= [3 2 1 9 2 255 -1]
+                   [(std.native.Bytes/count source)
+                    (std.native.Bytes/get source 1)
+                    (std.native.Bytes/get source 0)
+                    (std.native.Bytes/get copy 0)
+                    (std.native.Bytes/get (std.native.Bytes/slice source 1 3) 0)
+                    (std.native.Bytes/u8 -1)
+                    (std.native.Bytes/s8 255)]))
+     :expect {:display "true"}}
+    {:id :native/crypto-portable-surface
+     :program (let [value (std.native.String/encode-utf8 "hara")]
+                (= [64 128 true]
+                   [(std.native.String/length (std.native.Crypto/sha256 value))
+                    (std.native.String/length (std.native.Crypto/sha512 value))
+                    (std.native.Crypto/secure-equal? value value)]))
+     :expect {:display "true"}}
+    {:id :native/promise-protocol-boundary
+     :program (= [42 :fulfilled]
+                 [(std.protocol.ipromise.IPromise/value (std.native.Promise/from 42))
+                  (std.protocol.ipromise.IPromise/state (std.native.Promise/from 42))])
+     :expect {:display "true"}}
+    {:id :native/array-and-object-mutation
+     :program (let [array (std.native.Arr/new 1 2)
+                    array-copy (std.native.Arr/clone array)
+                    object (std.native.Obj/new "answer" 42)
+                    object-copy (std.native.Obj/clone object)
+                    _ (std.native.Arr/set array-copy 0 9)
+                    _ (std.native.Obj/set object-copy "answer" 9)
+                    _ (std.native.Obj/delete object-copy "answer")]
+                (= [:std.native.Array 2 1 :std.native.Object 42 true false]
+                   [(std.native.Base/type array)
+                    (std.native.Arr/get array 1)
+                    (std.native.Arr/get array 0)
+                    (std.native.Base/type object)
+                    (std.native.Obj/get object "answer")
+                    (std.native.Obj/has? object "answer")
+                    (std.native.Obj/has? object-copy "answer")]))
+     :expect {:display "true"}}
+    {:id :native/runtime-and-codecs
+     :program (= [42 {:a 1} "{:a 1}" {"a" 1} "{\"a\":1}"]
+                 [(std.native.Runtime/load-string "(+ 19 23)")
+                  (std.native.Edn/read "{:a 1}")
+                  (std.native.Edn/write {:a 1})
+                  (std.native.Json/read "{\"a\":1}")
+                  (std.native.Json/write {"a" 1})])
+     :expect {:display "true"}}
+    {:id :native/regexp-portable-surface
+     :program (let [expression (std.native.RegExp/compile "a+")]
+                (= [:std.native.RegExp "a+" true "aa" [true false true] "12:x" ["a" "b" "c"]]
+                   [(std.native.Base/type expression)
+                    (std.native.RegExp/pattern expression)
+                    (std.native.RegExp/find? expression "caa")
+                    (std.native.RegExp/find expression "caa")
+                    [(std.native.RegExp/matches expression "aa")
+                     (std.native.RegExp/matches expression "caa")
+                     (std.native.RegExp/matches (std.native.RegExp/compile "a|abc") "abc")]
+                    (std.native.RegExp/replace (std.native.RegExp/compile "([a-z]+)-([0-9]+)") "x-12" "$2:$1")
+                    (std.native.RegExp/split (std.native.RegExp/compile ",+") "a,,b,c")]))
+     :expect {:display "true"}}
+    {:id :native/result-exception-and-schema
+     :program (let [success-result (std.native.Result/create :success 42)
+                    failure-result (std.native.Result/create :error "boom")
+                    exception-value (std.native.Exception/new "boom" {:ex/class :ex.class/demo})]
+                (= [:success true true 42 42 "boom" {:trace 8} "boom" "exception" :std.native.SchemaType]
+                   [(std.native.Result/status success-result)
+                    (std.native.Result/success? success-result)
+                    (std.native.Result/error? failure-result)
+                    (std.native.Result/data success-result)
+                    (std.native.Result/data (std.native.Result/synchronize 42))
+                    (std.native.Exception/message (std.native.Result/error-value failure-result))
+                    (std.native.Result/context (std.native.Result/with-context success-result {:trace 8}))
+                    (std.native.Exception/message exception-value)
+                    (std.native.Exception/class exception-value)
+                    (std.native.Base/type (std.native.Schema/compile :int))]))
+     :expect {:display "true"}}
+    {:id :native/schema-introspection-semantics
+     :program (let [schema (std.native.Schema/compile :int)
+                    target (std.native.Base/namespace 'hnc.schema)
+                    value (std.native.Base/def target 'answer 42 nil)]
+                (= [nil :primitive :int {:name :int :kind :primitive} nil]
+                   [(std.native.Schema/of value)
+                    (std.native.Schema/kind schema)
+                    (std.native.Schema/form schema)
+                    (std.native.Schema/ast schema)
+                    (std.native.Schema/origin schema)]))
+     :expect {:display "true"}}
+    {:id :native/base-portable-surface
+     :program (let [atom (std.native.Base/atom 1)
+                    entry (std.native.Base/map-entry :a 1)
+                    pointer (std.native.Base/pointer {:context :base})]
+                (= [true [1 2] [1 2] #{1 2} {:a 1} #{1 2} 3 true :a 1 1 :base 'base/value :base/value true true true]
+                   [(= '(1 2) (std.native.Base/list 1 2))
+                    (std.native.Base/vector 1 2)
+                    (std.native.Base/vec (std.native.Base/list 1 2))
+                    (std.native.Base/set [1 2 1])
+                    (std.native.Base/hash-map :a 1)
+                    (std.native.Base/hash-set 1 2)
+                    (std.native.Bytes/count (std.native.Base/bytes 1 2 -3))
+                    (= (std.native.Base/hash [1 2])
+                       (std.native.Base/hash (std.native.Base/list 1 2)))
+                    (std.protocol.ipair.IPair/key entry)
+                    (std.protocol.ipair.IPair/value entry)
+                    (std.protocol.ideref.IDeref/deref atom)
+                    (std.protocol.ipointer.IPointer/ptr-context pointer)
+                    (std.native.Base/symbol "base" "value")
+                    (std.native.Base/keyword "base" "value")
+                    (std.native.Base/number? (std.native.Num/parse-double "1.5"))
+                    (std.native.Base/long? 1)
+                    (std.native.Base/instance? (std.protocol.ideref.IDeref/deref (std.native.Base/resolve 'std.native.Promise)) (std.native.Promise/from 1))]))
+     :expect {:display "true"}}
+    {:id :native/base-namespace-and-protocol-semantics
+     :program (let [initial (std.native.Base/current-namespace)
+                    target (std.native.Base/namespace 'hnc.base-current)
+                    protocol (std.protocol.ideref.IDeref/deref
+                              (std.native.Base/resolve 'std.protocol.ilookup.ILookup))
+                    result (do
+                             (std.native.Base/select-namespace target)
+                             (= ['hnc.base-current 'hnc.base-current true false true]
+                                [(std.native.Runtime/ns-name
+                                  (std.native.Base/current-namespace))
+                                 (std.native.Runtime/ns-name
+                                  (std.native.Base/select-namespace target))
+                                 (std.native.Base/special-symbol? 'if)
+                                 (std.native.Base/special-symbol? 'answer)
+                                 (std.native.Base/satisfies? protocol {:answer 42})]))
+                    _ (std.native.Base/select-namespace initial)]
+                result)
+     :expect {:display "true"}}
+    {:id :native/algo-collection-semantics
+     :program (let [deque (std.native.Algo/deque 1 2)
+                    ordered-map (std.native.Algo/ordered-map :a 1)
+                    ordered-set (std.native.Algo/ordered-set 2 1)
+                    priority-map (std.native.Algo/priority-map :a 2)
+                    queue (std.native.Algo/queue 1 2)
+                    sorted-map (std.native.Algo/sorted-map :a 1)
+                    sorted-set (std.native.Algo/sorted-set 2 1)
+                    trie (std.native.Algo/trie "a" 1)]
+                (= [:std.native.Deque :std.native.OrderedMap :std.native.OrderedSet
+                    :std.native.PriorityMap :std.native.Queue :std.native.SortedMap
+                    :std.native.SortedSet :std.native.Trie true true true true true true
+                    true true]
+                   [(std.native.Base/type deque)
+                    (std.native.Base/type ordered-map)
+                    (std.native.Base/type ordered-set)
+                    (std.native.Base/type priority-map)
+                    (std.native.Base/type queue)
+                    (std.native.Base/type sorted-map)
+                    (std.native.Base/type sorted-set)
+                    (std.native.Base/type trie)
+                    (std.native.Algo/deque? deque)
+                    (std.native.Algo/ordered-map? ordered-map)
+                    (std.native.Algo/ordered-set? ordered-set)
+                    (std.native.Algo/priority-map? priority-map)
+                    (std.native.Algo/queue? queue)
+                    (std.native.Algo/sorted-map? sorted-map)
+                    (std.native.Algo/sorted-set? sorted-set)
+                    (std.native.Algo/trie? trie)]))
+     :expect {:display "true"}}
+    {:id :native/iter-full-portable-fixture
+     :program (let [concatenated (std.native.Iter/iter-concat [1 2] [3 4])
+                    mapped (std.native.Iter/iter-mapcat (fn [value] [value (+ value 10)]) [1 2])
+                    kept (std.native.Iter/iter-keep (fn [value] (if (= value 2) value nil)) [1 2 3])
+                    taken (std.native.Iter/iter-take 2 [1 2 3])
+                    dropped (std.native.Iter/iter-drop 1 [1 2 3])
+                    cycled (std.native.Iter/iter-cycle [1 2])
+                    pairs (std.native.Iter/iter-partition-pair [1 2 3 4])
+                    ranged (std.native.Iter/iter-range 0 10)
+                    constant (std.native.Iter/iter-constantly 7)
+                    iterated (std.native.Iter/iter-iterate (fn [value] (+ value 1)) 1)]
+                (= [[1 2] true 3 2 2 [1 2 false] 2 1 2 [0 1 2] [7 7] [1 2 3]]
+                   [(std.native.Iter/iter-materialize (std.native.Iter/seq [1 2]))
+                    (std.native.Iter/iter-finite? [1])
+                    (do (std.native.Iter/iter-next concatenated)
+                        (std.native.Iter/iter-next concatenated)
+                        (std.native.Iter/iter-next concatenated))
+                    (do (std.native.Iter/iter-next mapped)
+                        (std.native.Iter/iter-next mapped)
+                        (std.native.Iter/iter-next mapped))
+                    (std.native.Iter/iter-next kept)
+                    [(std.native.Iter/iter-next taken)
+                     (std.native.Iter/iter-next taken)
+                     (std.native.Iter/iter-next? taken)]
+                    (std.native.Iter/iter-next dropped)
+                    (do (std.native.Iter/iter-next cycled)
+                        (std.native.Iter/iter-next cycled)
+                        (std.native.Iter/iter-next cycled))
+                    (std.protocol.inth.INth/nth (std.native.Iter/iter-next pairs) 1)
+                    [(std.native.Iter/iter-next ranged)
+                     (std.native.Iter/iter-next ranged)
+                     (std.native.Iter/iter-next ranged)]
+                    [(std.native.Iter/iter-next constant)
+                     (std.native.Iter/iter-next constant)]
+                    [(std.native.Iter/iter-next iterated)
+                     (std.native.Iter/iter-next iterated)
+                     (std.native.Iter/iter-next iterated)]]))
+     :expect {:display "true"}}
+    {:id :native/iter-lazy-and-partition-semantics
+     :program (let [take-while (std.native.Iter/iter-take-while
+                                 (fn [value] (< value 3)) [1 2 3 4])
+                    drop-while (std.native.Iter/iter-drop-while
+                                 (fn [value] (< value 3)) [1 2 3 4])
+                    interpose (std.native.Iter/iter-interpose 0 [1 2 3])
+                    interleave (std.native.Iter/iter-interleave [1 2] [3 4])
+                    partition-all (std.native.Iter/iter-partition-all 2 [1 2 3])
+                    partition (std.native.Iter/iter-partition 2 [1 2 3])
+                    repeated (std.native.Iter/iter-repeatedly (fn [] 7))]
+                (= [1 2 false 3 1 0 2 0 3 1 3 2 4 [1 2] [3] false [1 2]
+                    false true true 7 7 7]
+                   [(std.native.Iter/iter-next take-while)
+                    (std.native.Iter/iter-next take-while)
+                    (std.native.Iter/iter-next? take-while)
+                    (std.native.Iter/iter-next drop-while)
+                    (std.native.Iter/iter-next interpose)
+                    (std.native.Iter/iter-next interpose)
+                    (std.native.Iter/iter-next interpose)
+                    (std.native.Iter/iter-next interpose)
+                    (std.native.Iter/iter-next interpose)
+                    (std.native.Iter/iter-next interleave)
+                    (std.native.Iter/iter-next interleave)
+                    (std.native.Iter/iter-next interleave)
+                    (std.native.Iter/iter-next interleave)
+                    (std.native.Iter/iter-next partition-all)
+                    (std.native.Iter/iter-next partition-all)
+                    (std.native.Iter/iter-next? partition-all)
+                    (std.native.Iter/iter-next partition)
+                    (std.native.Iter/iter-next? partition)
+                    (std.native.Iter/iter-every? (fn [value] (< value 4)) [1 2 3])
+                    (std.native.Iter/iter-any? (fn [value] (= value 2)) [1 2 3])
+                    (std.native.Iter/iter-next repeated)
+                    (std.native.Iter/iter-next repeated)
+                    (std.native.Iter/iter-next repeated)]))
+     :expect {:display "true"}}
+    {:id :native/native-boundary-errors-and-result-deref
+     :program (let [success-result (std.native.Result/create :success 42)
+                    failure-result (std.native.Result/create :error "boom")]
+                (= [true true 42 true]
+                   [(try (std.native.Maths/abs) false (catch error true))
+                    (try (std.native.Maths/abs "bad") false (catch error true))
+                    (std.protocol.ideref.IDeref/deref success-result)
+                    (try (std.protocol.ideref.IDeref/deref failure-result)
+                         false
+                         (catch error true))]))
+     :expect {:display "true"}}
+    {:id :native/base-reduced-uuid-and-apply
+     :program (= [42 42 42 true :std.native.Reduced :std.native.Vector]
+                 [(std.native.Base/unreduced (std.native.Base/reduced 42))
+                  (std.native.Base/unreduced 42)
+                  (std.native.Base/apply + [19 23])
+                  (= (std.native.Base/uuid "00000000-0000-0000-0000-000000000000")
+                     (std.native.Base/uuid "00000000-0000-0000-0000-000000000000"))
+                  (std.native.Base/type (std.native.Base/reduced 1))
+                  (std.native.Base/type (std.native.Base/vector 1))])
+     :expect {:display "true"}}
+    {:id :native/iter-portable-surface
+     :program (let [iter (std.native.Iter/iter [1 2 3])
+                    mapped (std.native.Iter/iter-map (fn [value] (* value 2)) [1 2])
+                    filtered (std.native.Iter/iter-filter (fn [value] (= value 2)) [1 2 3])
+                    zipped (std.native.Iter/iter-zip [1 2] [3 4])
+                    closed (std.native.Iter/iter [1])]
+                (std.native.Iter/iter-close closed)
+                (= [[1 2] 1 true true 2 2 3 false]
+                   [(std.native.Iter/iter-materialize [1 2])
+                    (std.native.Iter/iter-next iter)
+                    (std.native.Iter/iter-next? iter)
+                    (std.native.Iter/iter-finite? mapped)
+                    (std.native.Iter/iter-next mapped)
+                    (std.native.Iter/iter-next filtered)
+                    (std.protocol.inth.INth/nth (std.native.Iter/iter-next zipped) 1)
+                    (std.native.Iter/iter-next? closed)]))
+     :expect {:display "true"}}
+    {:id :native/base-vector
+     :program (= [1 2 3] (std.native.Base/vector 1 2 3))
+     :expect {:display "true"}}
+    {:id :native/base-map-entry
+     :program (let [entry (std.native.Base/map-entry :answer 42)]
+                (= [:std.native.MapEntry :answer 42]
+                   [(std.native.Base/type entry)
+                    (std.protocol.ipair.IPair/key entry)
+                    (std.protocol.ipair.IPair/value entry)]))
+     :expect {:display "true"}}
+    {:id :native/base-declaration-abi
+     :program (let [target (std.native.Base/namespace 'hnc.native)
+                    user-type (std.native.Base/struct
+                               target 'User (std.native.Base/vector 'name))
+                    session-type (std.native.Base/mutable
+                                  target 'Session (std.native.Base/vector 'token))
+                    _ (std.native.Base/def target 'answer (fn [] 42) nil)
+                    greeting (std.native.Base/protocol
+                              target 'IGreeting {'greet 1} (std.native.Base/vector))
+                    _ (std.native.Base/extend
+                        target user-type greeting
+                        {'greet (fn [user] "hello Ada")})
+                    user ((std.protocol.ideref.IDeref/deref
+                           (std.native.Base/resolve target '->User)) "Ada")
+                    session ((std.protocol.ideref.IDeref/deref
+                              (std.native.Base/resolve target '->Session)) "session-token")]
+                (= [42 "hello Ada" "session-token" true]
+                   [((std.protocol.ideref.IDeref/deref
+                      (std.native.Base/resolve target 'answer)))
+                    ((std.protocol.ideref.IDeref/deref
+                      (std.native.Base/resolve target 'greet)) user)
+                    (std.native.Base/field session :token)
+                    (do (std.native.Base/protocol
+                          target 'IGreeting {'welcome 1} (std.native.Base/vector))
+                        (= nil (std.native.Base/resolve target 'greet)))]))
+     :expect {:display "true"}}
+    {:id :native/vector-type
+     :program (= :std.native.Vector (std.native.Base/type [1]))
+     :expect {:display "true"}}
+    {:id :native/map-entry-type
+     :program (= :std.native.MapEntry
+                 (std.native.Base/type
+                   (std.protocol.ifind.IFind/find {:answer 42} :answer)))
+     :expect {:display "true"}}
+    {:id :native/coroutine-create-yield
+     :program (do
+                (def hnc-coroutine
+                  (std.native.Coroutine/create
+                    (fn [] (std.native.Coroutine/yield 42))))
+                (= 42
+                   (std.protocol.icoroutine.ICoroutine/resume hnc-coroutine)))
+     :expect {:display "true"}}
+    {:id :native/instrument-provider
+     :program (= :std.native.Keyword
+                 (std.native.Base/type
+                   (std.protocol.ilookup.ILookup/lookup
+                     (std.native.Instrument/provider)
+                     :provider/id)))
+     :expect {:display "true"}}
+    {:id :native/crypto-key-and-signature-semantics
+     :program (let [message (std.native.Base/bytes 1 2 3)
+                    ed (std.native.Crypto/ed25519-keypair)
+                    ed-private (std.protocol.ilookup.ILookup/lookup ed :private)
+                    ed-public (std.protocol.ilookup.ILookup/lookup ed :public)
+                    ed-signature (std.native.Crypto/ed25519-sign ed-private message)
+                    x-left (std.native.Crypto/x25519-keypair)
+                    x-right (std.native.Crypto/x25519-keypair)
+                    x-left-private (std.protocol.ilookup.ILookup/lookup x-left :private)
+                    x-left-public (std.protocol.ilookup.ILookup/lookup x-left :public)
+                    x-right-private (std.protocol.ilookup.ILookup/lookup x-right :private)
+                    x-right-public (std.protocol.ilookup.ILookup/lookup x-right :public)
+                    p (std.native.Crypto/p256-keypair)
+                    p-private (std.protocol.ilookup.ILookup/lookup p :private)
+                    p-public (std.protocol.ilookup.ILookup/lookup p :public)
+                    p-signature (std.native.Crypto/p256-sign p-private message)]
+                (= ["039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+                    64 128 4 true true true true true true true true true true true]
+                   [(std.native.Crypto/sha256 message)
+                    (std.native.String/length (std.native.Crypto/hmac-sha256 message message))
+                    (std.native.String/length (std.native.Crypto/hmac-sha512 message message))
+                    (std.native.Bytes/count (std.native.Crypto/random-bytes 4))
+                    (std.native.Crypto/secure-equal? message message)
+                    (= 32 (std.native.Bytes/count ed-private))
+                    (= ed-public (std.native.Crypto/ed25519-public ed-private))
+                    (std.native.Crypto/ed25519-verify ed-public message ed-signature)
+                    (= 32 (std.native.Bytes/count x-left-private))
+                    (= x-left-public (std.native.Crypto/x25519-public x-left-private))
+                    (= (std.native.Crypto/x25519-shared x-left-private x-right-public)
+                       (std.native.Crypto/x25519-shared x-right-private x-left-public))
+                    (= 32 (std.native.Bytes/count p-private))
+                    (= p-public (std.native.Crypto/p256-public p-private))
+                    (std.native.Crypto/p256-verify p-public message p-signature)
+                    (= 32 (std.native.Bytes/count
+                             (std.native.Crypto/p256-shared p-private p-public)))]))
+     :expect {:display "true"}}
+    {:id :native/promise-construction-semantics
+     :program (let [from (std.native.Promise/from 42)
+                    run (std.native.Promise/run (fn [] 7))
+                    made (std.native.Promise/new (fn [resolve reject] (resolve 9)))
+                    all (std.native.Promise/all [(std.native.Promise/from 1)
+                                                 (std.native.Promise/from 2)])
+                    delayed (std.native.Promise/delay 0 (fn [] 3))]
+                (= [42 7 9 1 2 3]
+                   [(std.protocol.ideref.IDeref/deref from)
+                    (std.protocol.ideref.IDeref/deref run)
+                    (std.protocol.ideref.IDeref/deref made)
+                    (std.protocol.inth.INth/nth
+                      (std.protocol.ideref.IDeref/deref all) 0)
+                    (std.protocol.inth.INth/nth
+                      (std.protocol.ideref.IDeref/deref all) 1)
+                    (std.protocol.ideref.IDeref/deref delayed)]))
+     :expect {:display "true"}}
+    {:id :native/array-mutation-and-fold-semantics
+     :program (let [array (std.native.Arr/new 1 2)
+                    _ (std.native.Arr/push-first array 0)
+                    _ (std.native.Arr/push-last array 3)
+                    _ (std.native.Arr/insert array 2 9)
+                    removed (std.native.Arr/remove array 2)
+                    first (std.native.Arr/pop-first array)
+                    last (std.native.Arr/pop-last array)]
+                (= [9 0 3 1 2 2 4 1 3 3]
+                   [removed
+                    first
+                    last
+                    (std.native.Arr/get (std.native.Arr/slice array 0) 0)
+                    (std.native.Arr/get (std.native.Arr/slice array 0) 1)
+                    (std.native.Arr/get (std.native.Arr/map array (fn [value] (* value 2))) 0)
+                    (std.native.Arr/get (std.native.Arr/map array (fn [value] (* value 2))) 1)
+                    (std.native.Arr/get (std.native.Arr/filter array (fn [value] (= value 1))) 0)
+                    (std.native.Arr/fold-left array (fn [acc value] (+ acc value)) 0)
+                    (std.native.Arr/fold-right array (fn [value acc] (+ acc value)) 0)]))
+     :expect {:display "true"}}
+    {:id :native/object-assignment-and-views
+     :program (let [object (std.native.Obj/new "a" 1)
+                    _ (std.native.Obj/assign object (std.native.Obj/new "b" 2))]
+                (= [2 "a" "b" 1 2 "a" 1 "b" 2]
+                   [(std.native.Obj/get object "b")
+                    (std.native.Arr/get (std.native.Obj/keys object) 0)
+                    (std.native.Arr/get (std.native.Obj/keys object) 1)
+                    (std.native.Arr/get (std.native.Obj/vals object) 0)
+                    (std.native.Arr/get (std.native.Obj/vals object) 1)
+                    (std.native.Arr/get (std.native.Arr/get (std.native.Obj/pairs object) 0) 0)
+                    (std.native.Arr/get (std.native.Arr/get (std.native.Obj/pairs object) 0) 1)
+                    (std.native.Arr/get (std.native.Arr/get (std.native.Obj/pairs object) 1) 0)
+                    (std.native.Arr/get (std.native.Arr/get (std.native.Obj/pairs object) 1) 1)]))
+     :expect {:display "true"}}
+    {:id :native/coroutine-await-semantics
+     :program (do
+                (def hnc-await-coroutine
+                  (std.native.Coroutine/create
+                    (fn [] (std.native.Coroutine/await (std.native.Promise/from 8)))))
+                (= 8
+                   (std.protocol.icoroutine.ICoroutine/resume hnc-await-coroutine)))
+     :expect {:display "true"}}
+    {:id :native/stream-create-generate-and-next
+     :program (let [stream (std.native.Stream/create
+                              (fn [] (std.native.Promise/from 42)))
+                    generated (std.native.Stream/generate
+                               (fn [value] (std.native.Promise/from value)) 7)]
+                (= [42 nil]
+                   [(std.protocol.ideref.IDeref/deref (std.native.Stream/next stream))
+                    (std.protocol.ideref.IDeref/deref (std.native.Stream/next generated))]))
+     :expect {:display "true"}}
+    {:id :native/runtime-namespace-and-evaluation-semantics
+     :program (let [target (std.native.Runtime/ns-create
+                            (std.native.Base/symbol "hnc.runtime-functional"))
+                    _ (std.native.Base/def target (std.native.Base/symbol "answer") 42 nil)
+                    first (std.native.Runtime/gensym "hnc")
+                    second (std.native.Runtime/gensym "hnc")]
+                (std.native.Iter/iter-every? (fn [value] value)
+                  (std.native.Iter/iter-take 18
+                    (std.native.Iter/iter-map
+                      (fn [pair]
+                        (= (std.protocol.inth.INth/nth pair 0)
+                           (std.protocol.inth.INth/nth pair 1)))
+                      (std.native.Iter/iter-zip ['hnc.runtime-functional
+                    'hnc.runtime-functional/direct
+                    :std.native.Namespace
+                    :std.native.OrderedMap :std.native.OrderedMap
+                    :std.native.Symbol :std.native.OrderedMap :std.native.OrderedMap
+                    :std.native.Vector :std.native.OrderedMap
+                    :std.native.OrderedMap
+                    nil 42 3 42 false
+                    'hnc.runtime-functional/copy 'hnc.runtime-functional]
+                   [(std.native.Runtime/ns-name target)
+                    (std.native.Runtime/var-sym
+                      (std.native.Base/def target (std.native.Base/symbol "direct") 1 nil))
+                    (std.native.Base/type
+                      (std.native.Runtime/ns-find (std.native.Base/symbol "hnc.runtime-functional")))
+                    (std.native.Base/type (std.native.Runtime/ns-publics target))
+                    (std.native.Base/type (std.native.Runtime/ns-aliases target))
+                    (std.native.Base/type (std.native.Runtime/current))
+                    (std.native.Base/type (std.native.Runtime/snapshot))
+                    (std.native.Base/type (std.native.Runtime/vars target))
+                    (std.native.Base/type (std.native.Runtime/namespaces))
+                    (std.native.Base/type (std.native.Runtime/namespace target))
+                    (std.native.Base/type
+                      (std.native.Runtime/module "classpath:hnc/runtime-functional.hal"))
+                    (std.native.Runtime/alias-state (std.native.Base/symbol "missing"))
+                    (std.native.Runtime/eval (quote 42))
+                    (std.native.Runtime/eval-in target [(quote 3)])
+                    (std.native.Runtime/macroexpand-1 (quote 42))
+                    (= first second)
+                    (std.native.Runtime/var-sym
+                      (std.native.Runtime/intern-var target (std.native.Base/symbol "copy")
+                        (std.native.Base/def target (std.native.Base/symbol "source") 7 nil)))
+                    (std.native.Runtime/ns-name
+                      (std.native.Runtime/ns-create (std.native.Base/symbol "hnc.runtime-functional")))])))))
+     :expect {:display "true"}}
+    {:id :native/printer-capture-and-layout
+     :program (= "a1\nb"
+                 (std.native.Printer/capture
+                   (fn []
+                     (std.native.Printer/p "a")
+                     (std.native.Printer/println 1)
+                     (std.native.Printer/p "b"))))
+     :expect {:display "true"}}
+    {:id :native/document-construction-and-rendering
+     :program (let [text (std.native.Document/text "hello")
+                    line (std.native.Document/line)
+                    fragment (std.native.Document/fragment text line
+                               (std.native.Document/text "world"))]
+                (= [true "hello" "hello\nworld" [:p "hello"]
+                    [:document/annotate :tag "hello"] [:document/pass "hello"]
+                    [:document/escaped "<x>"] [:document/group "hello"]
+                    [:document/line] [:document/break] [:document/nest 2 "hello"]
+                    [:document/align 2 "hello"] "hello"]
+                   [(std.native.Document/valid? text)
+                    (std.native.Document/render text)
+                    (std.native.Document/render fragment)
+                    (std.native.Document/element :p text)
+                    (std.native.Document/annotate :tag text)
+                    (std.native.Document/pass text)
+                    (std.native.Document/escaped "<x>")
+                    (std.native.Document/group text)
+                    line
+                    (std.native.Document/break)
+                    (std.native.Document/nest 2 text)
+                    (std.native.Document/align 2 text)
+                    (std.native.Document/normalize text)]))
+     :expect {:display "true"}}
+    {:id :native/codec-pretty-and-read-forms-boundaries
+     :program (= [{:a 1} "{:a 1}" "{:a 1}" {"a" 1} "{\"a\":1}" "{\n  \"a\": 1\n}"
+                  true]
+                 [(std.native.Edn/read "{:a 1}")
+                  (std.native.Edn/write {:a 1})
+                  (std.native.Edn/pretty {:a 1} {})
+                  (std.native.Json/read "{\"a\":1}")
+                  (std.native.Json/write {"a" 1})
+                  (std.native.Json/pretty {"a" 1} {})
+                  (try (std.native.Edn/read-forms "fixture.txt") false
+                       (catch error true))])
+     :expect {:display "true"}}
+    {:id :native/instrument-invalid-artifact-boundaries
+     :program (= [:std.native.Keyword true true true true true]
+                 [(std.native.Base/type
+                   (std.protocol.ilookup.ILookup/lookup
+                     (std.native.Instrument/provider) :provider/id))
+                  (try (std.native.Instrument/validate :hbc (std.native.Base/bytes))
+                       false (catch error true))
+                  (try (std.native.Instrument/inspect :hbc (std.native.Base/bytes))
+                       false (catch error true))
+                  (try (std.native.Instrument/disassemble (std.native.Base/bytes))
+                       false (catch error true))
+                  (try (std.native.Instrument/transform :unknown :unknown "" {})
+                       false (catch error true))
+                  (try (std.native.Instrument/execute :hbc (std.native.Base/bytes) {})
+                       false (catch error true))])
+     :expect {:display "true"}}
+    {:id :native/test-result-and-run-semantics
+     :program (let [config (std.native.Test/config {})
+                    context (std.native.Test/context config)
+                    equal (std.native.Test/compare 1 1)
+                    different (std.native.Test/compare 1 2)
+                    passed (std.native.Test/result :pass 1 1 equal)
+                    failed (std.native.Test/result :fail 1 2 different)
+                    run-results (std.native.Test/run
+                                  [{:name :run :test (fn [] 3) :expected 3}])]
+                (= [:std.native.HashMap :std.native.HashMap :std.native.Pointer
+                    :std.native.Vector :std.native.Result true 1 1 0 1
+                    :std.native.Vector :std.native.Vector true true]
+                   [(std.native.Base/type (std.native.Test/catalog))
+                    (std.native.Base/type config)
+                    (std.native.Base/type context)
+                    (std.native.Base/type (std.native.Test/events))
+                    (std.native.Base/type equal)
+                    (std.native.Test/passed? passed)
+                    (std.native.Test/actual passed)
+                    (std.native.Test/expected passed)
+                    (std.native.Test/failure-count passed)
+                    (std.native.Test/failure-count failed)
+                    (std.native.Base/type (std.native.Test/failures failed))
+                    (std.native.Base/type (std.native.Test/failure-seq failed))
+                    (std.native.Test/failure? (std.native.Test/failure failed 0))
+                    (std.native.Test/passed?
+                      (std.protocol.inth.INth/nth run-results 0))]))
+     :expect {:display "true"}}]}
+
+  {:id :protocol
+   :setup nil
+   :cases
+   [{:id :protocol/assoc
+     :program (= {:a 1 :b 2}
+                 (std.protocol.iassoc.IAssoc/assoc {:a 1} :b 2))
+     :expect {:display "true"}}
+    {:id :protocol/lookup
+     :program (= 42
+                 (std.protocol.ilookup.ILookup/lookup {:answer 42} :answer))
+     :expect {:display "true"}}
+    {:id :protocol/map-entry
+     :program (let [entry (std.protocol.ifind.IFind/find {:answer 42} :answer)]
+                (= [:answer 42]
+                   [(std.protocol.ipair.IPair/key entry)
+                    (std.protocol.ipair.IPair/value entry)]))
+     :expect {:display "true"}}
+    {:id :protocol/vector
+     :program (let [vector [1 2 3]]
+                (= [1 2]
+                   [(std.protocol.ipeekfirst.IPeekFirst/peek-first vector)
+                    (std.protocol.inth.INth/nth vector 1)]))
+     :expect {:display "true"}}
+    {:id :protocol/coroutine-resume
+     :program (let [coroutine
+                    (std.native.Coroutine/create
+                      (fn [] (std.native.Coroutine/yield 42)))]
+                (= 42
+                   (std.protocol.icoroutine.ICoroutine/resume coroutine)))
+     :expect {:display "true"}}
+    {:id :protocol/unsupported-receiver
+     :program (try
+                (std.protocol.iassoc.IAssoc/assoc 42 :answer 1)
+                false
+                (catch error true))
+     :expect {:display "true"}}
+    {:id :protocol/assoc-unsupported-exact
+     :program (std.protocol.iassoc.IAssoc/assoc 42 :answer 1)
+     :expect {:error :protocol/unsupported-receiver}}
+    {:id :protocol/assoc-arity-exact
+     :program (std.protocol.iassoc.IAssoc/assoc)
+     :expect {:error :protocol/arity}}
+    {:id :protocol/native-collection-and-watch-semantics
+     :program (let [cell (std.native.Base/atom 1)
+                    seen (std.native.Base/atom nil)
+                    _ (std.protocol.iwatch.IWatch/watch-add
+                        cell :log
+                        (fn [key reference old-value new-value]
+                          (std.protocol.ireset.IReset/reset
+                            seen [key old-value new-value])))
+                    _ (std.protocol.ireset.IReset/reset cell 2)]
+                (= [2 [1 2] {:a 1} [1 2] [1] [] {:a 1} [2 [:log 1 2]]]
+                   [(std.protocol.icount.ICount/count [1 2])
+                    (std.protocol.iconj.IConj/conj [1] 2)
+                    (std.protocol.idissoc.IDissoc/dissoc {:a 1 :b 2} :b)
+                    (std.protocol.ipushlast.IPushLast/push-last [1] 2)
+                    (std.protocol.ipoplast.IPopLast/pop-last [1 2])
+                    (std.protocol.iempty.IEmpty/empty [1])
+                    (std.protocol.iassoc.IAssoc/assoc {} :a 1)
+                    [(std.protocol.ideref.IDeref/deref cell)
+                     (std.protocol.ideref.IDeref/deref seen)]]))
+     :expect {:display "true"}}
+    {:id :protocol/extension-replacement-and-parent-dispatch
+     :program (let [target (std.native.Base/namespace 'hnc.protocol.lifecycle)
+                    immutable (std.native.Base/struct target 'Immutable (std.native.Base/vector 'value))
+                    mutable (std.native.Base/mutable target 'Mutable (std.native.Base/vector 'value))
+                    read-protocol (std.native.Base/protocol target 'IRead {'read 1} (std.native.Base/vector))
+                    coroutine (std.protocol.ideref.IDeref/deref
+                                (std.native.Base/resolve 'std.protocol.icoroutine.ICoroutine))
+                    close (std.protocol.ideref.IDeref/deref
+                            (std.native.Base/resolve 'std.protocol.iclose.IClose))
+                    _ (std.native.Base/extend target immutable read-protocol
+                        {'read (fn [receiver] 41)})
+                    _ (std.native.Base/extend target mutable read-protocol
+                        {'read (fn [receiver] (std.native.Base/field receiver :value))})
+                    _ (std.native.Base/extend target immutable coroutine
+                        {'status (fn [receiver] :ready)
+                         'resume (fn [& values] :resumed)})
+                    _ (std.native.Base/extend target immutable close
+                        {'close (fn [receiver] :closed)})
+                    immutable-value ((std.protocol.ideref.IDeref/deref
+                                      (std.native.Base/resolve target '->Immutable)) 41)
+                    mutable-value ((std.protocol.ideref.IDeref/deref
+                                    (std.native.Base/resolve target '->Mutable)) 42)
+                    immutable-before ((std.protocol.ideref.IDeref/deref
+                                       (std.native.Base/resolve target 'read)) immutable-value)
+                    mutable-before ((std.protocol.ideref.IDeref/deref
+                                     (std.native.Base/resolve target 'read)) mutable-value)
+                    _ (std.native.Base/extend target immutable read-protocol
+                        {'read (fn [receiver] 42)})]
+                (= [41 42 42 :ready :resumed :closed]
+                   [immutable-before
+                    mutable-before
+                    ((std.protocol.ideref.IDeref/deref
+                       (std.native.Base/resolve target 'read)) immutable-value)
+                    (std.protocol.icoroutine.ICoroutine/status immutable-value)
+                    (std.protocol.icoroutine.ICoroutine/resume immutable-value)
+                    (std.protocol.iclose.IClose/close immutable-value)]))
+     :expect {:display "true"}}]}]}

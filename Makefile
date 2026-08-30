@@ -4,7 +4,8 @@ SHELL := /usr/bin/env bash
 
 .PHONY: help test \
 	test-boundary test-rust test-raw test-jvm \
-	test-conformance test-conformance-rust test-conformance-jvm test-conformance-browser \
+	test-conformance test-conformance-full test-conformance-rust test-conformance-jvm test-conformance-browser \
+	mirror-conformance check-conformance-mirror \
 	web-install test-browser-integrity test-provider-hosts \
 	build-browser-profiles browser-playwright-install test-browser-sdk test-browser-playwright
 
@@ -15,7 +16,10 @@ help:
 	  '  make test-rust                 generic Rust hara-native CLI' \
 	  '  make test-raw                  raw Wasm host boundary' \
 	  '  make test-jvm                  JVM CLI, HARP, and prebuilt-provider loader' \
-	  '  make test-conformance          serial native Rust/JVM/browser compatibility vectors' \
+	  '  make test-conformance          serial native/protocol Rust/JVM/browser conformance' \
+	  '  make test-conformance-full     portable HNC1 conformance plus trusted provider profiles' \
+	  '  make mirror-conformance HNC_MIRROR=/path   write a registry HNC source mirror' \
+	  '  make check-conformance-mirror HNC_MIRROR=/path   validate a registry HNC source mirror' \
 	  '  make test-browser-integrity    Node HARP, package, and HTA verification' \
 	  '  make test-provider-hosts       trusted provider-host adapters' \
 	  '  make test-browser-sdk          generated native-vm/native-full SDK' \
@@ -38,6 +42,7 @@ test-boundary:
 	@test -z "$$(find providers -type f \( -name 'project.edn' -o -name 'extension.edn' -o -name 'provider.sha256' \) -print -quit)"
 	@! rg -n 'HARA_SOURCE_ROOT|hal-src|std\.foundation\.hbx|cli\.hbx|core/lib' core/rust/Cargo.toml core/rust/build.rs core/rust/crates core/rust/src core/java/pom.xml core/java/src/main/resources --glob '!**/*test*' --glob '!tests.rs' --glob '!execution_tests.rs' --glob '!differential_tests.rs'
 	@! rg -n 'std\.foundation/(assoc|get|first|rest|map|reduce|conj)|std\.foundation\.coroutine/(await|yield)' core/rust/src core/rust/tests core/java/src/test core/rust/web --glob '*.rs' --glob '*.java' --glob '*.mjs' --glob '*.js' --glob '!node_modules/**'
+	@! rg -n 'std\.foundation(?:\.|/)|hara-specs-registry|HARA_SPECS_REGISTRY' core/rust/specs core/java/src/test/java/hara/truffle/bytecode/HbcCodecTest.java core/rust/web/native-protocol-conformance.test.mjs
 
 test-rust:
 	cargo check --manifest-path core/rust/Cargo.toml --bin hara-native
@@ -50,21 +55,34 @@ test-jvm:
 	mvn -q -f core/java/pom.xml -Djacoco.skip=true test
 	mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
 
-# Native-owned wire/runtime compatibility. This deliberately excludes the
-# registry-owned language conformance corpus, which lives with canonical HAL.
+# Native-owned first-layer semantics. The artifact is generated from the local
+# declarative spec; Hara language and Foundation conformance remain elsewhere.
 test-conformance:
 	+$(MAKE) test-conformance-rust
 	+$(MAKE) test-conformance-jvm
 	+$(MAKE) test-conformance-browser
 
+test-conformance-full:
+	+$(MAKE) test-conformance
+	+$(MAKE) test-provider-hosts
+
 test-conformance-rust:
+	cargo run --quiet --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- check
 	cargo test --manifest-path core/rust/crates/runtime/Cargo.toml --features code-vm-conformance vm::conformance::tests
 
 test-conformance-jvm:
-	mvn -q -f core/java/pom.xml -Djacoco.skip=true '-Dtest=HbcCodecTest#executesEverySourceFreeSuccessResultRustProducedHbcArtifact' test
+	mvn -q -f core/java/pom.xml -Djacoco.skip=true '-Dtest=HbcCodecTest#executesNativeProtocolConformanceArtifactSerially' test
 
 test-conformance-browser: build-browser-profiles
-	cd core/rust/web && npm run test:bytecode-conformance
+	cd core/rust/web && npm run test:native-protocol-conformance
+
+mirror-conformance:
+	@test -n "$(HNC_MIRROR)"
+	cargo run --quiet --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- mirror "$(HNC_MIRROR)"
+
+check-conformance-mirror:
+	@test -n "$(HNC_MIRROR)"
+	cargo run --quiet --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- check-mirror "$(HNC_MIRROR)"
 
 web-install:
 	cd core/rust/web && npm ci --ignore-scripts

@@ -27,7 +27,9 @@ import java.util.Set;
 @HaraNativeBinding(namespace = "std.native", name = "String", methods = {"length", "blank?", "includes?", "starts-with?", "ends-with?", "char-at", "slice", "index-of", "last-index-of", "join", "split", "split-lines", "repeat", "replace", "replace-first", "trim", "trim-left", "trim-right", "upper", "lower", "capitalize", "decapitalize", "pad-left", "pad-right", "reverse", "encode-utf8", "decode-utf8", "to-fixed"})
 @HaraNativeBinding(namespace = "std.native", name = "Bytes", methods = {"new", "count", "get", "set", "copy", "slice", "u8", "s8"})
 @HaraNativeBinding(namespace = "std.native", name = "Crypto", methods = {"sha256", "sha512", "hmac-sha256", "hmac-sha512", "random-bytes", "secure-equal?", "ed25519-keypair", "ed25519-public", "ed25519-sign", "ed25519-verify", "x25519-keypair", "x25519-public", "x25519-shared", "p256-keypair", "p256-public", "p256-sign", "p256-verify", "p256-shared"})
-@HaraNativeBinding(namespace = "std.native", name = "OS", methods = {"platform", "arch", "cwd", "env", "getenv", "time-ms", "time-ns"})
+@HaraNativeBinding(
+    namespace = "std.native", name = "OS", availability = HaraAvailability.CAPABILITY_GATED,
+    capability = "native-runtime", methods = {"platform", "arch", "cwd", "env", "getenv", "time-ms", "time-ns"})
 @HaraNativeBinding(
     namespace = "std.native", name = "Process", availability = HaraAvailability.CAPABILITY_GATED,
     capability = "native-runtime", methods = {"spawn", "alive?", "write", "close-input", "stdout", "stderr", "stdout-stream", "stderr-stream", "wait", "kill"})
@@ -50,12 +52,13 @@ import java.util.Set;
 @HaraNativeBinding(
     namespace = "std.native", name = "Host", availability = HaraAvailability.CAPABILITY_GATED,
     capability = "host-call", methods = {"call", "describe", "capabilities", "capability?"})
+@HaraNativeBinding(namespace = "std.native", name = "Instrument", methods = {"provider", "validate", "inspect", "disassemble", "transform", "execute"})
 @HaraNativeBinding(namespace = "std.native", name = "Test", methods = {"catalog", "config", "context", "events", "compare", "run", "result", "passed?", "actual", "expected", "failures", "failure-seq", "failure-count", "failure", "failure?"})
 @HaraNativeBinding(namespace = "std.native", name = "RegExp", methods = {"compile", "pattern", "find?", "find", "matches", "replace", "split"})
 @HaraNativeBinding(namespace = "std.native", name = "Result", methods = {"create", "synchronize", "success?", "error?", "status", "data", "error-value", "context", "with-context"})
 @HaraNativeBinding(namespace = "std.native", name = "Schema", methods = {"compile", "of", "kind", "form", "ast", "origin"})
 @HaraNativeBinding(namespace = "std.native", name = "Exception", methods = {"new", "message", "class"})
-@HaraNativeBinding(namespace = "std.native", name = "Base", methods = {"list", "vector", "vec", "set", "hash-map", "hash-set", "bytes", "atom", "pointer", "symbol", "keyword", "uuid", "reduced", "unreduced", "hash", "apply", "resolve", "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"})
+@HaraNativeBinding(namespace = "std.native", name = "Base", methods = {"list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "bytes", "atom", "pointer", "symbol", "keyword", "uuid", "reduced", "unreduced", "hash", "apply", "resolve", "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "extend", "field", "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"})
 @HaraNativeBinding(namespace = "std.native", name = "Algo", methods = {"deque", "ordered-map", "ordered-set", "priority-map", "queue", "sorted-map", "sorted-set", "trie", "deque?", "ordered-map?", "ordered-set?", "priority-map?", "queue?", "sorted-map?", "sorted-set?", "trie?"})
 @HaraNativeBinding(namespace = "std.native", name = "Iter", methods = {"seq", "iter", "iter-finite?", "iter-materialize", "iter-next?", "iter-next", "iter-close", "iter-concat", "iter-map", "iter-filter", "iter-take-while", "iter-drop-while", "iter-mapcat", "iter-keep", "iter-interpose", "iter-interleave", "iter-every?", "iter-any?", "iter-take", "iter-drop", "iter-zip", "iter-cycle", "iter-partition-pair", "iter-partition-all", "iter-partition", "iter-range", "iter-constantly", "iter-repeatedly", "iter-iterate"})
 @HaraNativeBinding(

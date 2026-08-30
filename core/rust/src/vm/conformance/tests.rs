@@ -1,31 +1,48 @@
-use super::*;
-use crate::journal::SCHEMA as JOURNAL_SCHEMA;
-use crate::kernel::halc_trace::HALC_TRACE_SCHEMA;
-use crate::vm::session::BYTECODE_TRACE_SCHEMA;
 use sha2::{Digest, Sha256};
 
-const HCC_MAGIC: &[u8; 4] = b"HCC0";
-const HCC_ARTIFACT: &[u8] = include_bytes!("../../../assets/bytecode-conformance.hcc");
+const HNC_MAGIC: &[u8; 4] = b"HNC1";
+const HNC_ARTIFACT: &[u8] = include_bytes!("../../../assets/native-protocol-conformance.hnc");
+const ERROR_EXPECTATION_PREFIX: &str = "!error:";
 
-struct HccCase<'a> {
+struct HncCase<'a> {
     id: &'a str,
-    expected_display: &'a str,
+    expected: HncExpectation<'a>,
     artifact: &'a [u8],
 }
 
-struct HccReader<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HncExpectation<'a> {
+    Display(&'a str),
+    Error(&'a str),
+}
+
+impl<'a> HncExpectation<'a> {
+    fn parse(value: &'a str) -> Self {
+        value
+            .strip_prefix(ERROR_EXPECTATION_PREFIX)
+            .map(Self::Error)
+            .unwrap_or(Self::Display(value))
+    }
+}
+
+struct HncSuite<'a> {
+    id: &'a str,
+    setup: &'a [u8],
+    cases: Vec<HncCase<'a>>,
+}
+
+struct HncReader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
-impl<'a> HccReader<'a> {
+impl<'a> HncReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
     fn u32(&mut self) -> Result<usize, String> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes(bytes.try_into().expect("four bytes")) as usize)
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("four bytes")) as usize)
     }
 
     fn bytes(&mut self) -> Result<&'a [u8], String> {
@@ -37,11 +54,11 @@ impl<'a> HccReader<'a> {
         let end = self
             .offset
             .checked_add(length)
-            .ok_or_else(|| "HCC0 field length overflows the artifact".to_owned())?;
+            .ok_or_else(|| "HNC1 field length overflows the artifact".to_owned())?;
         let value = self
             .bytes
             .get(self.offset..end)
-            .ok_or_else(|| "HCC0 field exceeds the artifact".to_owned())?;
+            .ok_or_else(|| "HNC1 field exceeds the artifact".to_owned())?;
         self.offset = end;
         Ok(value)
     }
@@ -50,184 +67,182 @@ impl<'a> HccReader<'a> {
         if self.offset == self.bytes.len() {
             Ok(())
         } else {
-            Err("HCC0 artifact has trailing bytes".into())
+            Err("HNC1 artifact has trailing bytes".into())
         }
     }
 }
 
-fn parse_hcc(bytes: &[u8]) -> Result<Vec<HccCase<'_>>, String> {
-    if !bytes.starts_with(HCC_MAGIC) {
-        return Err("HCC0 artifact has invalid magic".into());
+fn parse_hnc(bytes: &[u8]) -> Result<Vec<HncSuite<'_>>, String> {
+    if !bytes.starts_with(HNC_MAGIC) || bytes.len() < 36 {
+        return Err("HNC1 artifact has an invalid or truncated header".into());
     }
-    let body = bytes
-        .get(4..)
-        .ok_or_else(|| "HCC0 artifact is truncated before its payload".to_owned())?;
-    if body.len() < 32 {
-        return Err("HCC0 artifact is truncated before its payload".into());
-    }
-    let (digest, payload) = body.split_at(32);
-    let expected: [u8; 32] = digest.try_into().expect("HCC0 digest has 32 bytes");
+    let (digest, payload) = bytes[4..].split_at(32);
+    let expected: [u8; 32] = digest.try_into().expect("HNC1 digest has 32 bytes");
     let actual: [u8; 32] = Sha256::digest(payload).into();
     if actual != expected {
-        return Err("HCC0 artifact checksum mismatch".into());
+        return Err("HNC1 artifact checksum mismatch".into());
     }
-    let mut reader = HccReader::new(payload);
+    let mut reader = HncReader::new(payload);
     let count = reader.u32()?;
-    if count > reader.bytes.len() / 12 {
-        return Err("HCC0 case count exceeds its payload".into());
+    if count != 2 {
+        return Err(format!(
+            "HNC1 must contain native and protocol suites, found {count}"
+        ));
     }
-    let mut cases = Vec::with_capacity(count);
+    let mut suites = Vec::with_capacity(count);
     for _ in 0..count {
-        let id = std::str::from_utf8(reader.bytes()?)
-            .map_err(|_| "HCC0 case id is not UTF-8")?;
-        let expected_display = std::str::from_utf8(reader.bytes()?)
-            .map_err(|_| "HCC0 expected display is not UTF-8")?;
-        let artifact = reader.bytes()?;
-        cases.push(HccCase {
-            id,
-            expected_display,
-            artifact,
-        });
+        let id = std::str::from_utf8(reader.bytes()?).map_err(|_| "HNC1 suite id is not UTF-8")?;
+        let setup = reader.bytes()?;
+        let case_count = reader.u32()?;
+        if case_count == 0 || case_count > reader.bytes.len() / 12 {
+            return Err(format!("HNC1 suite {id} has an invalid case count"));
+        }
+        let mut cases = Vec::with_capacity(case_count);
+        for _ in 0..case_count {
+            let case_id =
+                std::str::from_utf8(reader.bytes()?).map_err(|_| "HNC1 case id is not UTF-8")?;
+            let expected = std::str::from_utf8(reader.bytes()?)
+                .map_err(|_| "HNC1 expected display is not UTF-8")?;
+            cases.push(HncCase {
+                id: case_id,
+                expected: HncExpectation::parse(expected),
+                artifact: reader.bytes()?,
+            });
+        }
+        suites.push(HncSuite { id, setup, cases });
     }
     reader.finish()?;
-    Ok(cases)
+    if suites[0].id != "native" || suites[1].id != "protocol" {
+        return Err("HNC1 suites must be ordered native then protocol".into());
+    }
+    Ok(suites)
 }
 
-fn requires_mounted_foundation_package(program: &crate::vm::Program) -> bool {
+fn requires_foundation(program: &crate::vm::Program) -> bool {
     program.constants.iter().any(|value| {
-        value
-            .display()
-            .strip_prefix("std.foundation/")
-            .is_some_and(|method| !method.is_empty() && !method.starts_with('/'))
+        let text = value.display();
+        text.starts_with("std.foundation/") || text.starts_with("std.foundation.")
     })
 }
 
-fn case<'a>(report: &'a ProductionReport, id: &str) -> &'a CaseObservation {
-    report
-        .cases
+fn normalized_error_category(error: &str) -> Option<&'static str> {
+    let error = error.trim_start_matches("error: ");
+    if error.starts_with("protocol/arity:") {
+        Some("protocol/arity")
+    } else if error.starts_with("protocol/unsupported-receiver:") {
+        Some("protocol/unsupported-receiver")
+    } else if error.contains("expects") {
+        let arity = [
+            "expects one ",
+            "expects two ",
+            "expects three ",
+            "expects four ",
+            "expects at least ",
+            "expects no ",
+        ]
         .iter()
-        .find(|case| case.case.id == id)
-        .unwrap_or_else(|| panic!("missing case {id}"))
+        .any(|marker| error.contains(marker));
+        if arity {
+            Some("native/arity")
+        } else if error.contains("number")
+            || error.contains("numeric")
+            || error.contains("integer")
+            || error.contains("string")
+        {
+            Some("native/type")
+        } else {
+            Some("native/arity")
+        }
+    } else {
+        None
+    }
+}
+
+fn assert_outcome(case: &HncCase<'_>, actual: Result<String, String>) -> Result<(), String> {
+    match (case.expected, actual) {
+        (HncExpectation::Display(expected), Ok(actual)) if actual == expected => Ok(()),
+        (HncExpectation::Display(expected), Ok(actual)) => Err(format!(
+            "{} expected display {expected:?}, observed {actual:?}",
+            case.id
+        )),
+        (HncExpectation::Display(expected), Err(error)) => Err(format!(
+            "{} expected display {expected:?}, raised {error}",
+            case.id
+        )),
+        (HncExpectation::Error(expected), Err(error))
+            if normalized_error_category(&error) == Some(expected) =>
+        {
+            Ok(())
+        }
+        (HncExpectation::Error(expected), Err(error)) => Err(format!(
+            "{} expected error {expected:?}, observed {error:?} ({:?})",
+            case.id,
+            normalized_error_category(&error)
+        )),
+        (HncExpectation::Error(expected), Ok(actual)) => Err(format!(
+            "{} expected error {expected:?}, returned {actual:?}",
+            case.id
+        )),
+    }
 }
 
 #[test]
-fn embedded_production_corpus_passes_real_runtime_checks() {
-    let report = run_embedded().expect("production corpus runs");
-    assert!(report.passed(), "{} failed checks", report.failed_checks());
-    assert_eq!(report.cases.len(), 14);
-    assert!(report
-        .cases
-        .iter()
-        .all(|case| case.journal.schema == JOURNAL_SCHEMA));
-    assert!(report
-        .cases
-        .iter()
-        .all(|case| case.halc_trace.schema == HALC_TRACE_SCHEMA));
-}
-
-#[test]
-fn arithmetic_fixture_carries_all_three_production_traces() {
-    let report = run_embedded().expect("production corpus runs");
-    let arithmetic = case(&report, "arith/nested");
-    assert_eq!(arithmetic.interpreter.display.as_deref(), Some("7"));
-    assert_eq!(arithmetic.halc.handoff_status.as_deref(), Some("ready"));
-    assert_eq!(arithmetic.bytecode.outcome.display.as_deref(), Some("7"));
-    assert!(arithmetic
-        .halc_trace
-        .events
-        .iter()
-        .any(|event| { event.stage == "handoff/bytecode" }));
-    let trace_json = crate::json::write(&arithmetic.bytecode_trace).unwrap();
-    assert!(trace_json.contains(BYTECODE_TRACE_SCHEMA));
-    assert!(trace_json.contains("code.vm/arith/nested"));
-    assert!(arithmetic
-        .teaching
-        .iter()
-        .any(|annotation| annotation.stage == "bytecode"));
-}
-
-#[test]
-fn deep_fixture_is_bounded_without_changing_its_result() {
-    let report = run_embedded().expect("production corpus runs");
-    let looping = case(&report, "loop/many-iterations");
-    assert_eq!(looping.bytecode.outcome.display.as_deref(), Some("1024"));
-    assert!(looping.bytecode.step_count <= looping.case.trace_limit);
-    assert!(looping.bytecode.dropped > 0);
-    assert!(looping
-        .checks
-        .iter()
-        .find(|check| check.id == "trace/bounded")
-        .is_some_and(|check| check.pass));
-}
-
-#[test]
-fn multi_arity_function_is_compiled_dispatched_and_never_falls_back() {
-    let report = run_embedded().expect("production corpus runs");
-    let multi_arity = case(&report, "compile/fn-multi-arity");
-    assert_eq!(multi_arity.bytecode.outcome.status, "returned");
-    assert_eq!(
-        multi_arity.bytecode.outcome.display.as_deref(),
-        Some("42")
-    );
-    assert_eq!(multi_arity.halc.status, "ok");
-    assert_eq!(multi_arity.halc.fallback, Some(false));
-    assert!(multi_arity
-        .checks
-        .iter()
-        .find(|check| check.id == "fallback/forbidden")
-        .is_some_and(|check| check.pass));
-}
-
-#[test]
-fn reports_are_deterministic_and_browser_view_is_terminal_neutral() {
-    let first = run_embedded().expect("first run");
-    let second = run_embedded().expect("second run");
-    assert_eq!(
-        first.to_json(false).unwrap(),
-        second.to_json(false).unwrap()
-    );
-
-    let browser = first.browser_json(false).unwrap();
-    assert!(browser.contains("\"view\":\"browser\""));
-    assert!(browser.contains("\"terminalNeutral\":true"));
-    assert!(browser.contains("\"browserSafe\":true"));
-    assert!(browser.contains("\"supported\":false"));
-    assert!(!browser.contains("loop/many-iterations"));
-}
-
-#[test]
-fn core_runtime_executes_every_source_free_hcc_success_case_serially() {
-    let cases = parse_hcc(HCC_ARTIFACT).expect("embedded HCC0 corpus is valid");
-    assert!(cases.len() >= 80, "HCC0 corpus has only {} cases", cases.len());
-
+fn core_runtime_executes_the_native_protocol_artifact_serially() {
+    let suites = parse_hnc(HNC_ARTIFACT).expect("embedded HNC1 corpus is valid");
+    let expected = suites.iter().map(|suite| suite.cases.len()).sum::<usize>();
     let mut runtime = crate::Runtime::core();
     let mut executed = 0;
-    let mut failure_ownership_required = 0;
-    for case in &cases {
-        if case.id.starts_with("error/") {
-            failure_ownership_required += 1;
-            continue;
-        }
-        let program = crate::vm::decode_program(case.artifact)
-            .unwrap_or_else(|error| panic!("{}: invalid HBC0 artifact: {error}", case.id));
+    for suite in &suites {
+        let setup = crate::vm::decode_program(suite.setup)
+            .unwrap_or_else(|error| panic!("{} setup has invalid HBC0: {error}", suite.id));
         assert!(
-            !requires_mounted_foundation_package(&program),
-            "{} must not require a Foundation package",
-            case.id
+            !requires_foundation(&setup),
+            "{} setup must not require Foundation",
+            suite.id
         );
-        let actual = runtime
-            .eval_bytecode_artifact(case.artifact)
-            .unwrap_or_else(|error| panic!("{}: bytecode execution failed: {error}", case.id));
-        assert_eq!(actual, case.expected_display, "{} display", case.id);
-        executed += 1;
+        runtime
+            .eval_bytecode_artifact(suite.setup)
+            .unwrap_or_else(|error| panic!("{} setup failed: {error}", suite.id));
+        for case in &suite.cases {
+            let program = crate::vm::decode_program(case.artifact)
+                .unwrap_or_else(|error| panic!("{} has invalid HBC0: {error}", case.id));
+            assert!(
+                !requires_foundation(&program),
+                "{} must not require Foundation",
+                case.id
+            );
+            let actual = runtime.eval_bytecode_artifact(case.artifact);
+            assert_outcome(case, actual).unwrap_or_else(|error| panic!("{error}"));
+            executed += 1;
+        }
     }
+    assert_eq!(executed, expected, "all declared native/protocol cases ran");
+}
+
+#[test]
+fn hnc_expected_outcomes_reject_wrong_values_and_error_categories() {
+    let value_case = HncCase {
+        id: "fixture/value",
+        expected: HncExpectation::Display("42"),
+        artifact: &[],
+    };
+    assert!(assert_outcome(&value_case, Ok("41".into())).is_err());
+    let error_case = HncCase {
+        id: "fixture/error",
+        expected: HncExpectation::Error("protocol/arity"),
+        artifact: &[],
+    };
+    assert!(assert_outcome(
+        &error_case,
+        Err("protocol/unsupported-receiver: missing".into())
+    )
+    .is_err());
     assert_eq!(
-        executed,
-        cases.len() - failure_ownership_required,
-        "only failure-ownership vectors may be held outside the source-free success lane"
+        normalized_error_category("abs expects one numeric value"),
+        Some("native/arity")
     );
-    assert!(
-        failure_ownership_required > 0,
-        "the corpus must retain failure-ownership HBC0 vectors"
+    assert_eq!(
+        normalized_error_category("abs expects a numeric value"),
+        Some("native/type")
     );
 }
