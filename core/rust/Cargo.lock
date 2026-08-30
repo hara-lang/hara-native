@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "hara-native"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "console_error_panic_hook",
  "ed25519-dalek 2.2.0",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "hara-protocol-macros"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "proc-macro2",
  "quote",

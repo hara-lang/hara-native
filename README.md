@@ -73,6 +73,12 @@ and confirm that no canonical HAL enters a host build or release artifact. The
 two projects under [examples/](examples/README.md) are the sole checked-in HAL
 fixtures: they are documentation/smoke inputs outside `core/rust`, and the
 boundary check prunes that directory. Native artifacts must not contain
+The canonical public version lives in [release/version.json](release/version.json);
+[release/compatibility.json](release/compatibility.json) records its host ABI.
+Changes promote from `main` to the protected `release` branch, where the
+release preflight validates every public manifest and artifact before a
+maintainer dispatches publication. See [RELEASES.md](RELEASES.md) for the
+registry and recovery procedure. Native artifacts must not contain
 `HARA_SOURCE_ROOT`, `core/lib`, `hal-src`, `std.foundation.hbx`, or `cli.hbx`
 dependencies.
 
