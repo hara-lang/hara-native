@@ -86,7 +86,14 @@ pub(crate) mod declarations {
     )]
     struct Crypto;
 
-    #[hara_native(namespace = "std.native", name = "OS", methods = ["platform", "arch", "cwd", "env", "getenv", "time-ms", "time-ns"], provider = native_os_provider)]
+    #[hara_native(
+        namespace = "std.native",
+        name = "OS",
+        availability = "capability-gated",
+        capability = "native-runtime",
+        methods = ["platform", "arch", "cwd", "env", "getenv", "time-ms", "time-ns"],
+        provider = native_os_provider
+    )]
     struct OS;
 
     #[hara_native(
@@ -170,6 +177,14 @@ pub(crate) mod declarations {
 
     #[hara_native(
         namespace = "std.native",
+        name = "Instrument",
+        methods = ["provider", "validate", "inspect", "disassemble", "transform", "execute"],
+        provider = native_instrument_provider
+    )]
+    struct Instrument;
+
+    #[hara_native(
+        namespace = "std.native",
         name = "Test",
         methods = [
             "catalog", "config", "context", "events", "compare", "run", "result", "passed?", "actual",
@@ -195,8 +210,9 @@ pub(crate) mod declarations {
         namespace = "std.native",
         name = "Base",
         methods = [
-            "list", "vector", "vec", "set", "hash-map", "hash-set", "atom", "bytes", "pointer", "symbol",
+            "list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "atom", "bytes", "pointer", "symbol",
             "keyword", "uuid", "reduced", "unreduced", "hash", "apply", "resolve",
+            "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "extend", "field",
             "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"
         ],
         whole_wasm_methods = [("number?", 1)],

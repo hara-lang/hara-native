@@ -1,0 +1,237 @@
+{:spec/version "0.0.0-alpha"
+ :language "hal-modules"
+ :description
+ "Cross-runtime acceptance scenarios for namespace identity, transactional modules, lazy loading, macros, sessions, and retained REPL state."
+ :runtime/profiles
+ {:jvm-truffle
+  {:resource-order
+   [:loaded-native-namespace
+    :runtime-library
+    :project-source
+    :classpath-source
+    :extension-package]}
+  :rust
+  {:resource-order
+   [:loaded-native-namespace
+    :registered-resource
+    :registered-extension]}}
+ :cases
+ [{:id :namespace/alias-var-identity
+   :area :namespace
+   :scenario :var-identity
+   :expect {:same-var true :live-root true}}
+  {:id :namespace/refer-var-identity
+   :area :namespace
+   :scenario :var-identity
+   :expect {:same-var true :live-root true}}
+  {:id :namespace/callable-var-precedence
+   :area :namespace
+   :scenario :callable-var
+   :setup "(ns conformance.callable (:config {:blank true}) (:require [std.foundation :refer :all :exclude [count]]))"
+   :source "(defn count [ignored] 42) (list (count 5) (std.foundation/count (list 1 2 3)) (= #'count #'std.foundation/count))"
+   :expect {:display "(42 3 false)"}}
+  {:id :namespace/callable-var-lexical-shadow
+   :area :namespace
+   :scenario :callable-var
+   :setup "(ns conformance.lexical)"
+   :source "(let [count (fn [ignored] 42)] (count 5))"
+   :expect {:display "42"}}
+  {:id :namespace/callable-var-late-binding
+   :area :namespace
+   :scenario :callable-var
+   :setup "(ns conformance.late-binding (:config {:blank true}) (:require [std.foundation :refer :all :exclude [count]]))"
+   :source "(defn count [ignored] 41) (defn call-count [] (count 5)) (defn count [ignored] 42) (call-count)"
+   :expect {:display "42"}}
+  {:id :namespace/current-alias-value
+   :area :namespace
+   :scenario :current-alias
+   :setup "(ns conformance.current-alias-value)"
+   :source "(def answer 42) -/answer"
+   :expect {:display "42"}}
+  {:id :namespace/current-alias-var
+   :area :namespace
+   :scenario :current-alias
+   :setup "(ns conformance.current-alias-var)"
+   :source "(def answer 42) (= #'answer #'-/answer)"
+   :expect {:display "true"}}
+  {:id :namespace/current-alias-quoted
+   :area :namespace
+   :scenario :current-alias
+   :setup "(ns conformance.current-alias-quoted)"
+   :source "'-/answer"
+   :expect {:display "-/answer"}}
+  {:id :namespace/current-alias-missing
+   :area :namespace
+   :scenario :current-alias
+   :setup "(ns conformance.current-alias-missing)"
+   :source "-/missing"
+   :expect {:error-contains "unbound symbol"}}
+  {:id :namespace/current-alias-reserved
+   :area :namespace
+   :scenario :current-alias
+   :source "(ns conformance.current-alias-reserved (:require [std.foundation.string :as -]))"
+   :expect {:error-contains "Namespace alias is reserved: -"}}
+  {:id :namespace/referred-var-shadowed
+   :area :namespace
+   :scenario :ownership
+   :setup "(ns conformance.protected)"
+   :source "(do (declare identity) (defn identity [value] 42) [(identity 0) (std.foundation/identity 0)])"
+   :expect {:display "[42 0]"}}
+  {:id :namespace/use-declaration
+   :area :namespace
+   :scenario :use
+   :expect {:vars-visible true
+            :macros-visible true
+            :preserves-var-identity true}}
+  {:id :namespace/facade-var-copy
+   :area :namespace
+   :scenario :facade
+   :expect {:same-var false :copied-root true :copied-metadata true}}
+  {:id :namespace/with-ns-success
+   :area :namespace
+   :scenario :with-ns
+   :expect {:result :target-final-value :caller-restored true}}
+  {:id :namespace/with-ns-failure
+   :area :namespace
+   :scenario :with-ns
+   :expect {:error :guest :caller-restored true}}
+  {:id :namespace/with-ns-lexical-isolation
+   :area :namespace
+   :scenario :with-ns
+   :expect {:caller-locals-visible false}}
+  {:id :namespace/loading-state
+   :area :namespace
+   :scenario :state-inspection
+   :expect {:non-forcing true
+            :states [:unknown :unloaded :loading :loaded :failed]}}
+  {:id :namespace/cross-namespace-alias-state
+   :area :namespace
+   :scenario :state-inspection
+   :expect {:owner-explicit true :non-forcing true}}
+
+  {:id :module/canonical-cache
+   :area :module
+   :scenario :canonical-identity
+   :expect {:initial-revision 1 :duplicate-evaluation false}}
+  {:id :module/dependency-order
+   :area :module
+   :scenario :dependency-graph
+   :expect {:order :dependency-first-source-order}}
+  {:id :module/cycle-rollback
+   :area :module
+   :scenario :transaction
+   :expect {:error :cycle :partial-state false}}
+  {:id :module/failure-rollback
+   :area :module
+   :scenario :transaction
+   :expect {:partial-vars false
+            :partial-macros false
+            :partial-dependencies false
+            :revision-increment false}}
+  {:id :module/reload-revision
+   :area :module
+   :scenario :reload
+   :expect {:revision-increment 1 :new-compilation-sees-root true}}
+  {:id :module/reload-rollback
+   :area :module
+   :scenario :reload
+   :expect {:previous-revision-preserved true :previous-roots-preserved true}}
+  {:id :module/ns-require-reload
+   :area :module
+   :scenario :reload
+   :fixture
+   {:resource
+    {:namespace "conformance.reload-target"
+     :path "conformance/reload_target.hal"
+     :revisions
+     {:initial "(ns conformance.reload-target) (def answer 41)"
+      :updated "(ns conformance.reload-target) (def answer 42)"
+      :broken "(ns conformance.reload-target) (def answer 99) (def leaked 1) (throw :reload-failed)"}}
+    :steps
+    [{:op :resource/use :revision :initial}
+     {:op :eval
+      :source "(ns conformance.reload-client (:config {:blank true}) (:require [conformance.reload-target :as target :refer [answer]])) [target/answer answer]"
+      :expect {:display "[41 41]"}}
+     {:op :assert/revision :expect 1}
+     {:op :resource/use :revision :updated}
+     {:op :eval
+      :source "(ns conformance.reload-client (:config {:blank true}) (:require [conformance.reload-target :as target :refer [answer] :reload true])) [target/answer answer]"
+      :expect {:display "[42 42]"}}
+     {:op :assert/revision :expect 2}
+     {:op :resource/use :revision :broken}
+     {:op :eval
+      :source "(ns conformance.reload-client (:config {:blank true}) (:require [conformance.reload-target :as target :refer [answer] :reload true]))"
+      :expect {:error true}}
+     {:op :eval
+      :source "[target/answer answer]"
+      :expect {:display "[42 42]"}}
+     {:op :assert/revision :expect 2}
+     {:op :eval
+      :source "conformance.reload-target/leaked"
+      :expect {:error-contains "unbound symbol"}}]}
+   :expect {:reload-before-bindings true
+            :alias-observes-new-root true
+            :refer-observes-new-root true
+            :revision-increment 1
+            :failed-reload-atomic true}}
+  {:id :module/resource-precedence
+   :area :module
+   :scenario :resolution
+   :expect {:deterministic true
+            :declared-by-runtime-profile true
+            :same-canonical-resource-evaluated-once true}}
+  {:id :module/source-hir-parity
+   :area :module
+   :scenario :hir
+   :expect {:same-value true :same-var-metadata true :same-error-category true}}
+
+  {:id :lazy/non-forcing
+   :area :lazy
+   :scenario :lazy-alias
+   :expect {:state :unloaded :target-evaluated false}}
+  {:id :lazy/qualified-force
+   :area :lazy
+   :scenario :lazy-alias
+   :expect {:state :loaded :target-evaluations 1}}
+  {:id :lazy/failure-state
+   :area :lazy
+   :scenario :lazy-alias
+   :expect {:state :failed :partial-state false}}
+  {:id :lazy/explicit-retry
+   :area :lazy
+   :scenario :lazy-alias
+   :expect {:ordinary-force-retries false :reload-retries true}}
+  {:id :macro/reload-new-compilation
+   :area :macro
+   :scenario :reload
+   :expect {:existing-call-target :unchanged :new-compilation :new-expansion}}
+
+  {:id :session/namespace-isolation
+   :area :session
+   :scenario :isolation
+   :expect {:vars-shared false :modules-shared false :macros-shared false}}
+  {:id :session/dynamic-unwind
+   :area :session
+   :scenario :dynamic-binding
+   :expect {:binding-session-local true :restored-after-error true}}
+  {:id :session/immutable-transfer
+   :area :session
+   :scenario :transfer
+   :expect {:immutable-data true}}
+  {:id :session/reject-live-transfer
+   :area :session
+   :scenario :transfer
+   :expect {:functions false
+            :vars false
+            :mutable-references false
+            :streams false
+            :sockets false
+            :host-handles false}}
+  {:id :repl/retained-state
+   :area :repl
+   :scenario :retained-session
+   :expect {:namespace-retained true :history-retained true :multiline true}}
+  {:id :repl/error-recovery
+   :area :repl
+   :scenario :retained-session
+   :expect {:session-survives true :namespace-restored true}}]}

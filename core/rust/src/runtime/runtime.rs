@@ -47,6 +47,7 @@ impl Runtime {
         (self.namespace_registry.clone(), HashMap::new())
     }
 
+    #[cfg(feature = "whole-wasm")]
     pub(crate) fn instrumentation_handle(
         &self,
     ) -> Rc<RefCell<crate::instrumentation::InstrumentationHub>> {
@@ -61,10 +62,6 @@ impl Runtime {
         // their canonical native/protocol aliases must not depend on which
         // bootstrap constructor happened to be used.
         core::install_foundation_intrinsics(&namespace_registry);
-        let vm_provider = namespace_registry.find_or_create("tool.vm.provider");
-        for (name, value) in core::vm_tool_provider_values() {
-            vm_provider.intern_with_origin(name, value, kernel::VarOrigin::RuntimePrimitive);
-        }
         let package_provider = namespace_registry.find_or_create("tool.package.provider");
         for (name, value) in core::package_tool_provider_values() {
             package_provider.intern_with_origin(name, value, kernel::VarOrigin::RuntimePrimitive);

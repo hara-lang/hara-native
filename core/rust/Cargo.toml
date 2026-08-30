@@ -21,6 +21,7 @@ include = [
   "clippy.toml",
   "examples/**",
   "resources/**",
+  "specs/**",
   "scripts/**",
   "src/**",
   "tests/**",
@@ -70,10 +71,10 @@ bytecode-observation = ["hara-runtime/bytecode-observation"]
 code-vm-conformance = ["hara-runtime/code-vm-conformance"]
 raw-wasm = ["hara-runtime/raw-wasm"]
 browser-wasm = ["hara-runtime/browser-wasm"]
-tracing-jit = ["hara-runtime/tracing-jit"]
-native-jit = ["hara-runtime/native-jit"]
+tracing-jit = ["hara-runtime/tracing-jit", "bytecode-vm"]
+native-jit = ["hara-runtime/native-jit", "tracing-jit"]
 direct-native = ["hara-runtime/direct-native"]
-whole-wasm = ["hara-runtime/whole-wasm"]
+whole-wasm = ["hara-runtime/whole-wasm", "bytecode-vm"]
 # Structured Evaluation Journal. Keep this opt-in so embedded and production
 # builds do not carry collectors or journal storage.
 # Existing optional encoder gate (declared here so Cargo can validate it).
@@ -138,6 +139,23 @@ rand = "0.10"
 [[bin]]
 name = "hara-native"
 path = "src/bin/hara-native.rs"
+
+[[bin]]
+name = "hara-native-conformance-artifact"
+path = "src/bin/hara-native-conformance-artifact.rs"
+
+[[bin]]
+name = "hara-native-benchmark"
+path = "src/bin/hara-native-benchmark.rs"
+
+[[bin]]
+name = "hara-native-benchmark-worker"
+path = "src/bin/hara-native-benchmark-worker.rs"
+required-features = ["bytecode-vm"]
+
+[[bin]]
+name = "hara-native-language-conformance-artifact"
+path = "src/bin/hara-native-language-conformance-artifact.rs"
 
 [dev-dependencies]
 hara-hta = { version = "0.1.6", path = "crates/hta-codec" }

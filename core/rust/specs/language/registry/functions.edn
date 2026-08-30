@@ -1,0 +1,242 @@
+{:spec/version "0.0.0-alpha"
+ :spec/status :draft
+ :syntax :edn
+ :purpose :foundation-function-surface-control
+ :namespace std.foundation
+ :workflow
+ {:authority :edit-this-file-first
+  :downstream [:rust :truffle :hal-library :parity-tests :documentation]
+  :default-implementation :portable-hal
+  :host-primitive-policy
+  "Use a host primitive only for runtime identity, introspection, randomness,
+   host-backed values, or behavior that portable HAL cannot express."}
+
+ :counts
+ {:tracked-functions 26
+  :implemented-both 7
+  :partial-platform-parity 2
+  :selected 11
+  :unresolved-families 1}
+
+ :functions
+ [{:name ex
+   :arities [[code data] [code data & key-value-pairs]]
+   :domain :exception
+   :classification :host-primitive
+   :status :implemented
+   :semantics :canonical-portable-exception-construction
+   :contract "exceptions.edn"}
+
+  {:name ex-provenance
+   :arities [1]
+   :domain :exception
+   :classification :host-primitive
+   :status :implemented
+   :semantics :portable-creation-and-throw-site-access
+   :contract "exceptions.edn"}
+
+  {:name ex-class
+   :arities [1]
+   :domain :exception
+   :classification :host-primitive
+   :status :implemented
+   :semantics :portable-semantic-class-access
+   :contract "exceptions.edn"}
+
+  {:name ex-native-type
+   :arities [1]
+   :domain :exception
+   :classification :host-primitive
+   :status :implemented
+   :semantics :leaked-host-native-type-or-nil
+   :portability :diagnostic-only
+   :contract "exceptions.edn"}
+
+  {:name intern-var
+   :arities [3 4]
+   :domain :namespace
+   :classification :host-primitive
+   :status :selected
+   :semantics :copy-var-root-and-metadata-into-target-namespace}
+
+  {:name template-ensure
+   :arities [2]
+   :domain :template
+   :classification :portable-hal
+   :status :selected
+   :semantics :returns-materialized-template-vars}
+
+  {:name ns-state
+   :arities [1]
+   :domain :namespace
+   :classification :host-primitive
+   :status :selected
+   :semantics :non-forcing-module-load-state}
+
+  {:name ns-loaded?
+   :arities [1]
+   :domain :namespace
+   :classification :host-primitive
+   :status :selected
+   :semantics :true-only-for-loaded-module-state}
+
+  {:name ns-alias-state
+   :arities [1 2]
+   :domain :namespace
+   :classification :host-primitive
+   :status :selected
+   :semantics :non-forcing-caller-local-alias-state}
+
+  {:name ns+
+   :arities :pending
+   :domain :namespace
+   :classification :portable-hal
+   :status :selected
+   :semantics :pending-confirmation}
+
+  {:name map-keys
+   :arities [2]
+   :domain :map
+   :classification :portable-hal
+   :status :implemented
+   :semantics :transform-keys-later-collision-wins}
+
+  {:name map-vals
+   :arities [2]
+   :domain :map
+   :classification :portable-hal
+   :status :implemented
+   :semantics :transform-values}
+
+  {:name map-juxt
+   :arities [2]
+   :domain :map
+   :classification :portable-hal
+   :status :selected
+   :legacy std.lib.collection/map-juxt
+   :semantics :functions-vector-to-map}
+
+  {:name filter-keys
+   :arities [2]
+   :domain :map
+   :classification :portable-hal
+   :status :selected
+   :legacy std.lib.collection/filter-keys}
+
+  {:name filter-vals
+   :arities [2]
+   :domain :map
+   :classification :portable-hal
+   :status :selected
+   :legacy std.lib.collection/filter-vals}
+
+  {:name var-ns
+   :arities [1]
+   :domain :var
+   :classification :host-primitive
+   :status :selected
+   :semantics :var-namespace-symbol}
+
+  {:name var-sym
+   :arities [1]
+   :domain :var
+   :classification :host-primitive
+   :status :partial
+   :platforms {:truffle :implemented :rust :selected}
+   :legacy std.lib.foundation/var-sym
+   :semantics :fully-qualified-var-symbol}
+
+  {:name unbound?
+   :arities [1]
+   :domain :var
+   :classification :host-primitive
+   :status :selected
+   :legacy std.lib.foundation/unbound?
+   :input :var
+   :semantics :var-has-no-root-binding}
+
+  {:name regexp?
+   :arities [1]
+   :domain :regexp
+   :classification :host-primitive
+   :status :partial
+   :platforms {:truffle :implemented :rust :selected}}
+
+  {:name seq?
+   :arities [1]
+   :domain :sequence
+   :classification :host-primitive
+   :status :implemented}
+
+  {:name error?
+   :arities [1]
+   :domain :error
+   :classification :host-primitive
+   :status :selected
+   :semantics :runtime-error-value}
+
+  {:name uuid
+   :arities [0 1 2]
+   :domain :identity
+   :classification :host-primitive
+   :status :selected
+   :legacy std.lib.foundation/uuid}
+
+  {:name sid
+   :arities [0]
+   :domain :identity
+   :classification :portable-hal-over-host-primitive
+   :host-dependency uuid
+   :status :selected
+   :legacy std.lib.foundation/sid}
+
+  {:name wrapped
+   :arities [1 2 3 4]
+   :domain :display
+   :classification :host-value-constructor
+   :status :selected
+   :legacy std.lib.foundation/wrapped}
+
+  {:name wrapped?
+   :arities [1]
+   :domain :display
+   :classification :host-primitive
+   :status :selected
+   :legacy std.lib.foundation/wrapped?}
+
+  {:name regexp-functions
+   :arities :family
+   :domain :regexp
+   :classification :host-primitives-with-hal-wrappers
+   :status :pending-members
+   :requested-as "regexp-*"}]
+
+ :macros
+ [{:name intern-in :domain :namespace-facade
+   :semantics :copy-selected-vars-into-receiving-namespace}
+  {:name intern-all :domain :namespace-facade
+   :semantics :copy-public-vars-into-receiving-namespace}
+  {:name with-template-meta :domain :template
+   :semantics :dynamic-template-metadata-binding}
+  {:name template-vars :domain :template
+   :semantics :evaluate-forms-generated-from-source-vars}
+  {:name template-entries :domain :template
+   :semantics :evaluate-forms-generated-from-literal-entries}
+  {:name with-ns :domain :namespace
+   :semantics :evaluate-quoted-forms-in-existing-namespace}]
+
+ :types
+ [{:name Wrapped
+   :domain :display
+   :status :selected
+   :derefable true
+   :fields [value show type display]
+   :legacy std.lib.foundation/Wrapped}]
+
+ :unresolved
+ [{:name ns+
+   :question :confirm-arity-and-namespace-composition-semantics}
+  {:name regexp-functions
+   :question :confirm-exact-public-member-names}
+  {:name error?
+   :question :confirm-whether-arbitrary-thrown-values-count-as-errors}]}

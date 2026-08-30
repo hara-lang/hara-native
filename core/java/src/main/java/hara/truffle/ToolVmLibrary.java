@@ -13,7 +13,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
 
-/** Read-only HALC/HBC provider implementation for the Truffle runtime. */
+/** Read-only HALC/HBC implementation exposed through {@code std.native.Instrument}. */
 public final class ToolVmLibrary {
   private static final Keyword HAL = Keyword.create("hal");
   private static final Keyword HALC = Keyword.create("halc");
@@ -89,24 +89,24 @@ public final class ToolVmLibrary {
     String to = transformFormat(arguments[1], "target format");
     if (!"hal".equals(from) || !"halc".equals(to)) {
       throw new HaraException(
-          "tool.vm.provider does not support :" + from + " -> :" + to + " in this runtime profile");
+          "std.native.Instrument does not support :" + from + " -> :" + to + " in this runtime profile");
     }
     Object input = HaraBox.unwrap(arguments[2]);
     if (!(input instanceof String source)) {
-      throw new HaraException("tool.vm.provider/transform expects HAL source as a String");
+      throw new HaraException("std.native.Instrument/transform expects HAL source as a String");
     }
     Object[] forms = HaraLanguage.readAll(source, "tool.vm/transform");
     String namespace = HalcArtifact.declaredNamespace(forms);
     Object rawOptions = HaraBox.unwrap(arguments[3]);
     if (!(rawOptions instanceof IMapType<?, ?>)) {
-      throw new HaraException("tool.vm.provider/transform expects options as a map");
+      throw new HaraException("std.native.Instrument/transform expects options as a map");
     }
     @SuppressWarnings("unchecked")
     IMapType<Object, Object> options = (IMapType<Object, Object>) rawOptions;
     for (Map.Entry<Object, Object> entry : options) {
       if (!Keyword.create("resource").equals(HaraBox.unwrap(entry.getKey()))) {
         throw new HaraException(
-            "tool.vm.provider/transform does not support option " + entry.getKey());
+            "std.native.Instrument/transform does not support option " + entry.getKey());
       }
     }
     Object resourceOption = HaraBox.unwrap(options.lookup(Keyword.create("resource")));
@@ -117,7 +117,7 @@ public final class ToolVmLibrary {
                 ? value
                 : null;
     if (resource == null) {
-      throw new HaraException("tool.vm.provider/transform expects :resource as a String");
+      throw new HaraException("std.native.Instrument/transform expects :resource as a String");
     }
     return HalcArtifact.encode(
         namespace, resource, source.getBytes(StandardCharsets.UTF_8), forms);
@@ -189,7 +189,7 @@ public final class ToolVmLibrary {
       return keyword.getName();
     }
     throw new HaraException(
-        "tool.vm.provider/" + operation + " expects :halc or :hbc as its format");
+        "std.native.Instrument/" + operation + " expects :halc or :hbc as its format");
   }
 
   private static String transformFormat(Object value, String field) {
@@ -199,36 +199,36 @@ public final class ToolVmLibrary {
       if ("hal".equals(name) || "halc".equals(name) || "hbc".equals(name)) return name;
     }
     throw new HaraException(
-        "tool.vm.provider/transform expects :hal, :halc, or :hbc as " + field);
+        "std.native.Instrument/transform expects :hal, :halc, or :hbc as " + field);
   }
 
   private static byte[] bytes(Object value, String operation) {
     Object unwrapped = HaraBox.unwrap(value);
     if (unwrapped instanceof byte[] bytes) return bytes.clone();
-    throw new HaraException("tool.vm.provider/" + operation + " expects Bytes");
+    throw new HaraException("std.native.Instrument/" + operation + " expects Bytes");
   }
 
   private static void requireEmptyOptions(Object value, String operation) {
     Object raw = HaraBox.unwrap(value);
     if (!(raw instanceof IMapType<?, ?> options)) {
-      throw new HaraException("tool.vm.provider/" + operation + " expects options as a map");
+      throw new HaraException("std.native.Instrument/" + operation + " expects options as a map");
     }
     if (options.count() != 0) {
       Map.Entry<?, ?> first = options.iterator().next();
       throw new HaraException(
-          "tool.vm.provider/" + operation + " does not support option " + first.getKey());
+          "std.native.Instrument/" + operation + " does not support option " + first.getKey());
     }
   }
 
   private static HaraException unsupported(String format, String operation) {
     return new HaraException(
-        "tool.vm.provider/" + operation + " does not support format :" + format);
+        "std.native.Instrument/" + operation + " does not support format :" + format);
   }
 
   private static void expectArity(String operation, Object[] arguments, int arity) {
     if (arguments.length != arity) {
       throw new HaraException(
-          "tool.vm.provider/" + operation + " expects " + arity + " arguments");
+          "std.native.Instrument/" + operation + " expects " + arity + " arguments");
     }
   }
 

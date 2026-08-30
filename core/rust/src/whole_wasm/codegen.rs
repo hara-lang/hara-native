@@ -1388,7 +1388,6 @@ where
             });
             out.instruction(&Instruction::I64ExtendI32U);
         }
-        _ => return Err(format!("whole-Wasm cannot emit primitive {op:?}")),
     }
     out.instruction(&Instruction::LocalSet(locals.get(destination)));
     Ok(())

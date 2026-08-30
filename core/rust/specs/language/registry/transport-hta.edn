@@ -1,0 +1,239 @@
+{:suite/id :hara.hta/transport
+ :suite/version "0.1.0"
+ :suite/spec :hara/transport-hta
+ :suite/purpose
+ "Validates portable HTA behaviour across Truffle, Rust, and browser hosts while keeping implementation-specific value extensions outside the portable gate."
+
+ :suite/implementations
+ [{:implementation/id :hta/truffle
+   :implementation/sources
+   ["java/src/main/java/hara/truffle/HaraExtensionManifest.java"
+    "java/src/main/java/hara/truffle/HaraWasmExtension.java"
+    "java/src/main/java/hara/truffle/HtaValueCodec.java"]
+   :implementation/tests
+   ["java/src/test/java/hara/truffle/HaraExtensionManifestTest.java"
+    "java/src/test/java/hara/truffle/HaraHtaExtensionTest.java"
+    "java/src/test/java/hara/truffle/HtaValueCodecTest.java"]}
+  {:implementation/id :hta/rust
+   :implementation/sources
+   ["rust/src/extension.rs" "rust/src/hta.rs" "rust/src/native_extension.rs"]
+   :implementation/tests ["rust/src/extension.rs" "rust/src/hta.rs"]}
+  {:implementation/id :hta/browser
+   :implementation/sources
+   ["rust/web/hta.js"
+    "rust/web/packages/hta/worker.js"
+    "rust/web/packages/hta/shared-worker.js"]
+   :implementation/tests
+   ["rust/web/hta.test.js"
+    "rust/web/hta.test.mjs"
+    "rust/web/hta-browser.spec.js"]}]
+
+ :suite/profiles
+ [{:profile/id :hta/jvm-rust-wire
+   :profile/implementations [:hta/truffle :hta/rust]
+   :profile/required-cases
+   [:hta.case/golden-vector
+    :hta.case/map-entry
+    :hta.case/portable-round-trip
+    :hta.case/canonical-collections
+    :hta.case/malformed-frame]
+   :profile/portable true}
+  {:profile/id :hta/portable
+   :profile/implementations [:hta/truffle :hta/rust :hta/browser]
+   :profile/required-cases
+   [:hta.case/manifest
+    :hta.case/golden-vector
+    :hta.case/map-entry
+    :hta.case/portable-round-trip
+    :hta.case/named-value-boundary
+    :hta.case/canonical-collections
+    :hta.case/malformed-frame
+    :hta.case/opaque-handle
+    :hta.case/module-shape
+    :hta.case/task-lifecycle
+    :hta.case/host-calls
+    :hta.case/path-containment]}
+  {:profile/id :hta/extended-values
+   :profile/implementations [:hta/rust :hta/browser]
+   :profile/required-cases [:hta.case/extended-value-round-trip]
+   :profile/portable false}]
+
+ :suite/acceptance
+ {:acceptance/portable
+  "Every implementation passes every portable case using the same fixtures and exact bytes or semantic outcomes."
+  :acceptance/extensions
+  "Tags above 12 require an advertised extension profile except for the standardized portable struct tag 33 and MapEntry tag 38; portable consumers reject every other unknown tag deterministically."
+  :acceptance/skips
+  "A missing optional WASM artifact may skip a local integration case, but release conformance requires the artifact and forbids the skip."
+  :acceptance/regression
+  "Every repaired cross-runtime mismatch adds a shared fixture before the implementation change is accepted."}
+
+ :suite/cases
+ [{:case/id :hta.case/manifest
+   :case/level :must
+   :case/method :shared-corpus
+   :case/input
+   {:input/valid
+    [:manifest/wasm-core
+     :manifest/wasm-hta
+     :manifest/multi-target-hta
+     :manifest/public-handle-tags
+     :manifest/host-call-allowlist]
+    :input/invalid
+    [:manifest/not-a-map
+     :manifest/unknown-or-missing-key
+     :manifest/invalid-namespace-or-identity
+     :manifest/unsafe-path
+     :manifest/provider-shape-mismatch
+     :manifest/invalid-export-host-call-or-handle]}
+   :case/expect
+   [:valid/equivalent-normalized-fields
+    :invalid/extension-malformed-before-provider-start]}
+  {:case/id :hta.case/golden-vector
+   :case/level :must
+   :case/method :exact-bytes
+   :case/input ["x" 42 true]
+   :case/expect
+   [72 84 65 48
+    9 0 0 0 3
+    4 0 0 0 1 120
+    3 0 0 0 0 0 0 0 42
+    2]}
+  {:case/id :hta.case/map-entry
+   :case/level :must
+   :case/method :exact-bytes-and-negative-corpus
+   :case/input [:key 42]
+   :case/expect
+   {:bytes
+    [72 84 65 48
+     38 0 0 0 2
+     6 0 0 0 3 107 101 121
+     3 0 0 0 0 0 0 0 42]
+    :decoded/type :std.native.MapEntry
+    :decode-errors :hta/value-malformed}}
+  {:case/id :hta.case/portable-round-trip
+   :case/level :must
+   :case/method :cross-runtime-matrix
+   :case/input
+   [:value/nil
+    :value/boolean
+    :value/i64-boundaries
+    :value/utf8
+    :value/arbitrary-bytes
+    :value/qualified-keyword
+    :value/qualified-symbol
+    :value/list
+    :value/vector
+    :value/set
+    :value/map
+    :value/struct
+    :value/opaque-handle]
+   :case/expect
+   "Every producer frame decodes to an equivalent value in every consumer."}
+  {:case/id :hta.case/named-value-boundary
+   :case/level :must
+   :case/method :cross-runtime-matrix
+   :case/input
+   [:named-value/struct-round-trip
+    :named-value/mutable-instance
+    :named-value/mutable-type]
+   :case/expect
+   [:struct/type-name-preserved
+    :struct/declared-field-order-preserved
+    :struct/ordered-values-preserved
+    :mutable/unsupported-value-error]}
+  {:case/id :hta.case/canonical-collections
+   :case/level :must
+   :case/method :property
+   :case/input :collections/equal-with-permuted-insertion-order
+   :case/expect :frame/byte-identical}
+  {:case/id :hta.case/malformed-frame
+   :case/level :must
+   :case/method :negative-corpus
+   :case/input
+   [:frame/bad-magic
+    :frame/truncated
+    :frame/trailing-bytes
+    :frame/unknown-tag
+    :frame/invalid-length]
+   :case/expect :hta/value-malformed}
+  {:case/id :hta.case/opaque-handle
+   :case/level :must
+   :case/method :lifecycle
+   :case/input
+   [:handle/round-trip
+    :handle/public-tag
+    :handle/release-twice
+    :handle/use-after-release
+    :handle/wrong-owner]
+   :case/expect
+   [:handle/owner-type-id-preserved
+    :handle/release-sent-once
+    :handle/released-use-rejected
+    :handle/cross-owner-use-rejected]}
+  {:case/id :hta.case/module-shape
+   :case/level :must
+   :case/method :module-fixtures
+   :case/input
+   [:module/missing-memory
+    :module/missing-each-required-export
+    :module/abi-version-1
+    :module/abi-version-2
+    :module/unsupported-abi-version]
+   :case/expect
+   [:module/missing-rejected-before-invoke
+    :module/versions-1-and-2-accepted
+    :module/other-version-rejected]
+   :case/note "hta_poll is optional because neither Truffle nor the browser worker requires it."}
+  {:case/id :hta.case/task-lifecycle
+   :case/level :must
+   :case/method :integration
+   :case/input
+   [:task/result :task/rejection :task/cancel :task/unknown-settlement]
+   :case/expect
+   [:promise/settled-once
+    :task/dropped-after-known-settlement
+    :cancel/forwarded
+    :cancel/no-late-success]}
+  {:case/id :hta.case/host-calls
+   :case/level :must
+   :case/method :integration
+   :case/input
+   [:host-call/declared-and-granted
+    :host-call/not-declared
+    :host-call/policy-denied
+    :host-call/malformed]
+   :case/expect
+   [:allowed/result-delivered-through-owner-mailbox
+    :denied/structured-exceptional-settlement]}
+  {:case/id :hta.case/path-containment
+   :case/level :must
+   :case/method :filesystem-fixtures
+   :case/input
+   [:path/absolute
+    :path/parent-segment
+    :path/symlink-escape
+    :path/missing-target
+    :path/missing-asset]
+   :case/expect :extension/rejected-before-worker-start}
+  {:case/id :hta.case/extended-value-round-trip
+   :case/level :profile
+   :case/method :rust-browser-matrix
+   :case/input
+   [:value/binary64
+    :value/namespace
+    :value/var-snapshot
+    :value/atom-snapshot
+    :value/mutable-array-snapshot
+    :value/mutable-object-snapshot]
+   :case/expect :value/equivalent-snapshot}]
+
+ :suite/commands
+ [{:command/id :hta.check/truffle
+   :command/run
+   "mvn -f java/pom.xml -Ptruffle -Dtest=hara.truffle.HaraExtensionManifestTest,hara.truffle.HtaValueCodecTest,hara.truffle.HaraHtaExtensionTest test"}
+  {:command/id :hta.check/rust
+   :command/run
+   "cargo test --manifest-path rust/Cargo.toml hta::tests && cargo test --manifest-path rust/Cargo.toml extension::tests"}
+  {:command/id :hta.check/browser
+   :command/run "cd rust/web && node --test hta.test.js hta.test.mjs"}]}

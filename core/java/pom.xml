@@ -164,6 +164,18 @@
 				<configuration>
 					<release>21</release>
 					<parameters>true</parameters>
+					<!-- This source-free host retains only its native Truffle tests plus
+					     the launcher test. Do not compile the inherited source-runtime
+					     test tree: its production classes live in hara, not hara-native. -->
+					<testIncludes>
+						<!-- The host test profile deliberately excludes the inherited
+						     source-runtime suite. Keep this list aligned with Surefire. -->
+						<testInclude>hara/kernel/NativeMainTest.java</testInclude>
+						<testInclude>hara/truffle/HaraPackageManifestTest.java</testInclude>
+						<testInclude>hara/truffle/HaraPackageToolTest.java</testInclude>
+						<testInclude>hara/truffle/JvmPackageLoaderTest.java</testInclude>
+						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
+					</testIncludes>
 					<annotationProcessorPaths>
 						<path>
 							<groupId>org.graalvm.truffle</groupId>

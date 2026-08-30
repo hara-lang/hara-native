@@ -6,5 +6,4 @@ hara.truffle.CoroutineLibraryProvider
 hara.truffle.NativeSocketLibraryProvider
 hara.truffle.NativeOsLibraryProvider
 hara.truffle.NativeJsonLibraryProvider
-hara.truffle.ToolVmLibraryProvider
 hara.truffle.ToolPackageLibraryProvider

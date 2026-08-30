@@ -63,6 +63,7 @@ impl HandleScope {
             .ok_or_else(|| "invalid whole-Wasm runtime handle".into())
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.values.len()
     }

@@ -564,7 +564,6 @@ fn binary(body: &mut Vec<u8>, op: IntrinsicOp) -> Result<(), String> {
                 },
             ]);
         }
-        _ => return Err(format!("native trace does not support {op:?}")),
     }
     Ok(())
 }

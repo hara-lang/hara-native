@@ -20,7 +20,6 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.function.Consumer;
 
 /** Annotated built-in protocol implementations and their semantic helpers. */
 final class HaraProtocolExtensions {
@@ -584,13 +583,13 @@ final class HaraProtocolExtensions {
   }
 
   @HaraProtocolExtension(protocol = IWatch.class, method = "watch-add", receiver = IWatch.class)
-  static Object watchAdd(Object receiver, Object[] arguments) {
+  static Object watchAdd(HaraContext context, Object receiver, Object[] arguments) {
     IWatch watch = (IWatch) receiver;
     Object callback = arguments[1];
     watch.addWatch(
         arguments[0],
         entry ->
-            invokeCallback(
+            context.invokeCallable(
                 callback,
                 new Object[] {
                   arguments[0],
@@ -792,23 +791,6 @@ final class HaraProtocolExtensions {
     }
     Object found = findValue(set, arguments[0]);
     return found == null && arguments.length == 2 ? arguments[1] : found;
-  }
-
-  private static Object invokeCallback(Object callback, Object[] arguments) {
-    if (callback instanceof HaraFunction) {
-      HaraFunction function = (HaraFunction) callback;
-      return function.callTarget().call(function.callArguments(arguments));
-    }
-    if (callback instanceof IFn) {
-      return applyFunction((IFn<?, ?, ?>) callback, arguments);
-    }
-    if (callback instanceof Consumer<?>) {
-      @SuppressWarnings("unchecked")
-      Consumer<Object> consumer = (Consumer<Object>) callback;
-      consumer.accept(arguments[0]);
-      return null;
-    }
-    throw new HaraException("watch callback must be a Hara function or IFn");
   }
 
   @SuppressWarnings("unchecked")

@@ -1,8 +1,11 @@
-use super::super::{graph::Analysis, plan::BuildPlan};
+use super::super::graph::Analysis;
+#[cfg(test)]
+use super::super::plan::BuildPlan;
 use crate::vm::BytecodeBundleModule;
 
 #[derive(Debug, Clone)]
 pub(in crate::task::production) struct ProductionBuild {
+    #[cfg(test)]
     pub(in crate::task::production) plan: BuildPlan,
     pub(in crate::task::production) analysis: Analysis,
 }

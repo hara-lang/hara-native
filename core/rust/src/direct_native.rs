@@ -242,33 +242,6 @@ pub(crate) fn capture_execution_scope() -> Option<NativeExecutionScope> {
     })
 }
 
-/// Adds a nested VM program to the active engine's bytecode telemetry. Nested
-/// programs are produced by native `Runtime/eval`, declaration adapters, and
-/// dynamic namespace seams; they are still validated Hara bytecode units.
-pub(crate) fn record_bytecode_program(program: &Program) {
-    ACTIVE_NATIVE_ENGINE.with(|active| {
-        if let Some(state) = active.borrow().as_ref() {
-            state.bytecode_functions.set(
-                state
-                    .bytecode_functions
-                    .get()
-                    .saturating_add(program.functions.len()),
-            );
-            let instructions = program
-                .functions
-                .iter()
-                .map(|function| function.code.len())
-                .sum::<usize>();
-            state.bytecode_instructions.set(
-                state
-                    .bytecode_instructions
-                    .get()
-                    .saturating_add(instructions),
-            );
-        }
-    });
-}
-
 impl NativeExecutionScope {
     pub(crate) fn with<R>(&self, action: impl FnOnce() -> R) -> R {
         with_active_engine(self.state.clone(), || {

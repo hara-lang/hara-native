@@ -221,6 +221,7 @@ mod tests {
         let corpus = parse_corpus(include_str!("../../../assets/code-vm-conformance.edn"))
             .expect("embedded corpus");
         assert_eq!(corpus.id, "code.vm/production");
+        assert_eq!(corpus.upstream, "specs/language/registry/bytecode-vm.edn");
         assert!(corpus.cases.len() >= 12);
         assert!(corpus.cases.iter().any(|case| case.browser_safe));
         assert!(corpus.cases.iter().all(|case| !case.upstream_id.is_empty()));

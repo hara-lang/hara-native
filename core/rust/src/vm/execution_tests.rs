@@ -220,6 +220,23 @@ fn runtime_bytecode_defmacro_registers_and_expands() {
 }
 
 #[test]
+fn base_def_macro_registers_and_expands_from_its_explicit_namespace() {
+    let mut runtime = Runtime::core();
+    assert_eq!(
+        runtime.eval_bytecode_native(
+            "(let [target (std.native.Base/namespace 'example.macro)] \
+             (std.native.Base/def target 'identity-form \
+               (fn [form environment value] value) {:macro true}))",
+        ),
+        Ok("#'example.macro/identity-form".into())
+    );
+    assert_eq!(
+        runtime.eval_bytecode_native("(example.macro/identity-form 42)"),
+        Ok("42".into())
+    );
+}
+
+#[test]
 fn bytecode_variadic_macro_forwards_rest_to_helper_in_order() {
     let mut runtime = Runtime::core();
     assert_eq!(

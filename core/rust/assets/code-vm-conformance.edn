@@ -1,6 +1,6 @@
 {:corpus/schema "hal.code-vm-production-corpus/0-alpha"
  :corpus/id :code.vm/production
- :corpus/upstream "hara-specs-registry/01-lang/010-bytecode/draft/conformance/bytecode-vm.edn"
+ :corpus/upstream "specs/language/registry/bytecode-vm.edn"
  :cases
  [{:id :literal/integer
    :upstream-id :literal/integer

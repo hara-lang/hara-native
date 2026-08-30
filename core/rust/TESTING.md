@@ -34,21 +34,71 @@ Hara package repository.
 make test-conformance
 ```
 
-This is a serial cross-host compatibility layer, run in one CI job. It proves
-three native-owned contracts: Rust executes the checked-in code-VM corpus; the
-JVM executes every checked-in source-free, success-result HBC0 artifact; and
-the browser executes those HCC cases serially in one native runtime. Collection
-artifacts call the stable
-`std.protocol.*` ABI over `std.native.Vector` and `std.native.MapEntry`; a
-success artifact containing `std.foundation/*` fails the JVM gate. The legacy
-`error/*` HBC0 records are intentionally held for the separate failure-ownership
-lane while Java and Rust complete its shared contract. These vectors are
-deliberately checked into this repository so a fresh native checkout needs
-neither `hara` nor `hara-specs-registry`.
+This is the serial first-layer conformance layer. Rust, JVM, and browser each
+decode the checked-in `HNC1` native/protocol artifact and `HLC1` functional
+language artifact. HNC1 runs its native suite followed by its protocol suite
+in one host runtime. HLC1 executes every Rust-produced HBC0 case in a fresh
+runtime and covers parser, evaluator, and lowered-native-ABI behavior.
+`specs/native-protocol-v1.edn` and `specs/language-v1.edn` are the editable
+sources; both reject Foundation dependencies.
 
-This is not the Hara language conformance suite. Parser, evaluator, standard
-library, and source-level behavioral corpora remain versioned with the
-canonical HAL and run from the Hara source/package repository.
+The source contains the exact deterministic behavior cases. At generation time
+the native registry contributes independent resolver cases for every portable
+type and method, while the protocol registry contributes resolver cases for
+every guest-visible protocol type and method plus guest dispatch and arity
+cases for each portable protocol method. Do not replace these generated cases
+with a hard-coded total or an aggregate "catalog passes" assertion.
+
+`specs/native-protocol-v1.edn` also owns the grouped
+`:coverage :native/portable` list: the 145 deterministic methods promoted from
+the prior registry fixture. Generation verifies each name is a live portable
+declaration and appears as a direct call in a native program; a test proves
+that removing one call fails generation. The remaining portable native methods
+are inventory/resolver-covered until a stable direct fixture is promoted.
+Every portable protocol method has generated extension-success, missing-arity,
+and unsupported-receiver cases; `IEncodable/encode-with` is excluded only
+because its universal default dispatch is specified behavior.
+
+To extend HNC1, add a structured `:program` form and exact `:expect` display to
+the appropriate suite. To extend HLC1, adopt a bytecode VM fixture from the
+verbatim local registry import or a case from `specs/lowering-v1.edn`; the
+generator rejects a drifted source program or expectation. Regenerate and
+verify the artifacts:
+
+```text
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- generate
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- check
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-language-conformance-artifact -- generate
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-language-conformance-artifact -- check
+make test-conformance
+make test-conformance-full
+```
+
+Do not add `.hal` fixtures or Foundation calls. Registry material belongs under
+`specs/language/registry` as a verbatim, non-executable provenance import;
+HLC1 contains only the adopted, generated HBC0 cases. HLC1 covers the core
+parser/evaluator and ABI lowering; standard-library and source-package
+semantics remain outside the source-free host boundary.
+
+Use `test-conformance-full` when a capability-bound operation needs its
+deterministic trusted-provider profile. The strict portable artifact must still
+be runnable in every host without a real filesystem, process, network, or
+registry service.
+
+When publishing the registry mirror, keep the native EDN file authoritative:
+
+```text
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- mirror /path/to/hara-specs-registry/01-lang/010-bytecode/draft/conformance/native-protocol-v1.edn
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- check-mirror /path/to/hara-specs-registry/01-lang/010-bytecode/draft/conformance/native-protocol-v1.edn
+```
+
+The mirror is a publication artifact. Do not edit it directly or feed it back
+into HNC generation.
+
+HLC1 is the source-free host subset of language conformance, not a replacement
+for the full Hara language suite. Standard-library and source-package behavioral
+corpora remain versioned with canonical HAL and run from the Hara
+source/package repository.
 
 ## Browser, HTA, and provider hosts
 

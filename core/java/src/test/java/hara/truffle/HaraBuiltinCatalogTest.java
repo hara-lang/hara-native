@@ -21,6 +21,9 @@ public class HaraBuiltinCatalogTest {
     assertEquals("str", HaraBuiltinCatalog.DEFAULT_LIBRARY_ALIASES.get("string"));
     assertTrue(HaraBuiltinCatalog.MARKER_METHOD_NAMES.contains("get"));
     assertTrue(HaraNativeDeclarations.METHODS.containsKey("Kernel"));
+    assertEquals(
+        List.of("provider", "validate", "inspect", "disassemble", "transform", "execute"),
+        HaraNativeDeclarations.METHODS.get("Instrument"));
     assertTrue(
         HaraNativeDeclarations.bindings().stream()
             .anyMatch(binding -> binding.name().equals("String")));
@@ -52,6 +55,7 @@ public class HaraBuiltinCatalogTest {
   @Test
   public void libraryProvidersAreUniqueAnnotatedAndDoNotAdvertiseDirectlyInstalledEdn() {
     assertFalse(new HaraLibraryLoader().provides("std.native.Edn"));
+    assertFalse(new HaraLibraryLoader().provides("tool.vm.provider"));
 
     HaraLibraryProvider duplicate =
         new HaraLibraryProvider() {

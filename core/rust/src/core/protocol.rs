@@ -1,4 +1,4 @@
-fn value_to_metadata(value: &Value) -> Result<MetadataValue, String> {
+pub(crate) fn value_to_metadata(value: &Value) -> Result<MetadataValue, String> {
     match value {
         Value::Nil => Ok(MetadataValue::Nil),
         Value::Bool(value) => Ok(MetadataValue::Boolean(*value)),
@@ -1116,6 +1116,88 @@ fn protocol_reduce(arguments: &[Value]) -> Result<Value, String> {
     reduce_iterator(function, accumulator, source.clone(), "IReduce/reduce")
 }
 
+fn base_namespace(value: &Value, operation: &str) -> Result<crate::kernel::Namespace<Value>, String> {
+    let Value::Namespace(namespace) = value else {
+        return Err(format!("Base/{operation} expects a Namespace value"));
+    };
+    let registry = namespace_registry()?;
+    registry
+        .find(namespace.name().as_str())
+        .filter(|candidate| candidate.same_identity(namespace.as_ref()))
+        .ok_or_else(|| format!("Base/{operation} received a Namespace from another runtime"))
+}
+
+fn base_namespace_name(value: &Value, operation: &str) -> Result<String, String> {
+    match value {
+        Value::Symbol(name) if name.get_namespace().is_none() => Ok(name.as_str().to_owned()),
+        _ => Err(format!("Base/{operation} expects an unqualified namespace symbol")),
+    }
+}
+
+fn base_symbol(value: &Value, operation: &str) -> Result<String, String> {
+    match value {
+        Value::Symbol(symbol) if symbol.get_namespace().is_none() => Ok(symbol.as_str().to_owned()),
+        _ => Err(format!("Base/{operation} expects an unqualified symbol")),
+    }
+}
+
+fn base_metadata(value: &Value, operation: &str) -> Result<Option<Rc<Metadata>>, String> {
+    match value {
+        Value::Nil => Ok(None),
+        value => match value_to_metadata(value)? {
+            MetadataValue::Map(entries) => Ok(Some(Metadata::new(entries))),
+            _ => Err(format!("Base/{operation} expects a metadata map or nil")),
+        },
+    }
+}
+
+fn base_fields(value: &Value, operation: &str) -> Result<Vec<NamedField>, String> {
+    let values = match value {
+        Value::Vector(values) => values.iter().cloned().collect::<Vec<_>>(),
+        _ => return Err(format!("Base/{operation} expects a field vector")),
+    };
+    values
+        .iter()
+        .map(|value| match value {
+            Value::Symbol(name) if name.get_namespace().is_none() => Ok(NamedField::legacy(name.as_str())),
+            _ => NamedField::from_value(value, operation),
+        })
+        .collect()
+}
+
+fn base_protocol(value: &Value, operation: &str) -> Result<Rc<GuestProtocol>, String> {
+    match value {
+        Value::Protocol(protocol) => Ok(protocol.clone()),
+        Value::Var(var) => match var.deref_value() {
+            Value::Protocol(protocol) => Ok(protocol),
+            _ => Err(format!("Base/{operation} expects a protocol")),
+        },
+        _ => Err(format!("Base/{operation} expects a protocol")),
+    }
+}
+
+fn base_type_name(value: &Value, operation: &str) -> Result<String, String> {
+    match value {
+        Value::StructType(ty) => Ok(ty.name.clone()),
+        Value::MutableType(ty) => Ok(ty.name.clone()),
+        _ => Err(format!("Base/{operation} expects a struct or mutable type")),
+    }
+}
+
+fn with_base_namespace<R>(
+    value: &Value,
+    operation: &str,
+    action: impl FnOnce() -> Result<R, String>,
+) -> Result<R, String> {
+    let namespace = base_namespace(value, operation)?;
+    let registry = namespace_registry()?;
+    let previous = registry.current().name().as_str().to_owned();
+    registry.set_current(namespace.name().as_str());
+    let result = action();
+    registry.set_current(previous);
+    result
+}
+
 fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String> {
     let operation = operation
         .strip_prefix("std.native.Base/")
@@ -1147,6 +1229,13 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
         ))),
         "hash-map" => Err("Base/hash-map expects an even number of arguments".into()),
         "hash-set" => Ok(Value::Set(values.iter().cloned().collect())),
+        "map-entry" => match values {
+            [key, value] => Ok(Value::MapEntry(Box::new(PMapEntry::new(
+                key.clone(),
+                value.clone(),
+            )))),
+            _ => Err("Base/map-entry expects a key and value".into()),
+        },
         "atom" => match values {
             [value] => Ok(Value::Atom(Box::new(RuntimeAtom::new(value.clone(), true)))),
             _ => Err("Base/atom expects one value".into()),
@@ -1201,7 +1290,153 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
                 .resolve(symbol)
                 .map(Value::Var)
                 .unwrap_or(Value::Nil)),
+            [namespace, Value::Symbol(symbol)] if symbol.get_namespace().is_none() => {
+                Ok(base_namespace(namespace, "resolve")?
+                    .resolve(symbol)
+                    .map(Value::Var)
+                    .unwrap_or(Value::Nil))
+            }
             _ => Err("Base/resolve expects one symbol".into()),
+        },
+        "namespace" => match values {
+            [name] => {
+                let name = base_namespace_name(name, "namespace")?;
+                Ok(Value::Namespace(Rc::new(namespace_registry()?.find_or_create(name))))
+            }
+            _ => Err("Base/namespace expects one namespace symbol".into()),
+        },
+        "current-namespace" => match values {
+            [] => Ok(Value::Namespace(Rc::new(namespace_registry()?.current()))),
+            _ => Err("Base/current-namespace expects no arguments".into()),
+        },
+        "select-namespace" => match values {
+            [namespace] => {
+                let namespace = base_namespace(namespace, "select-namespace")?;
+                Ok(Value::Namespace(Rc::new(
+                    namespace_registry()?.set_current(namespace.name().as_str()),
+                )))
+            }
+            _ => Err("Base/select-namespace expects one Namespace value".into()),
+        },
+        "def" => match values {
+            [namespace, name, value, metadata] => {
+                let name = base_symbol(name, "def")?;
+                let metadata = base_metadata(metadata, "def")?;
+                with_base_namespace(namespace, "def", || {
+                    let macro_definition = metadata.as_ref().is_some_and(|metadata| {
+                        matches!(metadata.get_keyword("macro"), Some(MetadataValue::Boolean(true)))
+                    });
+                    let var = if macro_definition {
+                        vm_def_macro(&name, value.clone(), metadata)?
+                    } else {
+                        vm_def_global(&name, value.clone(), metadata)?
+                    };
+                    Ok(Value::Var(var))
+                })
+            }
+            _ => Err("Base/def expects Namespace, symbol, value, and metadata".into()),
+        },
+        "struct" | "mutable" => match values {
+            [namespace, name, fields] | [namespace, name, fields, Value::Nil] => {
+                let name = base_symbol(name, operation)?;
+                let fields = base_fields(fields, operation)?;
+                let kind = if operation == "struct" { "defstruct" } else { "defmutable" };
+                with_base_namespace(namespace, operation, || {
+                    let mut environment = HashMap::new();
+                    publish_named_value(kind, &name, fields, &mut environment, None)?;
+                    Ok(namespace_registry()?
+                        .current()
+                        .resolve(&Symbol::parse(&name))
+                        .map(|var| var.deref_value())
+                        .ok_or_else(|| format!("Base/{operation} did not publish {name}"))?)
+                })
+            }
+            [namespace, name, fields, metadata] => {
+                let name = base_symbol(name, operation)?;
+                let fields = base_fields(fields, operation)?;
+                let metadata = base_metadata(metadata, operation)?;
+                let kind = if operation == "struct" { "defstruct" } else { "defmutable" };
+                with_base_namespace(namespace, operation, || {
+                    let mut environment = HashMap::new();
+                    publish_named_value(kind, &name, fields, &mut environment, metadata)?;
+                    Ok(namespace_registry()?
+                        .current()
+                        .resolve(&Symbol::parse(&name))
+                        .map(|var| var.deref_value())
+                        .ok_or_else(|| format!("Base/{operation} did not publish {name}"))?)
+                })
+            }
+            _ => Err(format!("Base/{operation} expects Namespace, symbol, fields, and optional metadata")),
+        },
+        "protocol" => match values {
+            [namespace, name, methods, parents] => {
+                let name = base_symbol(name, "protocol")?;
+                let entries = map_entries(methods)
+                    .ok_or_else(|| "Base/protocol expects a method arity map".to_string())?;
+                let mut declarations = HashMap::new();
+                for (method, arity) in entries {
+                    let method = base_symbol(&method, "protocol")?;
+                    let Value::Number(arity) = arity else {
+                        return Err("Base/protocol method arities must be positive integers".into());
+                    };
+                    if arity <= 0 || declarations.insert(method, arity as usize).is_some() {
+                        return Err("Base/protocol method declarations must be unique and have a receiver".into());
+                    }
+                }
+                let parents = match parents {
+                    Value::Vector(values) => values
+                        .iter()
+                        .map(|value| Ok(base_protocol(value, "protocol")?.name.clone()))
+                        .collect::<Result<Vec<_>, String>>()?,
+                    _ => return Err("Base/protocol expects a parent protocol vector".into()),
+                };
+                with_base_namespace(namespace, "protocol", || {
+                    publish_guest_protocol(&name, declarations, parents, &mut HashMap::new())
+                })
+            }
+            _ => Err("Base/protocol expects Namespace, symbol, method arities, and parents".into()),
+        },
+        "extend" => match values {
+            [namespace, type_value, protocol_value, implementations] => {
+                let type_name = base_type_name(type_value, "extend")?;
+                let protocol = base_protocol(protocol_value, "extend")?;
+                let entries = map_entries(implementations)
+                    .ok_or_else(|| "Base/extend expects a method function map".to_string())?;
+                with_base_namespace(namespace, "extend", || {
+                    with_declaration_transaction(&mut HashMap::new(), |_| {
+                        let registry = active_protocol_registry()?;
+                        for (method, function) in &entries {
+                            let method = base_symbol(method, "extend")?;
+                            if !protocol.methods.contains_key(&method) {
+                                return Err(format!("Base/extend has no declared method: {method}"));
+                            }
+                            let function = match function {
+                                Value::Function(function) => function.clone(),
+                                Value::Var(var) => match var.deref_value() {
+                                    Value::Function(function) => function,
+                                    _ => return Err("Base/extend method implementations must be functions".into()),
+                                },
+                                _ => return Err("Base/extend method implementations must be functions".into()),
+                            };
+                            registry.register_guest(protocol.name.clone(), type_name.clone(), method, function);
+                        }
+                        Ok(Value::Nil)
+                    })?;
+                    Ok(type_value.clone())
+                })
+            }
+            _ => Err("Base/extend expects Namespace, type, protocol, and method functions".into()),
+        },
+        "field" => match values {
+            [value, field] => {
+                let field = match field {
+                    Value::Keyword(field) if field.get_namespace().is_none() => field.as_str(),
+                    Value::Symbol(field) if field.get_namespace().is_none() => field.as_str(),
+                    _ => return Err("Base/field expects an unqualified field keyword or symbol".into()),
+                };
+                mutable_field_value(value, field)
+            }
+            _ => Err("Base/field expects a mutable value and field name".into()),
         },
         "satisfies?" => match values {
             [protocol, value] => {
@@ -2550,7 +2785,11 @@ fn promise_chain(source: Promise, operation: &str, function: Rc<Function>) -> Pr
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::{native_base_values, protocol_display, Value};
+    use super::{
+        call_value, native_base_values, native_variadic_function, protocol_call,
+        protocol_display, with_namespace_registry, with_protocols, NamespaceRegistry, PMap,
+        ProtocolRegistry, Symbol, Value,
+    };
 
     #[test]
     fn native_base_bytes_constructs_a_byte_buffer() {
@@ -2563,6 +2802,161 @@ mod protocol_tests {
             panic!("Base/bytes did not return a byte buffer");
         };
         assert_eq!(*bytes.borrow(), vec![1, 2, 253]);
+    }
+
+    #[test]
+    fn native_base_map_entry_constructs_the_dedicated_pair_type() {
+        let value = native_base_values(
+            "Base/map-entry",
+            &[Value::Keyword("key".into()), Value::Number(42)],
+        )
+        .unwrap();
+        assert!(matches!(value, Value::MapEntry(_)));
+        assert_eq!(value.display(), "[:key 42]");
+    }
+
+    #[test]
+    fn native_base_declaration_abi_uses_explicit_namespace_values() {
+        let namespaces = NamespaceRegistry::new("user");
+        let protocols = ProtocolRegistry::new();
+        with_namespace_registry(&namespaces, || {
+            with_protocols(&protocols, || {
+                let namespace = native_base_values(
+                    "Base/namespace",
+                    &[Value::Symbol(Symbol::parse("example.native"))],
+                )
+                .expect("namespace");
+                assert!(matches!(&namespace, Value::Namespace(value) if value.name().as_str() == "example.native"));
+
+                let defined = native_base_values(
+                    "Base/def",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("answer")),
+                        Value::Number(42),
+                        Value::Nil,
+                    ],
+                )
+                .expect("def");
+                assert!(matches!(defined, Value::Var(_)));
+                let resolved = native_base_values(
+                    "Base/resolve",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("answer")),
+                    ],
+                )
+                .expect("resolve");
+                assert!(matches!(resolved, Value::Var(var) if var.deref_value() == Value::Number(42)));
+
+                let user_type = native_base_values(
+                    "Base/struct",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("User")),
+                        Value::Vector(vec![Value::Symbol(Symbol::parse("name"))].into()),
+                    ],
+                )
+                .expect("struct");
+                assert!(matches!(&user_type, Value::StructType(value) if value.name == "example.native/User"));
+
+                let session_type = native_base_values(
+                    "Base/mutable",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("Session")),
+                        Value::Vector(vec![Value::Symbol(Symbol::parse("token"))].into()),
+                    ],
+                )
+                .expect("mutable");
+                assert!(matches!(&session_type, Value::MutableType(value) if value.name == "example.native/Session"));
+
+                let target = namespaces.find("example.native").expect("declared namespace");
+                let user_constructor = target
+                    .resolve(&Symbol::parse("->User"))
+                    .expect("struct constructor")
+                    .deref_value();
+                assert!(matches!(user_constructor, Value::StructType(_)));
+                let user = call_value(user_constructor, vec![Value::String("Ada".into())])
+                    .expect("construct user");
+
+                let session_constructor = target
+                    .resolve(&Symbol::parse("->Session"))
+                    .expect("mutable constructor")
+                    .deref_value();
+                assert!(matches!(session_constructor, Value::MutableType(_)));
+                let session = call_value(
+                    session_constructor,
+                    vec![Value::String("session-token".into())],
+                )
+                .expect("construct session");
+                assert_eq!(
+                    native_base_values(
+                        "Base/field",
+                        &[session, Value::Keyword("token".into())],
+                    )
+                    .expect("field"),
+                    Value::String("session-token".into())
+                );
+
+                let protocol = native_base_values(
+                    "Base/protocol",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("IGreeting")),
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("greet")),
+                            Value::Number(1),
+                        )])),
+                        Value::Vector(Vec::<Value>::new().into()),
+                    ],
+                )
+                .expect("protocol");
+                let greeting = native_variadic_function("example.native/greet", |_| {
+                    Ok(Value::String("hello Ada".into()))
+                });
+                native_base_values(
+                    "Base/extend",
+                    &[
+                        namespace.clone(),
+                        user_type.clone(),
+                        protocol,
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("greet")),
+                            greeting,
+                        )])),
+                    ],
+                )
+                .expect("extend");
+                assert_eq!(
+                    protocol_call("example.native.IGreeting", "greet", &[user])
+                        .expect("guest protocol dispatch"),
+                    Value::String("hello Ada".into())
+                );
+
+                native_base_values(
+                    "Base/protocol",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("IGreeting")),
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("welcome")),
+                            Value::Number(1),
+                        )])),
+                        Value::Vector(Vec::<Value>::new().into()),
+                    ],
+                )
+                .expect("protocol reload");
+                assert!(matches!(
+                    native_base_values(
+                        "Base/resolve",
+                        &[namespace, Value::Symbol(Symbol::parse("greet"))],
+                    )
+                    .expect("resolve retired method"),
+                    Value::Nil
+                ));
+            });
+        });
     }
 
     #[test]

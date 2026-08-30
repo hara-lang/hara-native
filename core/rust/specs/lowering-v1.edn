@@ -1,0 +1,132 @@
+{:format :hara-native/lowered-conformance
+ :version 1
+ :owner :hara-native
+ :purpose :native-abi-lowering-before-language-conformance
+ :source-inputs
+ {:registry-import "language/imports.edn"
+  :native-contract "native-protocol-v1.edn"}
+ :invariants
+ {:executable-namespace :native-abi
+  :allowed-prefixes ["std.native." "std.protocol."]
+  :forbidden-substrings ["std.foundation" "std.lib."]
+  :source-package-boundary :explicit}
+ :source-form-lowerings
+ [{:source-form def
+   :lowered "std.native.Base/def"
+   :arguments [:namespace :unqualified-symbol :value :metadata-or-nil]}
+  {:source-form defn
+   :lowered "std.native.Base/def"
+   :value "compiled function value"
+   :arguments [:namespace :unqualified-symbol :function :metadata-or-nil]}
+  {:source-form defmacro
+   :lowered "std.native.Base/def"
+   :value "compiled expander with form and environment inputs"
+   :metadata {:macro true}}
+  {:source-form defstruct
+   :lowered "std.native.Base/struct"
+   :arguments [:namespace :unqualified-symbol :native-vector-of-fields]}
+  {:source-form defmutable
+   :lowered "std.native.Base/mutable"
+   :arguments [:namespace :unqualified-symbol :native-vector-of-fields]}
+  {:source-form defprotocol
+   :lowered "std.native.Base/protocol"
+   :arguments [:namespace :unqualified-symbol :method-to-arity-map :native-vector-of-parents]}
+  {:source-form extend-type
+   :lowered "std.native.Base/extend"
+   :arguments [:namespace :type :protocol :method-to-function-map]}
+  {:source-form field
+   :lowered "std.native.Base/field"
+   :arguments [:mutable-value :field-keyword-or-symbol]}
+  {:source-form dynamic-var-call
+   :lowered ["std.native.Base/resolve" "std.protocol.ideref.IDeref/deref"]}]
+ :foundation-wrapper-policy
+ {:lossless-direct-dispatch
+  [{:wrapper "count" :lowered "std.protocol.icount.ICount/count"}
+   {:wrapper "assoc/one-pair" :lowered "std.protocol.iassoc.IAssoc/assoc"}
+   {:wrapper "conj/one-value" :lowered "std.protocol.iconj.IConj/conj"}
+   {:wrapper "dissoc/one-key" :lowered "std.protocol.idissoc.IDissoc/dissoc"}
+   {:wrapper "empty" :lowered "std.protocol.iempty.IEmpty/empty"}
+   {:wrapper "find" :lowered "std.protocol.ifind.IFind/find"}
+   {:wrapper "get/two-arguments" :lowered "std.protocol.ilookup.ILookup/lookup"}
+   {:wrapper "iter" :lowered "std.protocol.iiter.IIter/iter"}
+   {:wrapper "iter-next?" :lowered "std.protocol.iiterator.IIterator/iter-next?"}
+   {:wrapper "nth/two-arguments" :lowered "std.protocol.inth.INth/nth"}
+   {:wrapper "key" :lowered "std.protocol.ipair.IPair/key"}
+   {:wrapper "val" :lowered "std.protocol.ipair.IPair/value"}
+   {:wrapper "peek-first" :lowered "std.protocol.ipeekfirst.IPeekFirst/peek-first"}
+   {:wrapper "pop-last" :lowered "std.protocol.ipoplast.IPopLast/pop-last"}
+   {:wrapper "push-last" :lowered "std.protocol.ipushlast.IPushLast/push-last"}
+   {:wrapper "reset!" :lowered "std.protocol.ireset.IReset/reset"}
+   {:wrapper "deref/one-argument" :lowered "std.protocol.ideref.IDeref/deref"}]
+  :wrapper-only
+  [{:wrapper "assoc/multiple-pairs" :reason :variadic-source-wrapper}
+   {:wrapper "get/default" :reason :default-arity-wrapper}
+   {:wrapper "deref/timeout" :reason :timeout-arity-wrapper}
+   {:wrapper "=" :reason :collection-and-numeric-coercion-wrapper}
+   {:wrapper "hash" :reason :source-level-hash-wrapper}
+   {:wrapper "identity" :reason :source-var-identity-and-namespace-ownership}
+   {:wrapper "iter-map" :reason :foundation-combinator}
+   {:wrapper "iter-has?" :reason :foundation-combinator}]}
+ :imported-reference-classification
+ [{:case-id :core/compiler-defn
+   :classification :split
+   :lowered-case :lowered/definition-and-resolve
+   :source-package-remainder :defn-macro-and-require}
+  {:case-id :core/iterator-root-surface
+   :classification :source-package-only
+   :reason :foundation-public-var-inventory}
+  {:case-id :core/namespace-builtins-missing-export
+   :classification :source-package-only
+   :reason :foundation-bootstrap-namespace}
+  {:case-id :core/namespace-builtins-activation-idempotent
+   :classification :split
+   :lowered-case :lowered/count
+   :source-package-remainder :foundation-builtin-installation}
+  {:case-id :modules/namespace-callable-var-shadow
+   :classification :split
+   :lowered-case :lowered/count
+   :source-package-remainder :require-and-var-identity}
+  {:case-id :modules/namespace-callable-var-late-binding
+   :classification :source-package-only
+   :reason :redefinition-through-source-var}
+  {:case-id :modules/namespace-current-alias-reserved
+   :classification :source-package-only
+   :reason :require-alias-grammar}
+  {:case-id :modules/namespace-referred-var-shadowed
+   :classification :source-package-only
+   :reason :foundation-var-ownership}]
+ :cases
+ [{:id :lowered/count
+   :program (std.protocol.icount.ICount/count (std.native.Base/vector 1 2 3))
+   :expect {:display "3"}}
+  {:id :lowered/lookup
+   :program (std.protocol.ilookup.ILookup/lookup (std.native.Base/hash-map :answer 42) :answer)
+   :expect {:display "42"}}
+  {:id :lowered/assoc
+   :program (std.protocol.ilookup.ILookup/lookup
+             (std.protocol.iassoc.IAssoc/assoc (std.native.Base/hash-map :a 1) :b 2)
+             :b)
+   :expect {:display "2"}}
+  {:id :lowered/conj
+   :program (std.protocol.iconj.IConj/conj (std.native.Base/vector 1) 2)
+   :expect {:display "[1 2]"}}
+  {:id :lowered/dissoc
+   :program (std.protocol.idissoc.IDissoc/dissoc (std.native.Base/hash-map :a 1 :b 2) :b)
+   :expect {:display "{:a 1}"}}
+  {:id :lowered/empty
+   :program (std.protocol.iempty.IEmpty/empty (std.native.Base/vector 1 2))
+   :expect {:display "[]"}}
+  {:id :lowered/nth
+   :program (std.protocol.inth.INth/nth (std.native.Base/vector 41 42) 1)
+   :expect {:display "42"}}
+  {:id :lowered/iter
+   :program (std.protocol.iiterator.IIterator/iter-next?
+              (std.protocol.iiter.IIter/iter (std.native.Base/vector 41)))
+   :expect {:display "true"}}
+  {:id :lowered/definition-and-resolve
+   :program
+   (let [target (std.native.Base/namespace (std.native.Base/symbol "lowering.probe"))
+         _ (std.native.Base/def target (std.native.Base/symbol "inc") (fn [x] (+ x 1)) nil)
+         inc-var (std.native.Base/resolve target (std.native.Base/symbol "inc"))]
+     ((std.protocol.ideref.IDeref/deref inc-var) 41))
+   :expect {:display "42"}}]}

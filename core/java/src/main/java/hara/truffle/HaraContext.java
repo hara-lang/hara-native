@@ -22,6 +22,7 @@ import hara.lang.base.primitive.Num;
 import hara.lang.base.iter.CloseableIterator;
 import hara.lang.data.Symbol;
 import hara.lang.data.List;
+import hara.lang.data.MapEntry;
 import hara.lang.data.Keyword;
 import hara.lang.data.HaraCharacter;
 import hara.lang.protocol.IMapType;
@@ -230,6 +231,8 @@ public final class HaraContext {
                 installCoreBuiltins(namespace(FOUNDATION_NAMESPACE));
               });
           installFoundationBootstrapSeeds();
+          ToolVmLibrary.install(this, "std.native.Instrument");
+          namespaceStates.put("std.native.Instrument", NamespaceLoadState.LOADED);
         });
     installProjectMacro();
     installNativeLibraries();
@@ -559,7 +562,14 @@ public final class HaraContext {
           .define(
               "class",
               new UnaryBuiltin(
-                  "std.native.Exception/class", value -> portableType(value).getName()));
+                  "std.native.Exception/class",
+                  value -> {
+                    Object raw = HaraBox.unwrap(value);
+                    if (raw instanceof hara.lang.protocol.IExInfo || raw instanceof HaraException) {
+                      return "exception";
+                    }
+                    return portableType(raw).getName();
+                  }));
       installNativeExportGroup("Base", exports, HaraNativeDeclarations.methods("Base"), Map.of());
       installNativeExportGroup("Iter", exports, HaraNativeDeclarations.methods("Iter"), Map.of());
       return;
@@ -690,13 +700,39 @@ public final class HaraContext {
 
     HaraNamespace base = namespace("std.native.Base");
     base.define(
+        "map-entry",
+        new VariadicBuiltin(
+            "std.native.Base/map-entry",
+            values -> {
+              requireMethodArity("std.native.Base/map-entry", values, 2);
+              return new MapEntry<>(null, HaraBox.unwrap(values[0]), HaraBox.unwrap(values[1]));
+            }));
+    base.define(
         "apply",
         new VariadicBuiltin("std.native.Base/apply", this::applyFunction));
     base.define(
         "resolve",
-        new UnaryBuiltin(
-            "std.native.Base/resolve",
-            value -> resolveAvailableValue(value, "std.native.Base/resolve")));
+        new VariadicBuiltin("std.native.Base/resolve", this::nativeBaseResolve));
+    base.define(
+        "namespace",
+        new UnaryBuiltin("std.native.Base/namespace", this::nativeBaseNamespace));
+    base.define(
+        "current-namespace",
+        new VariadicBuiltin(
+            "std.native.Base/current-namespace",
+            values -> {
+              requireMethodArity("std.native.Base/current-namespace", values, 0);
+              return currentNamespace;
+            }));
+    base.define(
+        "select-namespace",
+        new UnaryBuiltin("std.native.Base/select-namespace", this::nativeBaseSelectNamespace));
+    base.define("def", new VariadicBuiltin("std.native.Base/def", this::nativeBaseDef));
+    base.define("struct", new VariadicBuiltin("std.native.Base/struct", this::nativeBaseStruct));
+    base.define("mutable", new VariadicBuiltin("std.native.Base/mutable", this::nativeBaseMutable));
+    base.define("protocol", new VariadicBuiltin("std.native.Base/protocol", this::nativeBaseProtocol));
+    base.define("extend", new VariadicBuiltin("std.native.Base/extend", this::nativeBaseExtend));
+    base.define("field", new VariadicBuiltin("std.native.Base/field", this::nativeBaseField));
     base.define(
         "special-symbol?",
         new UnaryBuiltin(
@@ -715,6 +751,302 @@ public final class HaraContext {
     packages.define("unload", new VariadicBuiltin("std.native.Package/unload", values -> packageUnsupported("unload", values, values.length == 2 ? 2 : 1)));
     packages.define("state", new VariadicBuiltin("std.native.Package/state", values -> packageUnsupported("state", values, 1)));
     namespaceStates.put("std.native.Package", NamespaceLoadState.LOADED);
+  }
+
+  private Object nativeBaseNamespace(Object value) {
+    Object raw = unwrapQuoted(HaraBox.unwrap(value));
+    if (!(raw instanceof Symbol symbol) || symbol.getNamespace() != null) {
+      throw new HaraException("Base/namespace expects an unqualified namespace symbol");
+    }
+    return namespace(symbol.getName());
+  }
+
+  private HaraNamespace nativeBaseNamespaceValue(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (!(raw instanceof HaraNamespace namespace)
+        || namespaces.get(namespace.name()) != namespace) {
+      throw new HaraException("Base/" + operation + " expects a Namespace value");
+    }
+    return namespace;
+  }
+
+  private Symbol nativeBaseSymbol(Object value, String operation) {
+    Object raw = unwrapQuoted(HaraBox.unwrap(value));
+    if (!(raw instanceof Symbol symbol) || symbol.getNamespace() != null) {
+      throw new HaraException("Base/" + operation + " expects an unqualified symbol");
+    }
+    return symbol;
+  }
+
+  private IMetadata nativeBaseMetadata(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (raw == null) return null;
+    if (!(raw instanceof IMapType<?, ?> metadata)) {
+      throw new HaraException("Base/" + operation + " expects a metadata map or nil");
+    }
+    return metadata;
+  }
+
+  @SuppressWarnings("unchecked")
+  private boolean nativeBaseMacroMetadata(IMetadata metadata) {
+    return metadata instanceof IMapType<?, ?>
+        && Boolean.TRUE.equals(
+            ((IMapType<Object, Object>) metadata).lookup(Keyword.create("macro")));
+  }
+
+  private HalcSchema.NamedField[] nativeBaseFields(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (!(raw instanceof ILinearType<?> fields) || !"[".equals(fields.startString())) {
+      throw new HaraException("Base/" + operation + " expects a field vector");
+    }
+    HalcSchema.NamedField[] specifications =
+        new HalcSchema.NamedField[Math.toIntExact(fields.count())];
+    Set<String> names = new java.util.HashSet<>();
+    for (int index = 0; index < specifications.length; index++) {
+      try {
+        specifications[index] = HalcSchema.normalizeNamedField(fields.nth(index));
+      } catch (HaraException error) {
+        throw new HaraException(
+            "Base/" + operation + " field is invalid: " + error.getMessage());
+      }
+      if (!names.add(specifications[index].name())) {
+        throw new HaraException(
+            "Base/" + operation + " field names must be unique: " + specifications[index].name());
+      }
+    }
+    return specifications;
+  }
+
+  private Map<String, Integer> nativeBaseMethodArities(Object value) {
+    Object raw = HaraBox.unwrap(value);
+    if (!(raw instanceof IMapType<?, ?> entries)) {
+      throw new HaraException("Base/protocol expects a method arity map");
+    }
+    Map<String, Integer> methods = new LinkedHashMap<>();
+    for (Object entryValue : entries) {
+      if (!(entryValue instanceof java.util.Map.Entry<?, ?> entry)) {
+        throw new HaraException("Base/protocol expects a method arity map");
+      }
+      String method = nativeBaseSymbol(entry.getKey(), "protocol").getName();
+      Object arityValue = HaraBox.unwrap(entry.getValue());
+      if (!(arityValue instanceof Number number)
+          || number.longValue() <= 0
+          || number.longValue() > Integer.MAX_VALUE) {
+        throw new HaraException(
+            "Base/protocol method arities must be positive integers");
+      }
+      if (methods.put(method, number.intValue()) != null) {
+        throw new HaraException(
+            "Base/protocol method declarations must be unique and have a receiver");
+      }
+    }
+    return methods;
+  }
+
+  private java.util.List<HaraProtocol> nativeBaseProtocolParents(Object value) {
+    Object raw = HaraBox.unwrap(value);
+    if (!(raw instanceof ILinearType<?> values) || !"[".equals(values.startString())) {
+      throw new HaraException("Base/protocol expects a parent protocol vector");
+    }
+    ArrayList<HaraProtocol> parents = new ArrayList<>();
+    for (int index = 0; index < values.count(); index++) {
+      parents.add(nativeBaseProtocolValue(values.nth(index), "protocol"));
+    }
+    return parents;
+  }
+
+  private HaraProtocol nativeBaseProtocolValue(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (raw instanceof HaraVar variable) raw = variable.deref();
+    if (!(raw instanceof HaraProtocol protocol)) {
+      throw new HaraException("Base/" + operation + " expects a protocol");
+    }
+    return protocol;
+  }
+
+  private HaraType nativeBaseType(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (!(raw instanceof HaraType type)) {
+      throw new HaraException("Base/" + operation + " expects a struct or mutable type");
+    }
+    return type;
+  }
+
+  private <T> T inNativeBaseNamespace(HaraNamespace target, Supplier<T> operation) {
+    HaraNamespace previous = currentNamespace;
+    try {
+      currentNamespace = target;
+      return operation.get();
+    } finally {
+      currentNamespace = previous;
+    }
+  }
+
+  private Object nativeBaseResolve(Object[] values) {
+    if (values.length == 1) {
+      return resolveAvailableValue(values[0], "std.native.Base/resolve");
+    }
+    if (values.length != 2) {
+      throw new HaraException("Base/resolve expects one symbol or Namespace and symbol");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "resolve");
+    Symbol symbol = nativeBaseSymbol(values[1], "resolve");
+    return target.lookup(symbol.getName());
+  }
+
+  private Object nativeBaseSelectNamespace(Object value) {
+    HaraNamespace target = nativeBaseNamespaceValue(value, "select-namespace");
+    currentNamespace = target;
+    return target;
+  }
+
+  private Object nativeBaseDef(Object[] values) {
+    if (values.length != 4) {
+      throw new HaraException("Base/def expects Namespace, symbol, value, and metadata");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "def");
+    Symbol symbol = nativeBaseSymbol(values[1], "def");
+    Object value = HaraBox.unwrap(values[2]);
+    IMetadata metadata = nativeBaseMetadata(values[3], "def");
+    Symbol definition = metadata == null ? symbol : symbol.withMeta(metadata);
+    return withDeclarationTransaction(
+        () ->
+            inNativeBaseNamespace(
+                target,
+                () -> {
+                  boolean macro = nativeBaseMacroMetadata(metadata);
+                  if (!macro) return define(definition, value);
+                  if (!isNativeFunctionValue(value)) {
+                    throw new HaraException("Base/def macro values must be functions");
+                  }
+                  HaraMacro definitionMacro =
+                      new HaraMacro(this, target.name(), definition, value);
+                  macros
+                      .computeIfAbsent(target.name(), ignored -> new ConcurrentHashMap<>())
+                      .put(symbol.getName(), definitionMacro);
+                  return target.define(
+                      symbol.getName(), definitionMacro, metadata, definitionOrigin);
+                }));
+  }
+
+  private Object nativeBaseStruct(Object[] values) {
+    return nativeBaseNamedType("struct", values, false);
+  }
+
+  private Object nativeBaseMutable(Object[] values) {
+    return nativeBaseNamedType("mutable", values, true);
+  }
+
+  private Object nativeBaseNamedType(String operation, Object[] values, boolean mutable) {
+    if (values.length != 3 && values.length != 4) {
+      throw new HaraException(
+          "Base/"
+              + operation
+              + " expects Namespace, symbol, fields, and optional metadata");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], operation);
+    Symbol symbol = nativeBaseSymbol(values[1], operation);
+    HalcSchema.NamedField[] fields = nativeBaseFields(values[2], operation);
+    IMetadata metadata =
+        values.length == 4 ? nativeBaseMetadata(values[3], operation) : null;
+    Symbol definition = metadata == null ? symbol : symbol.withMeta(metadata);
+    return withDeclarationTransaction(
+        () -> inNativeBaseNamespace(target, () -> defineNamedType(definition, fields, mutable)));
+  }
+
+  private Object nativeBaseProtocol(Object[] values) {
+    if (values.length != 4) {
+      throw new HaraException(
+          "Base/protocol expects Namespace, symbol, method arities, and parents");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "protocol");
+    Symbol symbol = nativeBaseSymbol(values[1], "protocol");
+    Map<String, Integer> methods = nativeBaseMethodArities(values[2]);
+    java.util.List<HaraProtocol> parents = nativeBaseProtocolParents(values[3]);
+    return withDeclarationTransaction(
+        () ->
+            inNativeBaseNamespace(
+                target,
+                () -> {
+                  HaraProtocol protocol =
+                      new HaraProtocol(target.name() + "." + symbol.getName(), methods, parents);
+                  return defineLanguageProtocol(symbol, protocol).get();
+                }));
+  }
+
+  private HaraProtocolInvoker nativeBaseProtocolImplementation(Object value) {
+    Object function = HaraBox.unwrap(value);
+    if (!isNativeFunctionValue(function)) {
+      throw new HaraException("Base/extend method implementations must be functions");
+    }
+    return new HaraProtocolInvoker() {
+      @Override
+      public Object invoke(Object receiver, Object[] arguments) {
+        Object[] callArguments = new Object[arguments.length + 1];
+        callArguments[0] = receiver;
+        System.arraycopy(arguments, 0, callArguments, 1, arguments.length);
+        return invokeCallable(function, callArguments);
+      }
+    };
+  }
+
+  private Object nativeBaseExtend(Object[] values) {
+    if (values.length != 4) {
+      throw new HaraException(
+          "Base/extend expects Namespace, type, protocol, and method functions");
+    }
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "extend");
+    HaraType type = nativeBaseType(values[1], "extend");
+    HaraProtocol protocol = nativeBaseProtocolValue(values[2], "extend");
+    Object rawImplementations = HaraBox.unwrap(values[3]);
+    if (!(rawImplementations instanceof IMapType<?, ?> implementations)) {
+      throw new HaraException("Base/extend expects a method function map");
+    }
+    ArrayList<Map.Entry<String, HaraProtocolInvoker>> entries = new ArrayList<>();
+    for (Object entryValue : implementations) {
+      if (!(entryValue instanceof java.util.Map.Entry<?, ?> entry)) {
+        throw new HaraException("Base/extend expects a method function map");
+      }
+      String method = nativeBaseSymbol(entry.getKey(), "extend").getName();
+      if (!protocol.methods().containsKey(method)) {
+        throw new HaraException("Base/extend has no declared method: " + method);
+      }
+      entries.add(
+          new java.util.AbstractMap.SimpleImmutableEntry<>(
+              method, nativeBaseProtocolImplementation(entry.getValue())));
+    }
+    return withDeclarationTransaction(
+        () ->
+            inNativeBaseNamespace(
+                target,
+                () -> {
+                  for (Map.Entry<String, HaraProtocolInvoker> entry : entries) {
+                    protocol.extend(type, entry.getKey(), entry.getValue());
+                  }
+                  return type;
+                }));
+  }
+
+  private Object nativeBaseField(Object[] values) {
+    requireMethodArity("Base/field", values, 2);
+    Object raw = HaraBox.unwrap(values[0]);
+    if (!(raw instanceof HaraMutable mutable)) {
+      throw new HaraException("Base/field expects a mutable value and field name");
+    }
+    Object fieldValue = HaraBox.unwrap(values[1]);
+    String field;
+    if (fieldValue instanceof Keyword keyword && keyword.getNamespace() == null) {
+      field = keyword.getName();
+    } else if (fieldValue instanceof Symbol symbol && symbol.getNamespace() == null) {
+      field = symbol.getName();
+    } else {
+      throw new HaraException("Base/field expects an unqualified field keyword or symbol");
+    }
+    try {
+      return mutable.read(field);
+    } catch (com.oracle.truffle.api.interop.UnknownIdentifierException error) {
+      throw new HaraException("unknown mutable field: " + field);
+    }
   }
 
   private Object packageUnsupported(String operation, Object[] values, int arity) {
@@ -785,14 +1117,34 @@ public final class HaraContext {
     if (!(raw instanceof String requested)) {
       throw new HaraException("std.native.Runtime/module expects a path string");
     }
-    String key =
-        requested.startsWith("classpath:")
-            ? requested
-            : (getResource(requested) == null
-                ? canonicalPath(requested)
-                : "classpath:" + requested);
+    String source = requested.startsWith("classpath:") ? requested.substring(10) : requested;
+    String namespace =
+        (source.endsWith(".hal") || source.endsWith(".hrl"))
+            ? source
+                .replaceFirst("^\\./", "")
+                .replaceFirst("\\.(?:hal|hrl)$", "")
+                .replace('/', '.')
+            : source;
+    String key = requested.startsWith("classpath:") || getResource(requested) != null
+        ? (requested.startsWith("classpath:") ? requested : "classpath:" + requested)
+        : requested;
     ModuleRecord module = modules.get(key);
-    if (module == null) return null;
+    if (module == null) {
+      module =
+          modules.values().stream()
+              .filter(candidate -> requested.equals(candidate.path) || namespace.equals(candidate.namespace))
+              .max(java.util.Comparator.comparingLong(candidate -> candidate.revision))
+              .orElse(null);
+    }
+    if (module == null) {
+      if (!namespaces.containsKey(namespace) && !namespaceStates.containsKey(namespace)) return null;
+      return hara.lang.data.OrderedMap.Standard.from(
+          null,
+          Keyword.create("module/path"), requested,
+          Keyword.create("module/namespace"), Symbol.create(namespace),
+          Keyword.create("module/revision"), 0L,
+          Keyword.create("module/dependencies"), BuiltinStruct.vector(new Object[0]));
+    }
     Set<String> dependencies = moduleDependencies.getOrDefault(key, Set.of());
     return hara.lang.data.OrderedMap.Standard.from(
         null,
@@ -2208,6 +2560,19 @@ public final class HaraContext {
     return withDeclarationTransaction(
         () -> {
           validateLanguageProtocolMethods(currentNamespace, symbol.getName(), protocol);
+          HaraVar previous = currentNamespace.lookup(symbol.getName());
+          if (previous != null
+              && currentNamespace.name().equals(previous.namespaceName())
+              && previous.get() instanceof HaraProtocol previousProtocol) {
+            for (String method : previousProtocol.methods().keySet()) {
+              if (!protocol.methods().containsKey(method)) {
+                currentNamespace.vars.computeIfPresent(
+                    method,
+                    (ignored, variable) ->
+                        currentNamespace.name().equals(variable.namespaceName()) ? null : variable);
+              }
+            }
+          }
           HaraVar variable = define(symbol, protocol);
           defineLanguageProtocolMethods(currentNamespace.name(), protocol);
           return variable;
@@ -4275,6 +4640,15 @@ public final class HaraContext {
   }
 
   private void installNativeLibraries() {
+    NATIVE_LIBRARY_INSTALLERS.keySet().stream()
+        .filter(
+            namespace ->
+                HaraNativeDeclarations
+                        .binding(namespace.substring("std.native.".length()))
+                        .availability()
+                    == hara.lang.declaration.HaraAvailability.PORTABLE)
+        .sorted()
+        .forEach(this::installNativeLibrary);
     NativeCrypto.install(this, "std.native.Crypto");
     HaraNativeWork.install(this);
     HaraNamespace document = namespace("std.native.Document");
@@ -5795,6 +6169,15 @@ public final class HaraContext {
     }
     long millis = HaraNumericConversions.toLong(values[0], "promise/delay");
     if (millis < 0) throw new HaraException("promise/delay expects non-negative milliseconds");
+    if (millis == 0) {
+      try {
+        return new HaraPromise(flatten(invokeCallable(values[1], new Object[0])));
+      } catch (Throwable error) {
+        CompletableFuture<Object> failed = new CompletableFuture<>();
+        failed.completeExceptionally(error);
+        return new HaraPromise(failed);
+      }
+    }
     CompletableFuture<Object> future = new CompletableFuture<>();
     AtomicReference<CompletableFuture<Object>> active = new AtomicReference<>();
     CompletableFuture.delayedExecutor(millis, TimeUnit.MILLISECONDS)
@@ -6668,7 +7051,8 @@ public final class HaraContext {
 
   private Object protocolCall(String protocolName, String methodName, Object[] values) {
     if (values.length == 0) {
-      throw new HaraException(methodName + " expects a collection value");
+      throw new HaraException(
+          "protocol/arity: " + protocolName + "/" + methodName + " expects a receiver");
     }
     HaraVar variable = resolve(Symbol.create(protocolName));
     if (variable == null || !(variable.get() instanceof HaraProtocol)) {
@@ -7488,7 +7872,16 @@ public final class HaraContext {
 
   @TruffleBoundary
   private Object isIteratorFinite(Object value) {
-    return !(HaraBox.unwrap(value) instanceof Iterator<?>);
+    Object target = HaraBox.unwrap(value);
+    return !(target instanceof Iterator<?>) || target instanceof FiniteIterator;
+  }
+
+  private boolean isKnownFinite(Object value) {
+    return Boolean.TRUE.equals(isIteratorFinite(value));
+  }
+
+  private static Iterator<?> finiteIf(boolean knownFinite, Iterator<?> iterator) {
+    return knownFinite ? finite(iterator) : iterator;
   }
 
   @TruffleBoundary
@@ -7541,12 +7934,16 @@ public final class HaraContext {
     }
     Object function = values[0];
     Object[] sourceValues = java.util.Arrays.copyOfRange(values, 1, values.length);
+    boolean knownFinite =
+        java.util.Arrays.stream(sourceValues).allMatch(this::isKnownFinite);
     Iterator zipped = iterZipArrays(sourceValues);
-    return closeable(
-        Iter.map(
-            zipped,
-            value -> HaraBox.unwrap(invokeCallable(function, (Object[]) value))),
-        zipped);
+    return finiteIf(
+        knownFinite,
+        closeable(
+            Iter.map(
+                zipped,
+                value -> HaraBox.unwrap(invokeCallable(function, (Object[]) value))),
+            zipped));
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})
@@ -7562,9 +7959,12 @@ public final class HaraContext {
   @SuppressWarnings({"rawtypes", "unchecked"})
   private Object iterTakeWhile(Object[] values) {
     requireIteratorArity(values, 2, "iter-take-while");
+    boolean knownFinite = isKnownFinite(values[1]);
     Iterator source = (Iterator) iterValue(values[1]);
     Object function = values[0];
-    return closeable(
+    return finiteIf(
+        knownFinite,
+        closeable(
         new CloseableIterator<Object>() {
           private boolean finished;
           private boolean ready;
@@ -7611,15 +8011,18 @@ public final class HaraContext {
             Iter.close(source);
           }
         },
-        source);
+        source));
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})
   private Object iterDropWhile(Object[] values) {
     requireIteratorArity(values, 2, "iter-drop-while");
+    boolean knownFinite = isKnownFinite(values[1]);
     Iterator source = (Iterator) iterValue(values[1]);
     Object function = values[0];
-    return closeable(
+    return finiteIf(
+        knownFinite,
+        closeable(
         new CloseableIterator<Object>() {
           private boolean dropped;
           private boolean finished;
@@ -7674,7 +8077,7 @@ public final class HaraContext {
             Iter.close(source);
           }
         },
-        source);
+        source));
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})
@@ -7707,8 +8110,11 @@ public final class HaraContext {
   private Object iterInterpose(Object[] values) {
     requireIteratorArity(values, 2, "iter-interpose");
     Object separator = values[0];
+    boolean knownFinite = isKnownFinite(values[1]);
     Iterator source = (Iterator) iterValue(values[1]);
-    return closeable(
+    return finiteIf(
+        knownFinite,
+        closeable(
         new CloseableIterator<Object>() {
           private boolean first = true;
           private boolean ready;
@@ -7764,7 +8170,7 @@ public final class HaraContext {
             Iter.close(source);
           }
         },
-        source);
+        source));
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})
@@ -7772,9 +8178,10 @@ public final class HaraContext {
     if (values.length == 0) {
       throw new HaraException("iter-interleave expects at least one source");
     }
+    boolean knownFinite = java.util.Arrays.stream(values).allMatch(this::isKnownFinite);
     Iterator[] sources = new Iterator[values.length];
     for (int i = 0; i < values.length; i++) sources[i] = (Iterator) iterValue(values[i]);
-    return new CloseableIterator<Object>() {
+    Iterator<?> interleaved = new CloseableIterator<Object>() {
       private int index;
       private boolean closed;
 
@@ -7809,6 +8216,7 @@ public final class HaraContext {
         for (Iterator source : sources) Iter.close(source);
       }
     };
+    return finiteIf(knownFinite, interleaved);
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})
@@ -7831,7 +8239,7 @@ public final class HaraContext {
   Object iterTake(Object[] values) {
     requireIteratorArity(values, 2, "iter-take");
     Iterator source = (Iterator) iterValue(values[1]);
-    return closeable(Iter.take(source, iterationCount(values[0], "iter-take")), source);
+    return finite(closeable(Iter.take(source, iterationCount(values[0], "iter-take")), source));
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})
@@ -7919,8 +8327,11 @@ public final class HaraContext {
       throw new HaraException(
           (includePartial ? "iter-partition-all" : "iter-partition") + " expects a positive count");
     }
+    boolean knownFinite = isKnownFinite(values[1]);
     Iterator source = (Iterator) iterValue(values[1]);
-    return closeable(
+    return finiteIf(
+        knownFinite,
+        closeable(
         new CloseableIterator<Object>() {
           private boolean done;
           private boolean ready;
@@ -7970,7 +8381,7 @@ public final class HaraContext {
             Iter.close(source);
           }
         },
-        source);
+        source));
   }
 
   @TruffleBoundary
@@ -8013,6 +8424,33 @@ public final class HaraContext {
 
   private static boolean truthy(Object value) {
     return value != null && value != HaraNull.SINGLETON && !Boolean.FALSE.equals(value);
+  }
+
+  private static Iterator<?> finite(Iterator<?> iterator) {
+    return new FiniteIterator(iterator);
+  }
+
+  private static final class FiniteIterator implements CloseableIterator<Object> {
+    private final Iterator<?> iterator;
+
+    private FiniteIterator(Iterator<?> iterator) {
+      this.iterator = iterator;
+    }
+
+    @Override
+    public boolean hasNext() {
+      return iterator.hasNext();
+    }
+
+    @Override
+    public Object next() {
+      return iterator.next();
+    }
+
+    @Override
+    public void close() {
+      Iter.close(iterator);
+    }
   }
 
   @SuppressWarnings("unchecked")
