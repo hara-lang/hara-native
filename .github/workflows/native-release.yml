@@ -1,54 +1,82 @@
-name: Native release
+name: Native release promotion
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing v* tag to publish
-        required: true
-        type: string
 
 permissions:
   contents: write
   packages: write
 
-jobs:
-  validate:
-    uses: ./.github/workflows/native-host.yml
+concurrency:
+  group: hara-native-release-${{ github.ref_name }}
+  cancel-in-progress: false
 
-  release-version:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: validate
+jobs:
+  release-ref:
+    name: release ref
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Require the tag and every distributable version to agree
+          fetch-depth: 0
+      - id: release
+        name: Require the current release branch head
+        shell: bash
         run: |
           set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          test "${tag#v}" != "$tag"
-          expected="${tag#v}"
-          rust="$(cargo metadata --manifest-path core/rust/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hara-native") | .version')"
-          jvm="$(xmllint --xpath '/*[local-name()="project"]/*[local-name()="version"][1]/text()' core/java/pom.xml)"
-          browser="$(node -p 'require("./core/rust/web/packages/browser/package.json").version')"
-          hta="$(node -p 'require("./core/rust/web/packages/hta/package.json").version')"
-          test "$rust" = "$expected"
-          test "$jvm" = "$expected"
-          test "$browser" = "$expected"
-          test "$hta" = "$expected"
+          test "$GITHUB_REF" = refs/heads/release
+          git fetch origin release --tags --force
+          test "$(git rev-parse origin/release)" = "$GITHUB_SHA"
+          version="$(jq -er '.version' release/version.json)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  preflight:
+    needs: release-ref
+    uses: ./.github/workflows/native-release-preflight.yml
+
+  release-intent:
+    name: release intent
+    needs: [release-ref, preflight]
+    runs-on: ubuntu-22.04
+    outputs:
+      resuming: ${{ steps.intent.outputs.resuming }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: intent
+        name: Create or verify the immutable release intent
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-ref.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.release-ref.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch origin release --tags --force
+          test "$(git rev-parse origin/release)" = "$RELEASE_COMMIT"
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = true
+            printf 'resuming=true\n' >> "$GITHUB_OUTPUT"
+          else
+            gh release create "$RELEASE_TAG" --draft --target "$RELEASE_COMMIT" \
+              --title "Hara Native ${RELEASE_VERSION}" \
+              --notes "Release publication in progress for ${RELEASE_COMMIT}."
+            git fetch origin --tags --force
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+            printf 'resuming=false\n' >> "$GITHUB_OUTPUT"
+          fi
 
   rust-cli:
-    needs: validate
+    needs: [preflight, release-ref, release-intent]
     strategy:
       fail-fast: false
       matrix:
@@ -63,18 +91,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --manifest-path core/rust/Cargo.toml --release --bin hara-native
-      - run: |
+      - run: cargo build --locked --manifest-path core/rust/Cargo.toml --release --bin hara-native
+      - name: Archive the versioned CLI
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+        run: |
           mkdir -p dist
-          tar -C core/rust/target/release -czf dist/hara-native-${{ matrix.id }}.tar.gz hara-native
+          tar -C core/rust/target/release -czf "dist/hara-native-${RELEASE_VERSION}-${{ matrix.id }}.tar.gz" hara-native
       - uses: actions/upload-artifact@v4
         with:
           name: hara-native-${{ matrix.id }}
-          path: dist/hara-native-${{ matrix.id }}.tar.gz
+          path: dist/hara-native-*.tar.gz
           if-no-files-found: error
 
   jvm:
-    needs: validate
+    needs: [preflight, release-ref, release-intent]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -83,18 +115,23 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
-      - run: |
+      - name: Build the versioned JVM artifact
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+        run: |
+          set -euo pipefail
+          mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
           mkdir -p dist
-          cp core/java/target/hara-native-jvm-0.1.0.jar dist/hara-native-jvm-0.1.0.jar
+          cp "core/java/target/hara-native-jvm-${RELEASE_VERSION}.jar" "dist/hara-native-jvm-${RELEASE_VERSION}.jar"
       - uses: actions/upload-artifact@v4
         with:
           name: hara-native-jvm
-          path: dist/hara-native-jvm-0.1.0.jar
+          path: dist/hara-native-jvm-*.jar
           if-no-files-found: error
 
   browser:
-    needs: validate
+    needs: [preflight, release-intent]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -107,25 +144,141 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
-      - name: Build both browser host profiles
-        run: make build-browser-profiles
-      - name: Pack browser host packages
-        working-directory: core/rust/web
+      - name: Build and pack both public browser packages
+        shell: bash
         run: |
-          mkdir -p dist
-          (cd packages/browser && npm pack --pack-destination ../../dist)
-          (cd packages/hta && npm pack --pack-destination ../../dist)
+          set -euo pipefail
+          make build-browser-profiles
+          mkdir -p core/rust/web/dist
+          (cd core/rust/web/packages/browser && npm pack --pack-destination ../../dist)
+          (cd core/rust/web/packages/hta && npm pack --pack-destination ../../dist)
       - uses: actions/upload-artifact@v4
         with:
           name: hara-native-browser
           path: core/rust/web/dist/*.tgz
           if-no-files-found: error
 
+  publish-crates:
+    needs: [release-ref, release-intent, preflight]
+    runs-on: ubuntu-22.04
+    environment: crates-io
+    outputs:
+      abi_sha256: ${{ steps.publish.outputs.abi_sha256 }}
+      hta_sha256: ${{ steps.publish.outputs.hta_sha256 }}
+      macros_sha256: ${{ steps.publish.outputs.macros_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: publish
+        name: Publish or verify public Cargo packages in dependency order
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          RESUMING: ${{ needs.release-intent.outputs.resuming }}
+        run: |
+          set -euo pipefail
+          test -n "$CARGO_REGISTRY_TOKEN"
+          wait_for_crate() {
+            local package="$1" version="$2" metadata
+            for _ in $(seq 1 30); do
+              if metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/${package}/${version}")"; then
+                printf '%s' "$metadata"
+                return 0
+              fi
+              sleep 5
+            done
+            printf 'timed out waiting for %s %s on crates.io\n' "$package" "$version" >&2
+            return 1
+          }
+          publish_or_resume() {
+            local manifest="$1" package="$2" output="$3" version metadata checksum
+            version="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -er --arg package "$package" '.packages[] | select(.name == $package) | .version')"
+            if metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/${package}/${version}")"; then
+              test "$RESUMING" = true
+            else
+              cargo publish --locked --manifest-path "$manifest"
+              metadata="$(wait_for_crate "$package" "$version")"
+            fi
+            checksum="$(jq -er '.version.checksum' <<<"$metadata")"
+            printf '%s=%s\n' "$output" "$checksum" >> "$GITHUB_OUTPUT"
+          }
+          publish_or_resume core/rust/crates/abi/Cargo.toml hara-abi abi_sha256
+          cargo package --locked --manifest-path core/rust/crates/hta-codec/Cargo.toml --allow-dirty --no-verify
+          hta_manifest="$(tar -tzf core/rust/target/package/hara-hta-*.crate | rg '/Cargo.toml$')"
+          if tar -xOf core/rust/target/package/hara-hta-*.crate "$hta_manifest" | rg -n '= \{[^}]*\b(path|git)\s*='; then
+            printf '%s contains a local or git dependency\n' hara-hta >&2
+            exit 1
+          fi
+          publish_or_resume core/rust/crates/hta-codec/Cargo.toml hara-hta hta_sha256
+          publish_or_resume core/rust/crates/protocol-macros/Cargo.toml hara-protocol-macros macros_sha256
+
+  root-crate-package:
+    needs: [release-ref, publish-crates]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Package and inspect the root crate against crates.io dependencies
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+        run: |
+          set -euo pipefail
+          cargo package --locked --manifest-path core/rust/Cargo.toml --allow-dirty --no-verify
+          manifest="$(tar -tzf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" | rg '/Cargo.toml$')"
+          if tar -xOf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" "$manifest" | rg -n '= \{[^}]*\b(path|git)\s*='; then
+            printf '%s contains a local or git dependency\n' "$manifest" >&2
+            exit 1
+          fi
+
+  publish-native-crate:
+    needs: [release-ref, release-intent, root-crate-package]
+    runs-on: ubuntu-22.04
+    environment: crates-io
+    outputs:
+      native_sha256: ${{ steps.publish.outputs.native_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: publish
+        name: Publish or verify the root Cargo package
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          RESUMING: ${{ needs.release-intent.outputs.resuming }}
+        run: |
+          set -euo pipefail
+          test -n "$CARGO_REGISTRY_TOKEN"
+          version="$(cargo metadata --manifest-path core/rust/Cargo.toml --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "hara-native") | .version')"
+          if metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/hara-native/${version}")"; then
+            test "$RESUMING" = true
+          else
+            cargo publish --locked --manifest-path core/rust/Cargo.toml
+            metadata="$(curl --fail --silent --show-error "https://crates.io/api/v1/crates/hara-native/${version}")"
+          fi
+          printf 'native_sha256=%s\n' "$(jq -er '.version.checksum' <<<"$metadata")" >> "$GITHUB_OUTPUT"
+
+  verify-crates:
+    needs: [release-ref, publish-native-crate]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install and execute the exact crates.io CLI release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+          CARGO_INSTALL_ROOT: ${{ runner.temp }}/hara-native-install
+        run: |
+          set -euo pipefail
+          cargo install --locked --version "$RELEASE_VERSION" --bin hara-native hara-native
+          test "$("$CARGO_INSTALL_ROOT/bin/hara-native" --version)" = "hara-native ${RELEASE_VERSION}"
+
   publish-maven:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [validate, jvm, release-version]
+    needs: [release-ref, release-intent, jvm]
     runs-on: ubuntu-22.04
     environment: packages
+    outputs:
+      jar_sha256: ${{ steps.publish.outputs.jar_sha256 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -136,21 +289,69 @@ jobs:
           server-id: hara-packages
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
-      - name: Verify the JAR before registry publication
-        run: |
-          set -euo pipefail
-          mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
-          ! jar tf core/java/target/hara-native-jvm-0.1.0.jar | rg -n '\\.hal$|(^|/)hal-src/|std/foundation|tool/'
-      - run: mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests deploy
+      - id: publish
+        name: Publish or verify the exact Maven artifact
+        shell: bash
         env:
           MAVEN_USERNAME: ${{ secrets.PACKAGES_MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.PACKAGES_MAVEN_PASSWORD }}
+          RESUMING: ${{ needs.release-intent.outputs.resuming }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$MAVEN_USERNAME"
+          test -n "$MAVEN_PASSWORD"
+          mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
+          jar="core/java/target/hara-native-jvm-${RELEASE_VERSION}.jar"
+          if jar tf "$jar" | rg -n '\.hal$|(^|/)hal-src/|std/foundation|tool/'; then
+            printf '%s contains source-owned payloads\n' "$jar" >&2
+            exit 1
+          fi
+          url="https://packages.hara-lang.org/maven/releases/org/hara-lang/hara-native-jvm/${RELEASE_VERSION}/hara-native-jvm-${RELEASE_VERSION}.jar"
+          published="$RUNNER_TEMP/hara-native-jvm-${RELEASE_VERSION}.jar"
+          if curl --fail --silent --show-error --user "${MAVEN_USERNAME}:${MAVEN_PASSWORD}" --output "$published" "$url"; then
+            test "$RESUMING" = true
+          else
+            mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests deploy
+            curl --fail --silent --show-error --user "${MAVEN_USERNAME}:${MAVEN_PASSWORD}" --output "$published" "$url"
+          fi
+          test "$(sha256sum "$jar" | awk '{print $1}')" = "$(sha256sum "$published" | awk '{print $1}')"
+          printf 'jar_sha256=sha256:%s\n' "$(sha256sum "$published" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-  publish-npm:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [validate, browser, release-version]
+  verify-maven:
+    needs: [release-ref, publish-maven]
     runs-on: ubuntu-22.04
     environment: packages
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: hara-packages
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+      - name: Fetch and execute the exact Maven release
+        shell: bash
+        env:
+          MAVEN_USERNAME: ${{ secrets.PACKAGES_MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.PACKAGES_MAVEN_PASSWORD }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+        run: |
+          set -euo pipefail
+          mvn -q dependency:get \
+            -Dartifact="org.hara-lang:hara-native-jvm:${RELEASE_VERSION}" \
+            -DremoteRepositories="hara-packages::default::https://packages.hara-lang.org/maven/releases"
+          jar="$HOME/.m2/repository/org/hara-lang/hara-native-jvm/${RELEASE_VERSION}/hara-native-jvm-${RELEASE_VERSION}.jar"
+          test "$(java -jar "$jar" --version)" = "hara-native-jvm ${RELEASE_VERSION}"
+
+  publish-npm:
+    needs: [release-ref, release-intent, browser]
+    runs-on: ubuntu-22.04
+    environment: packages
+    outputs:
+      browser_integrity: ${{ steps.publish.outputs.browser_integrity }}
+      hta_integrity: ${{ steps.publish.outputs.hta_integrity }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -163,59 +364,74 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
-      - name: Build both browser host profiles
-        run: make build-browser-profiles
-      - name: Publish browser host packages
+      - id: publish
+        name: Publish or verify both public npm packages
         working-directory: core/rust/web
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_NPM_TOKEN }}
+          RESUMING: ${{ needs.release-intent.outputs.resuming }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
+          test -n "$NODE_AUTH_TOKEN"
+          make -C ../../.. build-browser-profiles
           mkdir -p dist
           (cd packages/browser && npm pack --pack-destination ../../dist)
           (cd packages/hta && npm pack --pack-destination ../../dist)
           for archive in dist/*.tgz; do
-            ! tar -tzf "$archive" | rg -n '\\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'
+            if tar -tzf "$archive" | rg -n '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'; then
+              printf '%s contains source-owned payloads\n' "$archive" >&2
+              exit 1
+            fi
           done
-          npm publish --workspace @hara-lang/native-browser
-          npm publish --workspace @hara-lang/hta
+          publish_or_resume() {
+            local package="$1" output="$2" published integrity
+            published="$(npm view "${package}@${RELEASE_VERSION}" version --registry https://packages.hara-lang.org/npm/ 2>/dev/null || true)"
+            if [ -n "$published" ]; then
+              test "$RESUMING" = true
+              test "$published" = "$RELEASE_VERSION"
+            else
+              npm publish --workspace "$package"
+            fi
+            integrity="$(npm view "${package}@${RELEASE_VERSION}" dist.integrity --registry https://packages.hara-lang.org/npm/)"
+            test -n "$integrity"
+            printf '%s=%s\n' "$output" "$integrity" >> "$GITHUB_OUTPUT"
+          }
+          publish_or_resume @hara-lang/native-browser browser_integrity
+          publish_or_resume @hara-lang/hta hta_integrity
+
+  verify-npm:
+    needs: [release-ref, publish-npm]
+    runs-on: ubuntu-22.04
+    environment: packages
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://packages.hara-lang.org/npm/
+      - name: Install both exact npm releases in a fresh project
+        shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_NPM_TOKEN }}
-
-  publish-crates:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [validate, release-version]
-    runs-on: ubuntu-22.04
-    environment: crates-io
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Require crates.io publication authority
-        run: test -n "$CARGO_REGISTRY_TOKEN"
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-      - name: Publish repository-owned Cargo packages in dependency order
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
-          publish_if_missing() {
-            local manifest="$1"
-            local package="$2"
-            local version
-            version="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r --arg package "$package" '.packages[] | select(.name == $package) | .version')"
-            if curl --fail --silent --show-error "https://crates.io/api/v1/crates/${package}/${version}" >/dev/null; then
-              echo "${package} ${version} is already published"
-            else
-              cargo publish --manifest-path "$manifest" --locked
-            fi
-          }
-          publish_if_missing core/rust/crates/abi/Cargo.toml hara-abi
-          publish_if_missing core/rust/crates/protocol-macros/Cargo.toml hara-protocol-macros
-          publish_if_missing core/rust/Cargo.toml hara-native
+          work="$RUNNER_TEMP/hara-native-npm-release"
+          mkdir -p "$work"
+          cd "$work"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --package-lock=false --registry https://packages.hara-lang.org/npm/ \
+            "@hara-lang/native-browser@${RELEASE_VERSION}" \
+            "@hara-lang/hta@${RELEASE_VERSION}"
+          node -e 'const fs = require("fs"); for (const name of ["native-browser", "hta"]) { const p = `node_modules/@hara-lang/${name}/package.json`; if (JSON.parse(fs.readFileSync(p)).version !== process.env.RELEASE_VERSION) process.exit(1); }'
 
   publish-container:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [publish-crates, release-version]
+    needs: [release-ref, release-intent, preflight, publish-native-crate]
     runs-on: ubuntu-22.04
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.record.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -226,12 +442,32 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: image
         name: Select immutable image identity
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+        run: |
+          printf 'name=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+      - id: existing
+        name: Detect an existing image tag
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ steps.image.outputs.version }}
+          RESUMING: ${{ needs.release-intent.outputs.resuming }}
         run: |
           set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          printf 'name=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          printf 'version=%s\n' "${tag#v}" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
+            test "$RESUMING" = true
+            digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" | awk '/Digest:/ {print $2; exit}')"
+            test -n "$digest"
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          else
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          fi
       - id: build
+        if: steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: core/rust
@@ -242,20 +478,17 @@ jobs:
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
             ${{ steps.image.outputs.name }}:latest
-      - name: Record the published OCI digest
+      - id: record
+        name: Record the immutable image digest
+        shell: bash
         run: |
-          mkdir -p dist
-          printf '%s@%s\n' '${{ steps.image.outputs.name }}' '${{ steps.build.outputs.digest }}' \
-            > dist/hara-native-container.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hara-native-container
-          path: dist/hara-native-container.txt
-          if-no-files-found: error
+          set -euo pipefail
+          digest='${{ steps.existing.outputs.digest || steps.build.outputs.digest }}'
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
   verify-container:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [publish-container, release-version]
+    needs: [release-ref, publish-container]
     runs-on: ubuntu-22.04
     steps:
       - uses: docker/login-action@v3
@@ -263,18 +496,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull and exercise the released executable image
+      - name: Pull and exercise the exact OCI release
+        shell: bash
+        env:
+          IMAGE: ${{ needs.publish-container.outputs.image }}
+          DIGEST: ${{ needs.publish-container.outputs.digest }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          version="${tag#v}"
-          image="ghcr.io/${GITHUB_REPOSITORY,,}:${version}"
-          docker pull "$image"
-          test "$(docker run --rm "$image" --version)" = "hara-native ${version}"
+          docker pull "${IMAGE}@${DIGEST}"
+          test "$(docker run --rm "${IMAGE}@${DIGEST}" --version)" = "hara-native ${RELEASE_VERSION}"
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [rust-cli, jvm, browser, release-version, publish-maven, publish-npm, publish-crates, verify-container]
+    name: finalize release
+    needs: [release-ref, release-intent, rust-cli, jvm, browser, publish-crates, root-crate-package, publish-native-crate, verify-crates, publish-maven, verify-maven, publish-npm, verify-npm, publish-container, verify-container]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -282,14 +517,34 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Verify release payload and write checksums
+      - name: Verify payloads and write the release manifest
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release-ref.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.release-ref.outputs.commit }}
+          ABI_SHA256: ${{ needs.publish-crates.outputs.abi_sha256 }}
+          HTA_SHA256: ${{ needs.publish-crates.outputs.hta_sha256 }}
+          MACROS_SHA256: ${{ needs.publish-crates.outputs.macros_sha256 }}
+          NATIVE_SHA256: ${{ needs.publish-native-crate.outputs.native_sha256 }}
+          MAVEN_SHA256: ${{ needs.publish-maven.outputs.jar_sha256 }}
+          BROWSER_INTEGRITY: ${{ needs.publish-npm.outputs.browser_integrity }}
+          HTA_INTEGRITY: ${{ needs.publish-npm.outputs.hta_integrity }}
+          OCI_IMAGE: ${{ needs.publish-container.outputs.image }}
+          OCI_DIGEST: ${{ needs.publish-container.outputs.digest }}
         run: |
           set -euo pipefail
           test -z "$(find . -type f -name '*.hal' -print -quit)"
           for archive in dist/*.tar.gz dist/*.tgz; do
-            ! tar -tzf "$archive" | rg -n '\\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'
+            if tar -tzf "$archive" | rg -n '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'; then
+              printf '%s contains source-owned payloads\n' "$archive" >&2
+              exit 1
+            fi
           done
-          ! jar tf dist/hara-native-jvm-0.1.0.jar | rg -n '\\.hal$|(^|/)hal-src/|std/foundation|tool/'
+          if jar tf "dist/hara-native-jvm-${RELEASE_VERSION}.jar" | rg -n '\.hal$|(^|/)hal-src/|std/foundation|tool/'; then
+            printf '%s contains source-owned payloads\n' "dist/hara-native-jvm-${RELEASE_VERSION}.jar" >&2
+            exit 1
+          fi
           (cd dist && sha256sum * > SHA256SUMS)
           assets="$({
             while read -r checksum name; do
@@ -298,13 +553,44 @@ jobs:
                 '{name: $name, sha256: $sha256, size: $size}'
             done < dist/SHA256SUMS
           } | jq -s .)"
-          tag="${{ inputs.tag || github.ref_name }}"
-          jq --arg tag "$tag" --argjson artifacts "$assets" \
-            '. + {releaseTag: $tag, artifacts: $artifacts}' \
-            release/compatibility.json > dist/release-manifest.json
+          jq \
+            --arg tag "$RELEASE_TAG" \
+            --arg version "$RELEASE_VERSION" \
+            --arg commit "$RELEASE_COMMIT" \
+            --arg abi "$ABI_SHA256" \
+            --arg hta_crate "$HTA_SHA256" \
+            --arg macros "$MACROS_SHA256" \
+            --arg native "$NATIVE_SHA256" \
+            --arg maven "$MAVEN_SHA256" \
+            --arg browser "$BROWSER_INTEGRITY" \
+            --arg hta "$HTA_INTEGRITY" \
+            --arg image "$OCI_IMAGE" \
+            --arg digest "$OCI_DIGEST" \
+            --argjson artifacts "$assets" \
+            '. + {
+              releaseTag: $tag,
+              version: $version,
+              commit: $commit,
+              registries: {
+                crates: [
+                  {name: "hara-abi", version: $version, sha256: ("sha256:" + $abi)},
+                  {name: "hara-hta", version: $version, sha256: ("sha256:" + $hta_crate)},
+                  {name: "hara-protocol-macros", version: $version, sha256: ("sha256:" + $macros)},
+                  {name: "hara-native", version: $version, sha256: ("sha256:" + $native)}
+                ],
+                maven: {coordinate: ("org.hara-lang:hara-native-jvm:" + $version), sha256: $maven},
+                npm: [
+                  {name: "@hara-lang/native-browser", version: $version, integrity: $browser},
+                  {name: "@hara-lang/hta", version: $version, integrity: $hta}
+                ],
+                oci: {image: $image, digest: $digest}
+              },
+              artifacts: $artifacts
+            }' release/compatibility.json > dist/release-manifest.json
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.release-ref.outputs.tag }}
+          draft: false
           generate_release_notes: true
           files: |
             dist/*

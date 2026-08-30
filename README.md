@@ -42,11 +42,14 @@ and the user-facing test selection policy.
 
 ## Release contract
 
-Release metadata lives in [release/compatibility.json](release/compatibility.json).
-Before a native release, run the commands in [core/rust/TESTING.md](core/rust/TESTING.md)
-and confirm the repository has no `*.hal` files. Native artifacts must not
-contain `HARA_SOURCE_ROOT`, `core/lib`, `hal-src`, `std.foundation.hbx`, or
-`cli.hbx` dependencies.
+The canonical public version lives in [release/version.json](release/version.json);
+[release/compatibility.json](release/compatibility.json) records its host ABI.
+Changes promote from `main` to the protected `release` branch, where the
+release preflight validates every public manifest and artifact before a
+maintainer dispatches publication. See [RELEASES.md](RELEASES.md) for the
+registry and recovery procedure. Native artifacts must not contain
+`HARA_SOURCE_ROOT`, `core/lib`, `hal-src`, `std.foundation.hbx`, or `cli.hbx`
+dependencies.
 
 The source repository, not this one, owns the full `hara` CLI, canonical HAL,
 package composition, registry publication policy, and end-user documentation.
