@@ -204,8 +204,9 @@ jobs:
           }
           publish_or_resume core/rust/crates/abi/Cargo.toml hara-abi abi_sha256
           cargo package --locked --manifest-path core/rust/crates/hta-codec/Cargo.toml --allow-dirty --no-verify
-          hta_manifest="$(tar -tzf core/rust/target/package/hara-hta-*.crate | rg '/Cargo.toml$')"
-          if tar -xOf core/rust/target/package/hara-hta-*.crate "$hta_manifest" | rg -n '= \{[^}]*\b(path|git)\s*='; then
+          hta_manifest="$(tar -tzf core/rust/target/package/hara-hta-*.crate | grep '/Cargo.toml$')"
+          hta_manifest_contents="$(tar -xOf core/rust/target/package/hara-hta-*.crate "$hta_manifest")"
+          if grep -En '= \{[^}]*[[:space:],{](path|git)[[:space:]]*=' <<<"$hta_manifest_contents"; then
             printf '%s contains a local or git dependency\n' hara-hta >&2
             exit 1
           fi
@@ -225,8 +226,9 @@ jobs:
         run: |
           set -euo pipefail
           cargo package --locked --manifest-path core/rust/Cargo.toml --allow-dirty --no-verify
-          manifest="$(tar -tzf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" | rg '/Cargo.toml$')"
-          if tar -xOf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" "$manifest" | rg -n '= \{[^}]*\b(path|git)\s*='; then
+          manifest="$(tar -tzf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" | grep '/Cargo.toml$')"
+          manifest_contents="$(tar -xOf "core/rust/target/package/hara-native-${RELEASE_VERSION}.crate" "$manifest")"
+          if grep -En '= \{[^}]*[[:space:],{](path|git)[[:space:]]*=' <<<"$manifest_contents"; then
             printf '%s contains a local or git dependency\n' "$manifest" >&2
             exit 1
           fi
@@ -303,7 +305,8 @@ jobs:
           test -n "$MAVEN_PASSWORD"
           mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
           jar="core/java/target/hara-native-jvm-${RELEASE_VERSION}.jar"
-          if jar tf "$jar" | rg -n '\.hal$|(^|/)hal-src/|std/foundation|tool/'; then
+          jar_contents="$(jar tf "$jar")"
+          if grep -En '\.hal$|(^|/)hal-src/|std/foundation|tool/' <<<"$jar_contents"; then
             printf '%s contains source-owned payloads\n' "$jar" >&2
             exit 1
           fi
@@ -380,7 +383,8 @@ jobs:
           (cd packages/browser && npm pack --pack-destination ../../dist)
           (cd packages/hta && npm pack --pack-destination ../../dist)
           for archive in dist/*.tgz; do
-            if tar -tzf "$archive" | rg -n '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'; then
+            archive_contents="$(tar -tzf "$archive")"
+            if grep -En '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$' <<<"$archive_contents"; then
               printf '%s contains source-owned payloads\n' "$archive" >&2
               exit 1
             fi
@@ -536,12 +540,14 @@ jobs:
           set -euo pipefail
           test -z "$(find . -path './examples' -prune -o -type f -name '*.hal' -print -quit)"
           for archive in dist/*.tar.gz dist/*.tgz; do
-            if tar -tzf "$archive" | rg -n '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'; then
+            archive_contents="$(tar -tzf "$archive")"
+            if grep -En '\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$' <<<"$archive_contents"; then
               printf '%s contains source-owned payloads\n' "$archive" >&2
               exit 1
             fi
           done
-          if jar tf "dist/hara-native-jvm-${RELEASE_VERSION}.jar" | rg -n '\.hal$|(^|/)hal-src/|std/foundation|tool/'; then
+          jar_contents="$(jar tf "dist/hara-native-jvm-${RELEASE_VERSION}.jar")"
+          if grep -En '\.hal$|(^|/)hal-src/|std/foundation|tool/' <<<"$jar_contents"; then
             printf '%s contains source-owned payloads\n' "dist/hara-native-jvm-${RELEASE_VERSION}.jar" >&2
             exit 1
           fi
