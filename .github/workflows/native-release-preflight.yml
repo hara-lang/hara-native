@@ -12,10 +12,13 @@ permissions:
 
 jobs:
   release-origin:
-    name: release origin
+    name: release origin and lineage
     runs-on: ubuntu-22.04
     steps:
-      - name: Require release pull requests to promote main
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require release pull requests to promote a descendant of main
         shell: bash
         run: |
           set -euo pipefail
@@ -24,6 +27,10 @@ jobs:
           fi
           test "${{ github.event.pull_request.head.repo.full_name }}" = "$GITHUB_REPOSITORY"
           test "${{ github.event.pull_request.head.ref }}" = main
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags origin "$base" "$head"
+          git merge-base --is-ancestor "$base" "$head"
 
   validate:
     needs: release-origin
@@ -77,6 +84,12 @@ jobs:
           test "$(node -p 'require("./core/rust/web/packages/browser/package.json").dependencies["@hara-lang/hta"]')" = "$version"
           test "$(node -p 'require("./core/rust/web/package.json").dependencies["@hara-lang/hta"]')" = "$version"
           test "$(node -p 'require("./core/rust/web/packages/db-sqlite/package.json").dependencies["@hara-lang/hta"]')" = "$version"
+          test "$(jq -er '.sourceOwnership.packageRegistry.maven' release/compatibility.json)" = https://repo.maven.apache.org/maven2
+          test "$(jq -er '.sourceOwnership.packageRegistry.npm' release/compatibility.json)" = https://registry.npmjs.org
+          rg -q '<id>central</id>' core/java/pom.xml
+          rg -q '<artifactId>central-publishing-maven-plugin</artifactId>' core/java/pom.xml
+          test "$(node -p 'require("./core/rust/web/packages/browser/package.json").publishConfig.registry')" = https://registry.npmjs.org
+          test "$(node -p 'require("./core/rust/web/packages/hta/package.json").publishConfig.registry')" = https://registry.npmjs.org
 
   cargo-package:
     name: cargo package
@@ -91,10 +104,9 @@ jobs:
           set -euo pipefail
           cargo package --manifest-path core/rust/crates/abi/Cargo.toml --allow-dirty --no-verify
           cargo package --manifest-path core/rust/crates/protocol-macros/Cargo.toml --allow-dirty --no-verify
-          # hara-hta requires the release ABI from crates.io, so its resolved
-          # package is checked after the ABI publish in the promotion workflow.
-          cargo package --manifest-path core/rust/crates/hta-codec/Cargo.toml --allow-dirty --list >/dev/null
-          cargo package --manifest-path core/rust/Cargo.toml --allow-dirty --list >/dev/null
+          # hara-hta and hara-native resolve the new release versions from
+          # crates.io. Their exact packages are checked in dependency order by
+          # the promotion workflow after each dependency is published.
           version="$(jq -er '.version' release/version.json)"
           for crate in hara-abi hara-protocol-macros; do
             manifest="$(tar -tzf "core/rust/target/package/${crate}-${version}.crate" | grep '/Cargo.toml$')"
@@ -124,6 +136,8 @@ jobs:
           mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
           jar="core/java/target/hara-native-jvm-${version}.jar"
           test -f "$jar"
+          test -f "core/java/target/hara-native-jvm-${version}-sources.jar"
+          test -f "core/java/target/hara-native-jvm-${version}-javadoc.jar"
           jar_contents="$(jar tf "$jar")"
           if grep -En '\.hal$|(^|/)hal-src/|std/foundation|tool/' <<<"$jar_contents"; then
             printf '%s contains source-owned payloads\n' "$jar" >&2

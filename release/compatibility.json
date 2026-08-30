@@ -1,6 +1,6 @@
 {
   "format": "hara-native/compatibility-v1",
-  "nativeVersion": "0.1.6",
+  "nativeVersion": "0.1.7",
   "harpFormat": "0.0.0-alpha",
   "hosts": {
     "rust": {
@@ -20,8 +20,8 @@
     "canonicalHal": "hara-lang/hara",
     "packageRegistry": {
       "harp": "https://packages.hara-lang.org",
-      "maven": "https://packages.hara-lang.org/maven/releases",
-      "npm": "https://packages.hara-lang.org/npm/"
+      "maven": "https://repo.maven.apache.org/maven2",
+      "npm": "https://registry.npmjs.org"
     },
     "fullCli": "hara-lang/hara"
   }
