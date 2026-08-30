@@ -238,26 +238,6 @@ fn snapshot_limits_bound_stack_and_preserve_the_top() {
 fn declaration_and_runtime_instructions_have_stable_observation_operands() {
     let cases = [
         (
-            Instruction::DefProtocol(1),
-            "def-protocol",
-            vec![InstructionOperand::Unsigned(1)],
-        ),
-        (
-            Instruction::ExtendType(2),
-            "extend-type",
-            vec![InstructionOperand::Unsigned(2)],
-        ),
-        (
-            Instruction::DefMulti(3),
-            "def-multi",
-            vec![InstructionOperand::Unsigned(3)],
-        ),
-        (
-            Instruction::DefMethod(4),
-            "def-method",
-            vec![InstructionOperand::Unsigned(4)],
-        ),
-        (
             Instruction::IntrinsicCall { target: 9, argc: 2 },
             "intrinsic-call",
             vec![

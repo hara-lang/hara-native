@@ -2,7 +2,6 @@
 //! vector before any execution. After validation the machine indexes
 //! without re-checking, and malformed programs never reach a panic.
 
-use std::collections::HashSet;
 
 use super::error::ValidationError;
 use super::opcode::Instruction;
@@ -260,37 +259,6 @@ pub(crate) fn stack_heights(
             | Instruction::IntrinsicValue(target) => {
                 string_constant(program, *target, at)?;
             }
-            Instruction::DefProtocol(constant)
-            | Instruction::ExtendType(constant)
-            | Instruction::DefMulti(constant)
-            | Instruction::DefMethod(constant) => {
-                let Some(value) = program.constants.get(*constant as usize) else {
-                    return Err(ValidationError::new(
-                        format!("constant index {constant} out of range"),
-                        at,
-                    ));
-                };
-                let expected = match instruction {
-                    Instruction::DefProtocol(_) => "defprotocol",
-                    Instruction::ExtendType(_) => "extend-type",
-                    Instruction::DefMulti(_) => "defmulti",
-                    Instruction::DefMethod(_) => "defmethod",
-                    _ => unreachable!("declaration instruction was matched"),
-                };
-                let valid = crate::core::value_to_form(value).is_ok_and(|form| {
-                    matches!(
-                        form,
-                        crate::kernel::Form::List(items)
-                            if matches!(items.first(), Some(crate::kernel::Form::Symbol(operator)) if operator == expected)
-                    )
-                });
-                if !valid {
-                    return Err(ValidationError::new(
-                        format!("{expected} declaration constant {constant} is invalid"),
-                        at,
-                    ));
-                }
-            }
             Instruction::BuiltinValue(constant)
                 if !matches!(
                     program.constants.get(*constant as usize),
@@ -420,41 +388,6 @@ pub(crate) fn stack_heights(
                             format!("var metadata index {metadata} out of range"),
                             at,
                         ));
-                    }
-                }
-            }
-            Instruction::DefStruct { name, fields } | Instruction::DefMutable { name, fields } => {
-                string_constant(program, *name, at)?;
-                let kind = if matches!(instruction, Instruction::DefMutable { .. }) {
-                    "defmutable"
-                } else {
-                    "defstruct"
-                };
-                match program.constants.get(*fields as usize) {
-                    Some(Value::Vector(fields)) => {
-                        let mut names = HashSet::new();
-                        for field in fields.iter() {
-                            let named = crate::core::NamedField::from_value(field, kind)
-                                .map_err(|message| ValidationError::new(message, at))?;
-                            if !names.insert(named.name) {
-                                return Err(ValidationError::new(
-                                    format!("Duplicate {kind} field"),
-                                    at,
-                                ));
-                            }
-                        }
-                    }
-                    Some(_) => {
-                        return Err(ValidationError::new(
-                            format!("named fields constant {fields} is not a field vector"),
-                            at,
-                        ))
-                    }
-                    None => {
-                        return Err(ValidationError::new(
-                            format!("constant index {fields} out of range"),
-                            at,
-                        ))
                     }
                 }
             }

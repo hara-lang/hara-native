@@ -196,7 +196,7 @@ impl Runtime {
         names.extend(EAGER_HAL_RESOURCES.iter().copied());
 
         // Bytecode loaded while the runtime was still in interpreter mode
-        // materializes `extend-type` method closures through the evaluator.
+        // materializes Foundation macro-expanded protocol method closures.
         // Namespace mappings alone cannot see those protocol-owned closures,
         // so reload the small bootstrap family when that boundary is present.
         let has_interpreted_guest_functions = self.protocols.has_interpreted_guest_functions();

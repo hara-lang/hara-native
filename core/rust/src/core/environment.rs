@@ -15,6 +15,7 @@ pub struct ProtocolRegistry {
     extension_categories: Rc<RefCell<HashSet<(String, String, String)>>>,
     guest_methods: Rc<RefCell<HashMap<(String, String, String), Rc<Function>>>>,
     guest_declarations: Rc<RefCell<HashSet<(String, String)>>>,
+    guest_protocols: Rc<RefCell<HashMap<String, Rc<GuestProtocol>>>>,
 }
 
 #[derive(Clone)]
@@ -25,6 +26,7 @@ pub(crate) struct ProtocolRegistrySnapshot {
     extension_categories: HashSet<(String, String, String)>,
     guest_methods: HashMap<(String, String, String), Rc<Function>>,
     guest_declarations: HashSet<(String, String)>,
+    guest_protocols: HashMap<String, Rc<GuestProtocol>>,
 }
 
 #[allow(dead_code)]
@@ -41,6 +43,7 @@ impl ProtocolRegistry {
             extension_categories: self.extension_categories.borrow().clone(),
             guest_methods: self.guest_methods.borrow().clone(),
             guest_declarations: self.guest_declarations.borrow().clone(),
+            guest_protocols: self.guest_protocols.borrow().clone(),
         }
     }
 
@@ -51,6 +54,7 @@ impl ProtocolRegistry {
         *self.extension_categories.borrow_mut() = snapshot.extension_categories;
         *self.guest_methods.borrow_mut() = snapshot.guest_methods;
         *self.guest_declarations.borrow_mut() = snapshot.guest_declarations;
+        *self.guest_protocols.borrow_mut() = snapshot.guest_protocols;
     }
 
     pub fn register<F>(
@@ -245,6 +249,33 @@ impl ProtocolRegistry {
             .insert((protocol.into(), method.into()));
     }
 
+    pub fn register_guest_protocol(&self, protocol: Rc<GuestProtocol>) {
+        self.guest_protocols
+            .borrow_mut()
+            .insert(protocol.name.clone(), protocol);
+    }
+
+    fn guest_protocol(&self, name: &str) -> Option<Rc<GuestProtocol>> {
+        self.guest_protocols.borrow().get(name).cloned()
+    }
+
+    pub fn guest_protocol_reaches(&self, source: &str, target: &str) -> bool {
+        let mut pending = vec![source.to_owned()];
+        let mut visited = HashSet::new();
+        while let Some(current) = pending.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            if current == target {
+                return true;
+            }
+            if let Some(protocol) = self.guest_protocol(&current) {
+                pending.extend(protocol.parents.iter().cloned());
+            }
+        }
+        false
+    }
+
     pub fn replace_guest_protocol(&self, protocol: impl Into<String>) {
         let protocol = protocol.into();
         self.guest_declarations
@@ -253,6 +284,7 @@ impl ProtocolRegistry {
         self.guest_methods
             .borrow_mut()
             .retain(|(candidate, _, _), _| candidate != &protocol);
+        self.guest_protocols.borrow_mut().remove(&protocol);
     }
 
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -373,8 +405,10 @@ impl ProtocolRegistry {
             }
         }
         if !protocol.parents.iter().all(|parent| {
-            crate::lang::protocol::find_protocol(parent)
-                .is_some_and(|declaration| self.satisfies(&guest_protocol(declaration), value))
+            self.guest_protocol(parent)
+                .is_some_and(|parent| self.satisfies(&parent, value))
+                || crate::lang::protocol::find_protocol(parent)
+                    .is_some_and(|declaration| self.satisfies(&guest_protocol(declaration), value))
         }) {
             return false;
         }
@@ -1368,8 +1402,8 @@ fn prepare_named_binding(namespace: &crate::kernel::Namespace<Value>, name: &str
 }
 
 /// Publishes the type Var and its positional and map constructors for a
-/// defstruct or defmutable declaration. The evaluator and bytecode VM both
-/// use this path.
+/// defstruct or defmutable declaration. `Base/struct` and `Base/mutable`
+/// use this path after Foundation macro expansion.
 pub(crate) fn publish_named_value(
     kind: &str,
     name: &str,
@@ -1505,6 +1539,18 @@ pub(crate) fn publish_guest_protocol(
         let namespace = registry.current();
         let namespace_name = namespace.name().as_str().to_owned();
         let protocol_name = format!("{}.{}", namespace_name, name);
+        ACTIVE_PROTOCOLS.with(|active| -> Result<(), String> {
+            let registry = active.borrow();
+            let registry = registry
+                .as_ref()
+                .ok_or_else(|| "protocol registry is unavailable".to_string())?;
+            if parents.iter().any(|parent| {
+                parent == &protocol_name || registry.guest_protocol_reaches(parent, &protocol_name)
+            }) {
+                return Err(format!("protocol inheritance cycle: {protocol_name}"));
+            }
+            Ok(())
+        })?;
         let previous_protocol = namespace
             .resolve(&Symbol::parse(name))
             .filter(|var| var.symbol().get_namespace() == Some(namespace_name.as_str()))
@@ -1580,6 +1626,7 @@ pub(crate) fn publish_guest_protocol(
                 .as_ref()
                 .ok_or_else(|| "protocol registry is unavailable".to_string())?;
             registry.replace_guest_protocol(protocol_name.clone());
+            registry.register_guest_protocol(protocol.clone());
             for method in protocol.methods.keys() {
                 registry.declare_guest(protocol_name.clone(), method.clone());
             }
@@ -1610,22 +1657,6 @@ pub(crate) fn publish_guest_protocol(
         }
         Ok(protocol_value)
     })
-}
-
-/// `defstruct` against the registry directly, mirroring the evaluator's
-/// declaration arm minus inline protocol clauses. Interns `Name`, `->Name`,
-/// and `map->Name` into the current namespace and returns nil.
-pub(crate) fn vm_defstruct(name: &str, fields: Vec<NamedField>) -> Result<Value, String> {
-    let mut environment = HashMap::new();
-    publish_named_value("defstruct", name, fields, &mut environment, None)
-}
-
-/// `defmutable` against the registry directly. Mutable values use a distinct
-/// type descriptor and fixed-field storage while retaining the constructor
-/// naming conventions of `defstruct`.
-pub(crate) fn vm_defmutable(name: &str, fields: Vec<NamedField>) -> Result<Value, String> {
-    let mut environment = HashMap::new();
-    publish_named_value("defmutable", name, fields, &mut environment, None)
 }
 
 /// Direct field access is reserved for mutable named values. Immutable

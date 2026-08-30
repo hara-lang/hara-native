@@ -1176,11 +1176,84 @@ fn base_protocol(value: &Value, operation: &str) -> Result<Rc<GuestProtocol>, St
     }
 }
 
-fn base_type_name(value: &Value, operation: &str) -> Result<String, String> {
+fn base_function(value: &Value, operation: &str) -> Result<Rc<Function>, String> {
     match value {
-        Value::StructType(ty) => Ok(ty.name.clone()),
-        Value::MutableType(ty) => Ok(ty.name.clone()),
-        _ => Err(format!("Base/{operation} expects a struct or mutable type")),
+        Value::Function(function) => Ok(function.clone()),
+        Value::Var(var) => match var.deref_value() {
+            Value::Function(function) => Ok(function),
+            _ => Err(format!("Base/{operation} expects a function")),
+        },
+        _ => Err(format!("Base/{operation} expects a function")),
+    }
+}
+
+fn base_multimethod_name(
+    namespace: &crate::kernel::Namespace<Value>,
+    value: &Value,
+    operation: &str,
+) -> Result<String, String> {
+    match value {
+        Value::Symbol(symbol) => match symbol.get_namespace() {
+            Some(_) => Ok(symbol.as_str().to_owned()),
+            None => Ok(format!("{}/{}", namespace.name().as_str(), symbol.as_str())),
+        },
+        Value::Var(var) => Ok(var.symbol().as_str().to_owned()),
+        _ => Err(format!("Base/{operation} expects a multimethod symbol or Var")),
+    }
+}
+
+fn publish_multimethod(
+    namespace: crate::kernel::Namespace<Value>,
+    name: String,
+    dispatch: Rc<Function>,
+) -> Value {
+    let qualified = format!("{}/{}", namespace.name().as_str(), name);
+    let state = Rc::new(RefCell::new(MultiMethod {
+        dispatch,
+        methods: Vec::new(),
+        default: None,
+    }));
+    let invoke_state = state.clone();
+    let value = native_variadic_function(&qualified, move |arguments| {
+        let state = invoke_state.borrow();
+        let key = call_value(Value::Function(state.dispatch.clone()), arguments.clone())?;
+        let method = state
+            .methods
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+            .map(|(_, method)| method.clone())
+            .or_else(|| state.default.clone())
+            .ok_or_else(|| format!("No multimethod method for dispatch value {}", key.display()))?;
+        call_value(Value::Function(method), arguments)
+    });
+    let var = namespace.intern(&name, value.clone());
+    var.set_origin(definition_origin());
+    register_multimethod(qualified, state);
+    value
+}
+
+fn base_type_name(value: &Value, operation: &str) -> Result<String, String> {
+    let mut current = value.clone();
+    let mut seen = Vec::new();
+    loop {
+        match current {
+            Value::StructType(ty) => return Ok(ty.name.clone()),
+            Value::MutableType(ty) => return Ok(ty.name.clone()),
+            Value::Var(var) => {
+                let symbol = var.symbol().as_str().to_owned();
+                if seen.iter().any(|candidate| candidate == &symbol) {
+                    return Err(format!("Base/{operation} type Var cycle: {symbol}"));
+                }
+                seen.push(symbol);
+                current = var.deref_value();
+            }
+            value => {
+                return Err(format!(
+                    "Base/{operation} expects a struct or mutable type, received {}",
+                    value.display()
+                ))
+            }
+        }
     }
 }
 
@@ -1396,6 +1469,20 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
             }
             _ => Err("Base/protocol expects Namespace, symbol, method arities, and parents".into()),
         },
+        "with-declaration" => match values {
+            [namespace, thunk] => {
+                let thunk = base_function(thunk, "with-declaration")?;
+                if !thunk.accepts_arity(0) {
+                    return Err("Base/with-declaration expects a zero-argument function".into());
+                }
+                with_base_namespace(namespace, "with-declaration", || {
+                    with_declaration_transaction(&mut HashMap::new(), |_| {
+                        call_value(Value::Function(thunk), Vec::new())
+                    })
+                })
+            }
+            _ => Err("Base/with-declaration expects Namespace and a zero-argument function".into()),
+        },
         "extend" => match values {
             [namespace, type_value, protocol_value, implementations] => {
                 let type_name = base_type_name(type_value, "extend")?;
@@ -1410,14 +1497,13 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
                             if !protocol.methods.contains_key(&method) {
                                 return Err(format!("Base/extend has no declared method: {method}"));
                             }
-                            let function = match function {
-                                Value::Function(function) => function.clone(),
-                                Value::Var(var) => match var.deref_value() {
-                                    Value::Function(function) => function,
-                                    _ => return Err("Base/extend method implementations must be functions".into()),
-                                },
-                                _ => return Err("Base/extend method implementations must be functions".into()),
-                            };
+                            let function = base_function(function, "extend")?;
+                            let expected_arity = protocol.methods[&method];
+                            if !function.accepts_arity(expected_arity) {
+                                return Err(format!(
+                                    "Base/extend implementation for {method} does not accept {expected_arity} arguments"
+                                ));
+                            }
                             registry.register_guest(protocol.name.clone(), type_name.clone(), method, function);
                         }
                         Ok(Value::Nil)
@@ -1426,6 +1512,46 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
                 })
             }
             _ => Err("Base/extend expects Namespace, type, protocol, and method functions".into()),
+        },
+        "multimethod" => match values {
+            [namespace, name, dispatch] => {
+                let namespace_value = base_namespace(namespace, "multimethod")?;
+                let name = base_symbol(name, "multimethod")?;
+                let dispatch = base_function(dispatch, "multimethod")?;
+                with_base_namespace(namespace, "multimethod", || {
+                    with_declaration_transaction(&mut HashMap::new(), |_| {
+                        Ok(publish_multimethod(namespace_value, name, dispatch))
+                    })
+                })
+            }
+            _ => Err("Base/multimethod expects Namespace, name, and dispatch function".into()),
+        },
+        "method" => match values {
+            [namespace, multimethod, key, implementation] => {
+                let namespace_value = base_namespace(namespace, "method")?;
+                let multimethod = base_multimethod_name(&namespace_value, multimethod, "method")?;
+                let implementation = base_function(implementation, "method")?;
+                with_base_namespace(namespace, "method", || {
+                    with_declaration_transaction(&mut HashMap::new(), |_| {
+                        let state = multimethod_state(&multimethod)
+                            .ok_or_else(|| "Base/method expects an existing multimethod".to_string())?;
+                        let mut state = state.borrow_mut();
+                        if matches!(key, Value::Keyword(keyword) if keyword.get_namespace().is_none() && keyword.get_name() == "default") {
+                            state.default = Some(implementation);
+                        } else if let Some((_, existing)) = state
+                            .methods
+                            .iter_mut()
+                            .find(|(candidate, _)| candidate == key)
+                        {
+                            *existing = implementation;
+                        } else {
+                            state.methods.push((key.clone(), implementation));
+                        }
+                        Ok(Value::Nil)
+                    })
+                })
+            }
+            _ => Err("Base/method expects Namespace, multimethod, dispatch value, and function".into()),
         },
         "field" => match values {
             [value, field] => {
@@ -2786,7 +2912,7 @@ fn promise_chain(source: Promise, operation: &str, function: Rc<Function>) -> Pr
 #[cfg(test)]
 mod protocol_tests {
     use super::{
-        call_value, native_base_values, native_variadic_function, protocol_call,
+        call_value, native_base_values, native_function, native_variadic_function, protocol_call,
         protocol_display, with_namespace_registry, with_protocols, NamespaceRegistry, PMap,
         ProtocolRegistry, Symbol, Value,
     };
@@ -2955,6 +3081,181 @@ mod protocol_tests {
                     .expect("resolve retired method"),
                     Value::Nil
                 ));
+            });
+        });
+    }
+
+    #[test]
+    fn foundation_declaration_names_are_not_native_syntax_forms() {
+        for name in [
+            "defstruct",
+            "defmutable",
+            "defprotocol",
+            "extend-type",
+            "defmulti",
+            "defmethod",
+        ] {
+            assert!(
+                !crate::core::syntax_symbol(name),
+                "{name} must resolve through std.foundation macros"
+            );
+        }
+    }
+
+    #[test]
+    fn native_base_declarations_validate_arity_parents_multimethods_and_transactions() {
+        let namespaces = NamespaceRegistry::new("user");
+        let protocols = ProtocolRegistry::new();
+        with_namespace_registry(&namespaces, || {
+            with_protocols(&protocols, || {
+                let namespace = native_base_values(
+                    "Base/namespace",
+                    &[Value::Symbol(Symbol::parse("example.declaration"))],
+                )
+                .expect("namespace");
+                let value_type = native_base_values(
+                    "Base/struct",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("Value")),
+                        Value::Vector(Vec::<Value>::new().into()),
+                    ],
+                )
+                .expect("type");
+                let parent = native_base_values(
+                    "Base/protocol",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("IParent")),
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("parent")),
+                            Value::Number(1),
+                        )])),
+                        Value::Vector(Vec::<Value>::new().into()),
+                    ],
+                )
+                .expect("parent protocol");
+                let child = native_base_values(
+                    "Base/protocol",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("IChild")),
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("child")),
+                            Value::Number(1),
+                        )])),
+                        Value::Vector(vec![parent.clone()].into()),
+                    ],
+                )
+                .expect("child protocol");
+
+                let bad_arity = native_function("example.declaration/bad", 0, |_| Ok(Value::Nil));
+                assert!(native_base_values(
+                    "Base/extend",
+                    &[
+                        namespace.clone(),
+                        value_type.clone(),
+                        parent.clone(),
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("parent")),
+                            bad_arity,
+                        )])),
+                    ],
+                )
+                .is_err());
+
+                let parent_implementation =
+                    native_function("example.declaration/parent", 1, |_| Ok(Value::Keyword("parent".into())));
+                let child_implementation =
+                    native_function("example.declaration/child", 1, |_| Ok(Value::Keyword("child".into())));
+                native_base_values(
+                    "Base/extend",
+                    &[
+                        namespace.clone(),
+                        value_type.clone(),
+                        parent,
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("parent")),
+                            parent_implementation,
+                        )])),
+                    ],
+                )
+                .expect("parent extension");
+                native_base_values(
+                    "Base/extend",
+                    &[
+                        namespace.clone(),
+                        value_type.clone(),
+                        child.clone(),
+                        Value::Map(PMap::from_iter([(
+                            Value::Symbol(Symbol::parse("child")),
+                            child_implementation,
+                        )])),
+                    ],
+                )
+                .expect("child extension");
+                let value = call_value(value_type.clone(), Vec::new()).expect("value");
+                assert_eq!(
+                    native_base_values("Base/satisfies?", &[child, value])
+                        .expect("child satisfaction"),
+                    Value::Bool(true)
+                );
+
+                let classify = native_base_values(
+                    "Base/multimethod",
+                    &[
+                        namespace.clone(),
+                        Value::Symbol(Symbol::parse("classify")),
+                        native_function("example.declaration/dispatch", 1, |arguments| {
+                            Ok(arguments[0].clone())
+                        }),
+                    ],
+                )
+                .expect("multimethod");
+                assert_eq!(
+                    native_base_values(
+                        "Base/method",
+                        &[
+                            namespace.clone(),
+                            Value::Symbol(Symbol::parse("classify")),
+                            Value::Keyword("ok".into()),
+                            native_function("example.declaration/ok", 1, |_| Ok(Value::Number(42))),
+                        ],
+                    )
+                    .expect("method"),
+                    Value::Nil
+                );
+                assert_eq!(
+                    call_value(classify, vec![Value::Keyword("ok".into())])
+                        .expect("multimethod dispatch"),
+                    Value::Number(42)
+                );
+
+                let rollback_namespace = namespace.clone();
+                let failing = native_function("example.declaration/failing", 0, move |_| {
+                    native_base_values(
+                        "Base/struct",
+                        &[
+                            rollback_namespace.clone(),
+                            Value::Symbol(Symbol::parse("Transient")),
+                            Value::Vector(Vec::<Value>::new().into()),
+                        ],
+                    )?;
+                    Err("fixture failure".into())
+                });
+                assert!(native_base_values(
+                    "Base/with-declaration",
+                    &[namespace.clone(), failing],
+                )
+                .is_err());
+                assert_eq!(
+                    native_base_values(
+                        "Base/resolve",
+                        &[namespace, Value::Symbol(Symbol::parse("Transient"))],
+                    )
+                    .expect("resolve rollback"),
+                    Value::Nil
+                );
             });
         });
     }

@@ -135,16 +135,20 @@ fn direct_native_preserves_multimethods_across_evaluations_and_loads() {
     runtime.register_resource(
         "example.direct-multimethod",
         "(ns example.direct-multimethod)
-         (defmulti classify (fn [value] value))
-         (defmethod classify :ok [value] 42)",
+         (Base/multimethod (Base/current-namespace) 'classify (fn [value] value))
+         (Base/method (Base/current-namespace) 'classify :ok (fn [value] 42))",
     );
     enable_native(&mut runtime);
 
     runtime
-        .eval_direct_native("(defmulti local-classify (fn [value] value))")
+        .eval_direct_native(
+            "(Base/multimethod (Base/current-namespace) 'local-classify (fn [value] value))",
+        )
         .unwrap();
     runtime
-        .eval_direct_native("(defmethod local-classify :ok [value] 41)")
+        .eval_direct_native(
+            "(Base/method (Base/current-namespace) 'local-classify :ok (fn [value] 41))",
+        )
         .unwrap();
     assert_eq!(
         runtime.eval_direct_native("(local-classify :ok)").unwrap(),
@@ -263,8 +267,8 @@ fn direct_native_evaluates_dynamic_runtime_forms_without_falling_back() {
         runtime
             .eval_direct_native(
                 "(do
-                   (Runtime/eval '(defmulti dynamic-classify (fn [value] value)))
-                   (Runtime/eval '(defmethod dynamic-classify :ok [value] 42))
+                   (Runtime/eval '(Base/multimethod (Base/current-namespace) 'dynamic-classify (fn [value] value)))
+                   (Runtime/eval '(Base/method (Base/current-namespace) 'dynamic-classify :ok (fn [value] 42)))
                    (dynamic-classify :ok))",
             )
             .unwrap(),
