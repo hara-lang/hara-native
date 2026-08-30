@@ -2914,8 +2914,13 @@ mod tests {
         runtime
             .start_fiber(
                 1,
-                "(defstruct Box [value]) (defprotocol ReadBox (read-box [self])) \
-                 (extend-type Box ReadBox (read-box [self] (:value self))) :ok",
+                "(let [target (std.native.Base/current-namespace) \
+                       box (std.native.Base/struct target 'Box (std.native.Base/vector 'value)) \
+                       protocol (std.native.Base/protocol target 'ReadBox {'read-box 1} (std.native.Base/vector)) \
+                       _ (std.native.Base/extend \
+                           target box protocol \
+                           {'read-box (fn [self] (std.protocol.ilookup.ILookup/lookup self :value))})] \
+                   :ok)",
             )
             .unwrap();
         assert!(matches!(

@@ -3,8 +3,8 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "903f0ee2130ba2d64dab2df826c27a822965ce8fd72cecd315d49a655f7c308d"
- :binary-sha256 "a9c88ed2fe0b46332a5d0b38255d8030ac8614dc0cd1f7e14eeff8d9140e7996"
+ :source-sha256 "ef6638d80a19431d0f30e7b97c30b3bfcb058b6f54c3437df3477000675efcf4"
+ :binary-sha256 "1d17b46be02c68ce400635c34f13f447648533af907770cca1cc1babcd4118dc"
  :case-count 384
  :suites
  [{:id :native
@@ -83,7 +83,7 @@
     :program (let [entry (std.native.Base/map-entry :answer 42)] (= [:std.native.MapEntry :answer 42] [(std.native.Base/type entry) (std.protocol.ipair.IPair/key entry) (std.protocol.ipair.IPair/value entry)]))
     :expect {:display "true"}}
    {:id :native/base-declaration-abi
-    :program (let [target (std.native.Base/namespace (quote hnc.native)) user-type (std.native.Base/struct target (quote User) (std.native.Base/vector (quote name))) session-type (std.native.Base/mutable target (quote Session) (std.native.Base/vector (quote token))) _ (std.native.Base/def target (quote answer) (fn [] 42) nil) greeting (std.native.Base/protocol target (quote IGreeting) {(quote greet) 1} (std.native.Base/vector)) _ (std.native.Base/extend target user-type greeting {(quote greet) (fn [user] "hello Ada")}) user ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->User))) "Ada") session ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Session))) "session-token")] (= [42 "hello Ada" "session-token" true] [((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote answer)))) ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote greet))) user) (std.native.Base/field session :token) (do (std.native.Base/protocol target (quote IGreeting) {(quote welcome) 1} (std.native.Base/vector)) (= nil (std.native.Base/resolve target (quote greet))))]))
+    :program (let [target (std.native.Base/namespace (quote hnc.native)) user-type (std.native.Base/struct target (quote User) (std.native.Base/vector (quote name))) session-type (std.native.Base/mutable target (quote Session) (std.native.Base/vector (quote token))) _ (std.native.Base/def target (quote answer) (fn [] 42) nil) greeting (std.native.Base/protocol target (quote IGreeting) {(quote greet) 1} (std.native.Base/vector)) _ (std.native.Base/extend target user-type greeting {(quote greet) (fn [user] "hello Ada")}) user ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->User))) "Ada") session ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Session))) "session-token") dispatch (std.native.Base/with-declaration target (fn [] (std.native.Base/multimethod target (quote classify) (fn [value] value)) (std.native.Base/method target (quote classify) :answer (fn [value] 42)) ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote classify))) :answer)))] (= [42 "hello Ada" "session-token" true 42] [((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote answer)))) ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote greet))) user) (std.native.Base/field session :token) (do (std.native.Base/protocol target (quote IGreeting) {(quote welcome) 1} (std.native.Base/vector)) (= nil (std.native.Base/resolve target (quote greet)))) dispatch]))
     :expect {:display "true"}}
    {:id :native/vector-type
     :program (= :std.native.Vector (std.native.Base/type [1]))
