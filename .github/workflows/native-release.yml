@@ -493,7 +493,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
       - name: Fetch and execute the exact Maven release
         shell: bash
         env:
