@@ -77,6 +77,7 @@ pub fn compile_hbc_package_product(
         ));
     }
     let build = ProductionBuild {
+        #[cfg(test)]
         plan: plan.clone(),
         analysis: analysis.clone(),
     };
@@ -125,6 +126,7 @@ pub fn build_and_write(project: &Project, plan_source: &str) -> Result<BuildOutp
     let mut compiled = None;
     if analysis.succeeded() {
         let build = ProductionBuild {
+            #[cfg(test)]
             plan: plan.clone(),
             analysis: analysis.clone(),
         };

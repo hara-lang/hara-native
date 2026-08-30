@@ -147,7 +147,6 @@ impl TraceBackend for CheckedBackend {
                             IntrinsicOp::Greater => Some(TraceValue::Bool(left > right)),
                             IntrinsicOp::GreaterOrEqual => Some(TraceValue::Bool(left >= right)),
                             IntrinsicOp::Equal => Some(TraceValue::Bool(left == right)),
-                            _ => return exit(ExitReason::Unsupported),
                         };
                         let Some(value) = value else {
                             return exit(ExitReason::Overflow);

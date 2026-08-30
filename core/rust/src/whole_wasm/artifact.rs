@@ -106,7 +106,8 @@ pub fn decode_artifact(bytes: &[u8]) -> Result<NativeArtifact, String> {
         return Err("native artifact length mismatch".into());
     }
     let payload = &bytes[8..end];
-    if Sha256::digest(payload).as_slice() != &bytes[end..] {
+    let digest: [u8; 32] = Sha256::digest(payload).into();
+    if digest.as_slice() != &bytes[end..] {
         return Err("native artifact checksum mismatch".into());
     }
     let mut reader = Reader {

@@ -3,7 +3,7 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 .PHONY: help test \
-	test-boundary test-rust test-raw test-jvm \
+	test-boundary test-rust test-raw test-jvm test-native-benchmark benchmark-native \
 	test-conformance test-conformance-full test-conformance-rust test-conformance-jvm test-conformance-browser \
 	mirror-conformance check-conformance-mirror \
 	web-install test-browser-integrity test-provider-hosts \
@@ -14,6 +14,8 @@ help:
 	  'Native host validation layers:' \
 	  '  make test-boundary             source-free repository and build-input gate' \
 	  '  make test-rust                 generic Rust hara-native CLI' \
+	  '  make test-native-benchmark     benchmark coordinator and worker unit tests' \
+	  '  make benchmark-native PROFILE=smoke|guard|standard   build isolated tier workers and record evidence' \
 	  '  make test-raw                  raw Wasm host boundary' \
 	  '  make test-jvm                  JVM CLI, HARP, and prebuilt-provider loader' \
 	  '  make test-conformance          serial native/protocol and language Rust/JVM/browser conformance' \
@@ -47,6 +49,28 @@ test-boundary:
 test-rust:
 	cargo check --manifest-path core/rust/Cargo.toml --bin hara-native
 	cargo test --manifest-path core/rust/Cargo.toml --bin hara-native
+
+# Each tier receives its own Cargo target directory. This keeps feature-built
+# worker identities distinct and allows the coordinator to record their exact
+# binary digests in same-run evidence.
+PROFILE ?= smoke
+BENCH_TARGET ?= core/rust/target/native-benchmark
+BENCH_OUTPUT ?= $(BENCH_TARGET)/evidence-$(PROFILE).json
+
+test-native-benchmark:
+	cargo test --locked --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark
+	cargo test --locked --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark-worker
+	cargo check --locked --manifest-path core/rust/Cargo.toml --no-default-features --features whole-wasm --bin hara-native-benchmark-worker
+
+benchmark-native:
+	@mkdir -p $(BENCH_TARGET)
+	CARGO_TARGET_DIR=$(BENCH_TARGET)/coordinator cargo build --locked --release --no-default-features --features bytecode-vm --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark
+	CARGO_TARGET_DIR=$(BENCH_TARGET)/vm cargo build --locked --release --no-default-features --features bytecode-vm --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark-worker
+	CARGO_TARGET_DIR=$(BENCH_TARGET)/trace-checked cargo build --locked --release --no-default-features --features tracing-jit --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark-worker
+	CARGO_TARGET_DIR=$(BENCH_TARGET)/trace-native cargo build --locked --release --no-default-features --features tracing-jit,native-jit --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark-worker
+	CARGO_TARGET_DIR=$(BENCH_TARGET)/whole-wasm cargo build --locked --release --no-default-features --features whole-wasm --manifest-path core/rust/Cargo.toml --bin hara-native-benchmark-worker
+	$(BENCH_TARGET)/coordinator/release/hara-native-benchmark run --profile $(PROFILE) --corpus core/rust/assets/native-benchmark-v1.json --rules core/rust/assets/native-benchmark-rules-v1.json --output $(BENCH_OUTPUT) --vm $(BENCH_TARGET)/vm/release/hara-native-benchmark-worker --trace-checked $(BENCH_TARGET)/trace-checked/release/hara-native-benchmark-worker --trace-native $(BENCH_TARGET)/trace-native/release/hara-native-benchmark-worker --whole-wasm $(BENCH_TARGET)/whole-wasm/release/hara-native-benchmark-worker
+	$(BENCH_TARGET)/coordinator/release/hara-native-benchmark validate --evidence $(BENCH_OUTPUT) --rules core/rust/assets/native-benchmark-rules-v1.json
 
 test-raw:
 	cargo test --manifest-path core/rust/crates/raw/Cargo.toml

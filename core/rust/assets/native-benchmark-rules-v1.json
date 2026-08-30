@@ -1,0 +1,27 @@
+{
+  "schema": "hara.native-benchmark-rules/v1",
+  "relative_rules": [
+    {
+      "id": "checked-trace-arithmetic-is-bounded",
+      "numerator": { "tier": "trace-checked", "workload": "arithmetic-branch-mix" },
+      "denominator": { "tier": "vm", "workload": "arithmetic-branch-mix" },
+      "max_ratio": 5.0
+    },
+    {
+      "id": "native-trace-arithmetic-is-bounded",
+      "numerator": { "tier": "trace-native", "workload": "arithmetic-branch-mix" },
+      "denominator": { "tier": "vm", "workload": "arithmetic-branch-mix" },
+      "max_ratio": 5.0
+    },
+    {
+      "id": "whole-wasm-arithmetic-is-bounded",
+      "numerator": { "tier": "whole-wasm", "workload": "arithmetic-branch-mix" },
+      "denominator": { "tier": "vm", "workload": "arithmetic-branch-mix" },
+      "max_ratio": 5.0
+    }
+  ],
+  "required_telemetry": [
+    { "tier": "trace-native", "workload": "arithmetic-branch-mix", "field": "compiled", "min": 1 },
+    { "tier": "trace-native", "workload": "arithmetic-branch-mix", "field": "entries", "min": 1 }
+  ]
+}

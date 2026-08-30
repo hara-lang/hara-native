@@ -1,0 +1,82 @@
+name: Native benchmark evidence
+
+on:
+  pull_request:
+    paths:
+      - 'core/rust/Cargo.toml'
+      - 'core/rust/Cargo.lock'
+      - 'core/rust/assets/native-benchmark-*.json'
+      - 'core/rust/src/bin/hara-native-benchmark*.rs'
+      - 'core/rust/src/jit/**'
+      - 'core/rust/src/vm/**'
+      - 'core/rust/src/whole_wasm/**'
+      - 'Makefile'
+      - '.github/workflows/native-benchmark.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'core/rust/Cargo.toml'
+      - 'core/rust/Cargo.lock'
+      - 'core/rust/assets/native-benchmark-*.json'
+      - 'core/rust/src/bin/hara-native-benchmark*.rs'
+      - 'core/rust/src/jit/**'
+      - 'core/rust/src/vm/**'
+      - 'core/rust/src/whole_wasm/**'
+      - 'Makefile'
+      - '.github/workflows/native-benchmark.yml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Benchmark profile
+        required: true
+        default: guard
+        type: choice
+        options: [smoke, guard, standard]
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: native tiers (${{ github.event_name == 'schedule' && 'standard' || inputs.profile || 'guard' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      HARA_BENCH_CONTAINER_IMAGE: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: profile
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = schedule ]; then
+            value=standard
+          elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            value="${{ inputs.profile }}"
+          else
+            value=guard
+          fi
+          printf 'value=%s\n' "$value" >> "$GITHUB_OUTPUT"
+      - name: Build workers and collect same-run evidence
+        run: make benchmark-native PROFILE=${{ steps.profile.outputs.value }}
+      - name: Publish job summary
+        if: always()
+        shell: bash
+        run: |
+          evidence="core/rust/target/native-benchmark/evidence-${{ steps.profile.outputs.value }}.json"
+          printf '## Native benchmark evidence (%s)\n\n' "${{ steps.profile.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$evidence" ]; then
+            jq -r '"Schema: `\(.schema)`  \nCorpus: `\(.corpus.id)`  \nComparability: `\(.protocol.comparability)`\n\n| Tier | Workload | p50 ns | p95 ns | CV ppm | Native entry |\n|---|---:|---:|---:|---:|---:|\n" + (.measurements[] | "| \(.tier) | \(.workload) | \(.analysis.p50_ns) | \(.analysis.p95_ns) | \(.analysis.cv_ppm) | \(.native_entry // \"n/a\") |")' "$evidence" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'No evidence file was produced. See the failed benchmark step.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-benchmark-${{ steps.profile.outputs.value }}
+          path: core/rust/target/native-benchmark/evidence-${{ steps.profile.outputs.value }}.json
+          if-no-files-found: warn
+          retention-days: 90

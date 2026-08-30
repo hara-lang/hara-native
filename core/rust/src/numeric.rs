@@ -47,6 +47,7 @@ pub(crate) fn is_long_value(value: &Value) -> bool {
     integer_kind(value) == Some(IntegerKind::Long)
 }
 
+#[cfg(any(feature = "whole-wasm", test))]
 pub(crate) fn is_big_integer_value(value: &Value) -> bool {
     integer_kind(value) == Some(IntegerKind::BigInteger)
 }
@@ -378,6 +379,10 @@ pub(crate) fn to_i64_exact(value: &Value) -> Result<i64, String> {
 }
 
 /// Converts a language integer to i64 without accepting an exact float.
+#[cfg(any(
+    feature = "whole-wasm",
+    all(target_arch = "wasm32", not(feature = "raw-wasm"))
+))]
 pub(crate) fn to_i64_integer(value: &Value) -> Result<i64, String> {
     match value {
         Value::Number(value) => Ok(*value),

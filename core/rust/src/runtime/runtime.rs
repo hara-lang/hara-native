@@ -47,6 +47,7 @@ impl Runtime {
         (self.namespace_registry.clone(), HashMap::new())
     }
 
+    #[cfg(feature = "whole-wasm")]
     pub(crate) fn instrumentation_handle(
         &self,
     ) -> Rc<RefCell<crate::instrumentation::InstrumentationHub>> {

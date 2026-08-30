@@ -961,24 +961,6 @@ pub(crate) fn call_direct_native_fiber(
     }
 }
 
-/// Invokes a canonical native or built-in protocol target through the direct
-/// fiber boundary. Most targets complete synchronously, but coroutine and
-/// dereference operations retain a continuation when their implementation
-/// yields or waits. Numeric intrinsic names deliberately return `None`: they
-/// are handled by the arithmetic trampoline instead of the callable registry.
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-pub(crate) fn call_direct_native_intrinsic(
-    name: &str,
-    arguments: Vec<Value>,
-    continuation: Cont,
-) -> Result<Option<Step>, String> {
-    if !(name.starts_with("std.native.") || name.starts_with("std.protocol.")) {
-        return Ok(None);
-    }
-    let callable = bytecode_callable_value(name)?;
-    call_direct_native_fiber(callable, arguments, continuation).map(Some)
-}
-
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 pub(crate) fn is_direct_native_function(function: &Function) -> bool {
     // A direct-native closure also carries a fiber callback so that the

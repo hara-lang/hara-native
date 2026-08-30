@@ -68,23 +68,27 @@ fn native_instrument_descriptor() -> Value {
         vm_tool_keywords(&["validate", "inspect"]),
     )];
 
-    let mut transforms = Vec::new();
     #[cfg(feature = "halc-encoder")]
-    transforms.push(vm_tool_vector([
-        vm_tool_keyword("hal"),
-        vm_tool_keyword("halc"),
-    ]));
-    #[cfg(all(feature = "bytecode-vm", feature = "halc-encoder"))]
-    {
-        transforms.push(vm_tool_vector([
+    let transforms = {
+        let mut transforms = vec![vm_tool_vector([
             vm_tool_keyword("hal"),
-            vm_tool_keyword("hbc"),
-        ]));
-        transforms.push(vm_tool_vector([
             vm_tool_keyword("halc"),
-            vm_tool_keyword("hbc"),
-        ]));
-    }
+        ])];
+        #[cfg(feature = "bytecode-vm")]
+        {
+            transforms.push(vm_tool_vector([
+                vm_tool_keyword("hal"),
+                vm_tool_keyword("hbc"),
+            ]));
+            transforms.push(vm_tool_vector([
+                vm_tool_keyword("halc"),
+                vm_tool_keyword("hbc"),
+            ]));
+        }
+        transforms
+    };
+    #[cfg(not(feature = "halc-encoder"))]
+    let transforms = Vec::new();
 
     vm_tool_map([
         (vm_tool_keyword("provider/id"), vm_tool_keyword("rust")),
@@ -122,6 +126,7 @@ fn vm_tool_transform_format<'a>(value: &'a Value, field: &str) -> Result<&'a str
     }
 }
 
+#[cfg(feature = "halc-encoder")]
 fn vm_tool_source(value: &Value) -> Result<String, String> {
     match value {
         Value::String(source) => Ok(source.clone()),
@@ -149,6 +154,7 @@ fn vm_tool_namespace(forms: &[crate::kernel::Form]) -> Result<String, String> {
         .ok_or_else(|| "HAL source does not declare an ns or ns+ namespace".to_owned())
 }
 
+#[cfg(feature = "halc-encoder")]
 fn vm_tool_resource(options: &Value, default: String) -> Result<String, String> {
     let entries = map_entries(options)
         .ok_or_else(|| "std.native.Instrument/transform expects options as a map".to_owned())?;
@@ -173,6 +179,9 @@ fn vm_tool_transform(
     input: &Value,
     options: &Value,
 ) -> Result<Vec<u8>, String> {
+    #[cfg(not(feature = "halc-encoder"))]
+    let _ = options;
+
     match (from, to) {
         ("hal", "halc") => {
             #[cfg(feature = "halc-encoder")]
