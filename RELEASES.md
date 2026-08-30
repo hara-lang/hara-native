@@ -38,7 +38,8 @@ version change requires a new version on `main`.
 Repository administrators bootstrap this once: create `release` from the
 current `main` head; require the **Native release preflight / release ready**
 check and pull requests on `release`; and restrict the `crates-io` and
-`packages` environments to approved release maintainers. `crates-io` stores
+`packages` environments to protected branches. Add release-maintainer
+environment reviewers if a second approval is required. `crates-io` stores
 `CRATES_IO_TOKEN`; `packages` stores `PACKAGES_MAVEN_USERNAME`,
 `PACKAGES_MAVEN_PASSWORD`, and `PACKAGES_NPM_TOKEN`. Publication stays a
 manual workflow dispatch from `release`; pushing a tag cannot publish.
