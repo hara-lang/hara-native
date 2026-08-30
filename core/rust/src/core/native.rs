@@ -243,12 +243,15 @@ fn native_test_config(runner: Value, options: Value) -> Result<Value, String> {
     ])))
 }
 
-fn native_test_context(name: Value, actual: Value, expected: Value, failures: Value) -> Value {
+fn native_test_context(desc: Value, actual: Value, expected: Value, failures: Value) -> Value {
     Value::Map(PMap::from_iter([
         (
             Value::Keyword("test".into()),
             Value::Map(PMap::from_iter([
-                (Value::Keyword("name".into()), name),
+                (Value::Keyword("desc".into()), desc.clone()),
+                // `:name` remains an output alias while source packages move
+                // their fact identity to `:desc`.
+                (Value::Keyword("name".into()), desc),
                 (Value::Keyword("actual".into()), actual),
                 (Value::Keyword("expected".into()), expected),
             ])),
@@ -305,7 +308,7 @@ fn native_test_compare(actual: Value, expected: Value) -> Result<Value, String> 
 }
 
 fn native_test_result(
-    name: Value,
+    desc: Value,
     actual: Value,
     expected: Value,
     comparison: Value,
@@ -317,27 +320,27 @@ fn native_test_result(
         .cloned()
         .unwrap_or_else(|| Value::Vector(PVector::new()));
     Ok(Value::Result(Rc::new(comparison.with_context(
-        native_test_context(name, actual, expected, failures),
+        native_test_context(desc, actual, expected, failures),
     )?)))
 }
 
-fn native_test_error(name: Value, actual: Value, expected: Value, error: String) -> Value {
+fn native_test_error(desc: Value, actual: Value, expected: Value, error: String) -> Value {
     Value::Result(Rc::new(
         ResultValue::error(
             caught_error(&error),
-            native_test_context(name, actual, expected, Value::Vector(PVector::new())),
+            native_test_context(desc, actual, expected, Value::Vector(PVector::new())),
         )
         .expect("native Test error context is a map"),
     ))
 }
 
-fn native_test_checked_result(name: Value, metadata: Option<Value>, checked: Value) -> Value {
+fn native_test_checked_result(desc: Value, metadata: Option<Value>, checked: Value) -> Value {
     let Value::Result(result) = checked else {
         return native_test_error(
-            name,
+            desc,
             Value::Nil,
             Value::Nil,
-            "Test/run check function must return a Result".into(),
+            "Test/check check function must return a Result".into(),
         );
     };
     let mut context =
@@ -346,7 +349,8 @@ fn native_test_checked_result(name: Value, metadata: Option<Value>, checked: Val
         .cloned()
         .unwrap_or_else(|| Value::Map(PMap::new()));
     let mut test = PMap::from_iter(map_entries(&test).unwrap_or_default());
-    test = test.assoc_value(Value::Keyword("name".into()), name);
+    test = test.assoc_value(Value::Keyword("desc".into()), desc.clone());
+    test = test.assoc_value(Value::Keyword("name".into()), desc);
     context = context.assoc_value(Value::Keyword("test".into()), Value::Map(test));
     if let Some(metadata) = metadata {
         context = context.assoc_value(Value::Keyword("meta".into()), metadata);
@@ -359,9 +363,9 @@ fn native_test_checked_result(name: Value, metadata: Option<Value>, checked: Val
 }
 
 fn native_test_lifecycle_error(phase: &str, error: String) -> Value {
-    let name = Value::String(format!("test {phase}"));
+    let desc = Value::String(format!("test {phase}"));
     let phase = Value::Keyword(phase.into());
-    let Value::Result(result) = native_test_error(name, Value::Nil, Value::Nil, error) else {
+    let Value::Result(result) = native_test_error(desc, Value::Nil, Value::Nil, error) else {
         unreachable!()
     };
     Value::Result(Rc::new(
@@ -383,7 +387,156 @@ fn native_test_lifecycle(lifecycle: &Value, phase: &str) -> Result<(), String> {
         .map(|_| ())
 }
 
-fn native_test_run(
+fn native_test_state() -> Result<crate::kernel::Namespace<Value>, String> {
+    Ok(namespace_registry()?.find_or_create("std.native.Test.state"))
+}
+
+fn native_test_state_value(key: &str) -> Result<Value, String> {
+    let state = native_test_state()?;
+    Ok(state
+        .resolve(&crate::lang::data::Symbol::parse(key))
+        .map(|var| var.deref_value())
+        .unwrap_or(Value::Nil))
+}
+
+fn native_test_set_state(key: &str, value: Value) -> Result<(), String> {
+    native_test_state()?.intern(key, value);
+    Ok(())
+}
+
+fn native_test_facts() -> Result<Vec<Value>, String> {
+    match native_test_state_value("facts")? {
+        Value::Vector(facts) => Ok(facts.iter().cloned().collect()),
+        Value::Nil => Ok(Vec::new()),
+        _ => Err("std.native.Test state facts must be a vector".into()),
+    }
+}
+
+fn native_test_set_facts(facts: Vec<Value>) -> Result<(), String> {
+    native_test_set_state("facts", Value::Vector(PVector::from_iter(facts)))
+}
+
+fn native_test_current_namespace() -> Result<String, String> {
+    Ok(namespace_registry()?.current().name().as_str().to_owned())
+}
+
+fn native_test_description(value: &Value, operation: &str) -> Result<Value, String> {
+    let desc = map_value(value, &Value::Keyword("desc".into())).cloned();
+    let name = map_value(value, &Value::Keyword("name".into())).cloned();
+    match (desc, name) {
+        (Some(Value::String(desc)), Some(Value::String(name)))
+            if !desc.is_empty() && desc == name =>
+        {
+            Ok(Value::String(desc))
+        }
+        (Some(Value::String(_)), Some(Value::String(_))) => Err(format!(
+            "std.native.Test/{operation} :desc and legacy :name must agree"
+        )),
+        (Some(Value::String(desc)), None) | (None, Some(Value::String(desc)))
+            if !desc.is_empty() =>
+        {
+            Ok(Value::String(desc))
+        }
+        (Some(_), _) | (_, Some(_)) => Err(format!(
+            "std.native.Test/{operation} :desc must be a non-empty string"
+        )),
+        (None, None) => Err(format!("std.native.Test/{operation} requires :desc")),
+    }
+}
+
+fn native_test_truthy(value: Option<&Value>) -> bool {
+    !matches!(value, None | Some(Value::Nil) | Some(Value::Bool(false)))
+}
+
+fn native_test_metadata(value: &Value, namespace: &str, order: i64) -> Result<Value, String> {
+    let metadata = map_value(value, &Value::Keyword("meta".into()))
+        .cloned()
+        .unwrap_or_else(|| Value::Map(PMap::new()));
+    let Some(entries) = map_entries(&metadata) else {
+        return Err("std.native.Test/register :meta must be a map".into());
+    };
+    let metadata = PMap::from_iter(entries)
+        .assoc_value(
+            Value::Keyword("test/namespace".into()),
+            Value::String(namespace.into()),
+        )
+        .assoc_value(Value::Keyword("test/order".into()), Value::Number(order));
+    Ok(Value::Map(metadata))
+}
+
+fn native_test_next_order() -> Result<i64, String> {
+    let current = match native_test_state_value("order")? {
+        Value::Number(value) if value >= 0 => value,
+        Value::Nil => 0,
+        _ => return Err("std.native.Test state order must be a non-negative number".into()),
+    };
+    let next = current + 1;
+    native_test_set_state("order", Value::Number(next))?;
+    Ok(next)
+}
+
+fn native_test_fact_value(
+    namespace: String,
+    desc: Value,
+    metadata: Value,
+    descriptor: &Value,
+) -> Result<Value, String> {
+    let function = map_value(descriptor, &Value::Keyword("function".into())).cloned();
+    let test = map_value(descriptor, &Value::Keyword("test".into())).cloned();
+    let expected = map_value(descriptor, &Value::Keyword("expected".into())).cloned();
+    if function.is_some() && (test.is_some() || expected.is_some()) {
+        return Err(
+            "std.native.Test/register accepts either :function or :test with :expected".into(),
+        );
+    }
+    if function.is_none() && (test.is_none() || expected.is_none()) {
+        return Err(
+            "std.native.Test/register requires :function or both :test and :expected".into(),
+        );
+    }
+    let mut fields = vec![
+        (Value::Keyword("namespace".into()), Value::String(namespace)),
+        (Value::Keyword("desc".into()), desc.clone()),
+        (Value::Keyword("name".into()), desc),
+        (Value::Keyword("meta".into()), metadata),
+    ];
+    if let Some(function) = function {
+        fields.push((Value::Keyword("function".into()), function));
+    } else {
+        fields.push((Value::Keyword("test".into()), test.expect("checked above")));
+        fields.push((
+            Value::Keyword("expected".into()),
+            expected.expect("checked above"),
+        ));
+    }
+    for key in ["before", "after"] {
+        if let Some(value) = map_value(descriptor, &Value::Keyword(key.into())).cloned() {
+            fields.push((Value::Keyword(key.into()), value));
+        }
+    }
+    Ok(Value::Map(PMap::from_iter(fields)))
+}
+
+fn native_test_register(descriptor: Value) -> Result<Value, String> {
+    if map_entries(&descriptor).is_none() {
+        return Err("std.native.Test/register expects a fact map".into());
+    }
+    let namespace = native_test_current_namespace()?;
+    let desc = native_test_description(&descriptor, "register")?;
+    let order = native_test_next_order()?;
+    let metadata = native_test_metadata(&descriptor, &namespace, order)?;
+    let fact = native_test_fact_value(namespace.clone(), desc.clone(), metadata, &descriptor)?;
+    let mut facts = native_test_facts()?;
+    facts.retain(|candidate| {
+        native_test_map_value(candidate, "namespace") != Some(Value::String(namespace.clone()))
+            || native_test_map_value(candidate, "desc") != Some(desc.clone())
+    });
+    facts.push(fact.clone());
+    native_test_set_facts(facts)?;
+    Ok(fact)
+}
+
+fn native_test_check(
     cases: Value,
     check_function: Option<Value>,
     lifecycle: Option<Value>,
@@ -391,14 +544,9 @@ fn native_test_run(
     let cases = match cases {
         Value::Vector(cases) => cases.iter().cloned().collect::<Vec<_>>(),
         Value::Tuple(cases) => cases.iter().cloned().collect::<Vec<_>>(),
-        _ => return Err("std.native.Test/run expects a vector of test cases".into()),
+        _ => return Err("std.native.Test/check expects a vector of test cases".into()),
     };
-    let state = namespace_registry()?.find_or_create("std.native.Test.state");
-    let results_symbol = crate::lang::data::Symbol::parse("results");
-    let mut results = match state.resolve(&results_symbol).map(|var| var.deref_value()) {
-        Some(Value::Vector(results)) => results.iter().cloned().collect::<Vec<_>>(),
-        _ => Vec::new(),
-    };
+    let mut results = Vec::new();
     let setup_ok = match &lifecycle {
         Some(lifecycle) => match native_test_lifecycle(lifecycle, "setup") {
             Ok(()) => true,
@@ -411,20 +559,18 @@ fn native_test_run(
     };
     if setup_ok {
         for (index, case) in cases.iter().enumerate() {
-            let fallback_name = Value::String(format!("invalid case {}", index + 1));
+            let fallback_desc = Value::String(format!("invalid case {}", index + 1));
             let Some(entries) = map_entries(case) else {
                 results.push(native_test_error(
-                    fallback_name,
+                    fallback_desc,
                     Value::Nil,
                     Value::Nil,
-                    "Test/run case must be a map".into(),
+                    "Test/check case must be a map".into(),
                 ));
                 continue;
             };
             let _ = entries;
-            let name = map_value(case, &Value::Keyword("name".into()))
-                .cloned()
-                .unwrap_or(fallback_name);
+            let desc = native_test_description(case, "check").unwrap_or(fallback_desc);
             let expected = map_value(case, &Value::Keyword("expected".into())).cloned();
             let test = map_value(case, &Value::Keyword("test".into())).cloned();
             let metadata = map_value(case, &Value::Keyword("meta".into())).cloned();
@@ -433,32 +579,32 @@ fn native_test_run(
                     Some(check) => match call_value(check.clone(), vec![test, expected])
                         .and_then(native_test_await)
                     {
-                        Ok(checked) => native_test_checked_result(name, metadata, checked),
+                        Ok(checked) => native_test_checked_result(desc, metadata, checked),
                         Err(error) => {
                             let failed =
-                                native_test_error(name.clone(), Value::Nil, Value::Nil, error);
-                            native_test_checked_result(name, metadata, failed)
+                                native_test_error(desc.clone(), Value::Nil, Value::Nil, error);
+                            native_test_checked_result(desc, metadata, failed)
                         }
                     },
                     None => match call_value(test, Vec::new()).and_then(native_test_await) {
                         Ok(actual) => {
                             let comparison = native_test_compare(actual.clone(), expected.clone())?;
-                            native_test_result(name, actual, expected, comparison)?
+                            native_test_result(desc, actual, expected, comparison)?
                         }
-                        Err(error) => native_test_error(name, Value::Nil, expected, error),
+                        Err(error) => native_test_error(desc, Value::Nil, expected, error),
                     },
                 },
                 (None, expected) => native_test_error(
-                    name,
+                    desc,
                     Value::Nil,
                     expected.unwrap_or(Value::Nil),
-                    "Test/run case requires :test".into(),
+                    "Test/check case requires :test".into(),
                 ),
                 (Some(_), None) => native_test_error(
-                    name,
+                    desc,
                     Value::Nil,
                     Value::Nil,
-                    "Test/run case requires :expected".into(),
+                    "Test/check case requires :expected".into(),
                 ),
             };
             results.push(result);
@@ -469,9 +615,432 @@ fn native_test_run(
             results.push(native_test_lifecycle_error("teardown", error));
         }
     }
-    let output = Value::Vector(PVector::from_iter(results));
-    state.intern("results", output.clone());
+    let output = Value::Vector(PVector::from_iter(results.clone()));
+    let mut history = match native_test_state_value("results")? {
+        Value::Vector(values) => values.iter().cloned().collect::<Vec<_>>(),
+        Value::Nil => Vec::new(),
+        _ => return Err("std.native.Test state results must be a vector".into()),
+    };
+    history.extend(results);
+    native_test_set_state("results", Value::Vector(PVector::from_iter(history)))?;
     Ok(output)
+}
+
+fn native_test_result_passed(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Result(result) if result.is_success() && matches!(result.data, Value::Bool(true))
+    )
+}
+
+fn native_test_result_timed_out(value: &Value) -> bool {
+    let Value::Result(result) = value else {
+        return false;
+    };
+    result.is_timeout()
+        || result
+            .error
+            .as_ref()
+            .is_some_and(|error| error.message == "asynchronous test did not settle")
+}
+
+fn native_test_checks(value: Value, desc: Value) -> Vec<Value> {
+    let values = match value {
+        Value::Vector(values) => values.iter().cloned().collect(),
+        Value::Tuple(values) => values.iter().cloned().collect(),
+        Value::Result(_) => vec![value],
+        value => {
+            let context = native_test_context(
+                desc,
+                value,
+                Value::Keyword("returned".into()),
+                Value::Vector(PVector::new()),
+            );
+            return vec![Value::Result(Rc::new(
+                ResultValue::success(Value::Bool(true), context)
+                    .expect("native Test returned-value context is a map"),
+            ))];
+        }
+    };
+    values
+        .into_iter()
+        .map(|value| match value {
+            Value::Result(_) => value,
+            value => native_test_error(
+                desc.clone(),
+                value,
+                Value::Keyword("Result".into()),
+                "Test fact functions must return Results or a vector of Results".into(),
+            ),
+        })
+        .collect()
+}
+
+fn native_test_fact_identity(fact: &Value) -> Result<Vec<(Value, Value)>, String> {
+    let namespace = native_test_map_value(fact, "namespace")
+        .ok_or_else(|| "std.native.Test fact is missing :namespace".to_owned())?;
+    let desc = native_test_map_value(fact, "desc")
+        .ok_or_else(|| "std.native.Test fact is missing :desc".to_owned())?;
+    let metadata = native_test_map_value(fact, "meta")
+        .ok_or_else(|| "std.native.Test fact is missing :meta".to_owned())?;
+    Ok(vec![
+        (Value::Keyword("namespace".into()), namespace),
+        (Value::Keyword("desc".into()), desc.clone()),
+        (Value::Keyword("name".into()), desc),
+        (Value::Keyword("meta".into()), metadata),
+    ])
+}
+
+fn native_test_hook(value: Option<Value>) -> Result<(), String> {
+    let Some(function) = value else {
+        return Ok(());
+    };
+    call_value(function, Vec::new())
+        .and_then(native_test_await)
+        .map(|_| ())
+}
+
+fn native_test_cancelled(fact: &Value, options: &Value) -> Result<bool, String> {
+    let Some(value) = native_test_map_value(options, "cancelled") else {
+        return Ok(false);
+    };
+    match value {
+        Value::Bool(value) => Ok(value),
+        Value::Nil => Ok(false),
+        function => call_value(function, vec![fact.clone()])
+            .and_then(native_test_await)
+            .map(|value| native_test_truthy(Some(&value))),
+    }
+}
+
+fn native_test_fact_checks(fact: &Value, options: &Value) -> Result<Vec<Value>, String> {
+    let desc = native_test_map_value(fact, "desc")
+        .ok_or_else(|| "std.native.Test fact is missing :desc".to_owned())?;
+    if let Some(function) = native_test_map_value(fact, "function") {
+        return call_value(function, vec![options.clone()])
+            .and_then(native_test_await)
+            .map(|value| native_test_checks(value, desc));
+    }
+    let test = native_test_map_value(fact, "test")
+        .ok_or_else(|| "std.native.Test fact is missing :test".to_owned())?;
+    let expected = native_test_map_value(fact, "expected")
+        .ok_or_else(|| "std.native.Test fact is missing :expected".to_owned())?;
+    native_test_check(
+        Value::Vector(PVector::from_iter([Value::Map(PMap::from_iter([
+            (Value::Keyword("desc".into()), desc),
+            (Value::Keyword("test".into()), test),
+            (Value::Keyword("expected".into()), expected),
+        ]))])),
+        None,
+        None,
+    )
+    .and_then(|value| match value {
+        Value::Vector(values) => Ok(values.iter().cloned().collect()),
+        _ => unreachable!(),
+    })
+}
+
+fn native_test_status(checks: &[Value]) -> &'static str {
+    if checks.iter().any(native_test_result_timed_out) {
+        "timeout"
+    } else if checks
+        .iter()
+        .any(|value| matches!(value, Value::Result(result) if result.is_error()))
+    {
+        "error"
+    } else if checks.iter().all(native_test_result_passed) {
+        "passed"
+    } else {
+        "failed"
+    }
+}
+
+fn native_test_fact_result(
+    fact: &Value,
+    status: &str,
+    checks: Vec<Value>,
+    error: Option<String>,
+    elapsed: i64,
+) -> Result<Value, String> {
+    let mut fields = native_test_fact_identity(fact)?;
+    fields.push((
+        Value::Keyword("status".into()),
+        Value::Keyword(status.into()),
+    ));
+    fields.push((
+        Value::Keyword("checks".into()),
+        Value::Vector(PVector::from_iter(checks)),
+    ));
+    fields.push((
+        Value::Keyword("elapsed".into()),
+        Value::Number(elapsed.max(0)),
+    ));
+    if let Some(error) = error {
+        fields.push((Value::Keyword("error".into()), Value::String(error)));
+    }
+    Ok(Value::Map(PMap::from_iter(fields)))
+}
+
+fn native_test_run_fact(fact: Value, options: Value) -> Result<Value, String> {
+    if map_entries(&fact).is_none() {
+        return Err("std.native.Test/run-fact expects a fact map".into());
+    }
+    let started = crate::clock::time_ms();
+    let metadata = native_test_map_value(&fact, "meta")
+        .ok_or_else(|| "std.native.Test fact is missing :meta".to_owned())?;
+    if native_test_truthy(native_test_map_value(&metadata, "skip").as_ref()) {
+        return native_test_fact_result(&fact, "skipped", Vec::new(), None, 0);
+    }
+    if native_test_cancelled(&fact, &options)? {
+        return native_test_fact_result(&fact, "cancelled", Vec::new(), None, 0);
+    }
+
+    let mut checks = Vec::new();
+    let mut failure = None;
+    for hook in [
+        native_test_map_value(&options, "before-each"),
+        native_test_map_value(&fact, "before"),
+    ] {
+        if let Err(error) = native_test_hook(hook) {
+            failure = Some(error);
+            break;
+        }
+    }
+    if failure.is_none() {
+        match native_test_fact_checks(&fact, &options) {
+            Ok(output) => checks = output,
+            Err(error) => failure = Some(error),
+        }
+    }
+    for hook in [
+        native_test_map_value(&fact, "after"),
+        native_test_map_value(&options, "after-each"),
+    ] {
+        if let Err(error) = native_test_hook(hook) {
+            failure.get_or_insert(error);
+        }
+    }
+    let elapsed = crate::clock::time_ms() - started;
+    match failure {
+        Some(error) => native_test_fact_result(&fact, "error", checks, Some(error), elapsed),
+        None => native_test_fact_result(&fact, native_test_status(&checks), checks, None, elapsed),
+    }
+}
+
+fn native_test_summary(results: Vec<Value>) -> Result<Value, String> {
+    let mut counts = [0_i64; 6];
+    let mut check_total = 0_i64;
+    let mut check_passed = 0_i64;
+    let mut namespaces = HashSet::new();
+    for result in &results {
+        let status = native_test_map_value(result, "status")
+            .ok_or_else(|| "std.native.Test summary result is missing :status".to_owned())?;
+        let index = match status {
+            Value::Keyword(status) => match status.as_str() {
+                "passed" => 0,
+                "failed" => 1,
+                "error" => 2,
+                "timeout" => 3,
+                "skipped" => 4,
+                "cancelled" => 5,
+                value => {
+                    return Err(format!(
+                        "std.native.Test summary has unknown status :{value}"
+                    ))
+                }
+            },
+            _ => return Err("std.native.Test summary status must be a keyword".into()),
+        };
+        counts[index] += 1;
+        if let Some(Value::String(namespace)) = native_test_map_value(result, "namespace") {
+            namespaces.insert(namespace);
+        }
+        if let Some(Value::Vector(checks)) = native_test_map_value(result, "checks") {
+            for check in checks.iter() {
+                check_total += 1;
+                if native_test_result_passed(check) {
+                    check_passed += 1;
+                }
+            }
+        }
+    }
+    let check_failed = check_total - check_passed;
+    let status = if counts[1] + counts[2] + counts[3] == 0 {
+        "passed"
+    } else {
+        "failed"
+    };
+    Ok(Value::Map(PMap::from_iter([
+        (
+            Value::Keyword("status".into()),
+            Value::Keyword(status.into()),
+        ),
+        (
+            Value::Keyword("counts".into()),
+            Value::Map(PMap::from_iter([
+                (Value::Keyword("passed".into()), Value::Number(counts[0])),
+                (Value::Keyword("failed".into()), Value::Number(counts[1])),
+                (Value::Keyword("error".into()), Value::Number(counts[2])),
+                (Value::Keyword("timeout".into()), Value::Number(counts[3])),
+                (Value::Keyword("skipped".into()), Value::Number(counts[4])),
+                (Value::Keyword("cancelled".into()), Value::Number(counts[5])),
+            ])),
+        ),
+        (
+            Value::Keyword("check-counts".into()),
+            Value::Map(PMap::from_iter([
+                (Value::Keyword("total".into()), Value::Number(check_total)),
+                (Value::Keyword("passed".into()), Value::Number(check_passed)),
+                (Value::Keyword("failed".into()), Value::Number(check_failed)),
+            ])),
+        ),
+        (
+            Value::Keyword("files".into()),
+            Value::Number(namespaces.len() as i64),
+        ),
+        (
+            Value::Keyword("facts".into()),
+            Value::Number(results.len() as i64),
+        ),
+        (Value::Keyword("checks".into()), Value::Number(check_total)),
+        (Value::Keyword("passed".into()), Value::Number(check_passed)),
+        (Value::Keyword("failed".into()), Value::Number(check_failed)),
+        (Value::Keyword("throw".into()), Value::Number(counts[2])),
+        (Value::Keyword("timeout".into()), Value::Number(counts[3])),
+        (
+            Value::Keyword("results".into()),
+            Value::Vector(PVector::from_iter(results)),
+        ),
+    ])))
+}
+
+fn native_test_namespace(value: Value, operation: &str) -> Result<String, String> {
+    match value {
+        Value::String(value) => Ok(value),
+        Value::Symbol(value) => Ok(value.as_str().to_owned()),
+        _ => Err(format!(
+            "std.native.Test/{operation} namespace must be a string or symbol"
+        )),
+    }
+}
+
+fn native_test_run(options: Value) -> Result<Value, String> {
+    if map_entries(&options).is_none() {
+        return Err(
+            "std.native.Test/run expects an optional options map; use Test/check for cases".into(),
+        );
+    }
+    let namespace = match native_test_map_value(&options, "namespace") {
+        Some(value) => native_test_namespace(value, "run")?,
+        None => native_test_current_namespace()?,
+    };
+    let facts = native_test_facts()?
+        .into_iter()
+        .filter(|fact| {
+            native_test_map_value(fact, "namespace") == Some(Value::String(namespace.clone()))
+        })
+        .collect::<Vec<_>>();
+    let mut results = Vec::new();
+    let mut suite_error = None;
+    if let Err(error) = native_test_hook(native_test_map_value(&options, "before-all")) {
+        suite_error = Some(error);
+    }
+    if suite_error.is_none() {
+        let mut fail_fast = false;
+        for fact in facts {
+            if fail_fast {
+                results.push(native_test_fact_result(
+                    &fact,
+                    "cancelled",
+                    Vec::new(),
+                    None,
+                    0,
+                )?);
+                continue;
+            }
+            let result = native_test_run_fact(fact, options.clone())?;
+            fail_fast = native_test_truthy(native_test_map_value(&options, "fail-fast").as_ref())
+                && matches!(
+                    native_test_map_value(&result, "status"),
+                    Some(Value::Keyword(status)) if matches!(status.as_str(), "failed" | "error" | "timeout")
+                );
+            results.push(result);
+        }
+    } else {
+        let synthetic = Value::Map(PMap::from_iter([
+            (
+                Value::Keyword("namespace".into()),
+                Value::String(namespace.clone()),
+            ),
+            (
+                Value::Keyword("desc".into()),
+                Value::String("test before-all".into()),
+            ),
+            (
+                Value::Keyword("name".into()),
+                Value::String("test before-all".into()),
+            ),
+            (Value::Keyword("meta".into()), Value::Map(PMap::new())),
+        ]));
+        results.push(native_test_fact_result(
+            &synthetic,
+            "error",
+            Vec::new(),
+            suite_error,
+            0,
+        )?);
+    }
+    if let Err(error) = native_test_hook(native_test_map_value(&options, "after-all")) {
+        let synthetic = Value::Map(PMap::from_iter([
+            (Value::Keyword("namespace".into()), Value::String(namespace)),
+            (
+                Value::Keyword("desc".into()),
+                Value::String("test after-all".into()),
+            ),
+            (
+                Value::Keyword("name".into()),
+                Value::String("test after-all".into()),
+            ),
+            (Value::Keyword("meta".into()), Value::Map(PMap::new())),
+        ]));
+        results.push(native_test_fact_result(
+            &synthetic,
+            "error",
+            Vec::new(),
+            Some(error),
+            0,
+        )?);
+    }
+    let summary = native_test_summary(results)?;
+    native_test_set_state("last-run", summary.clone())?;
+    Ok(summary)
+}
+
+fn native_test_lookup(namespace: &str, desc: &Value) -> Result<Value, String> {
+    Ok(native_test_facts()?
+        .into_iter()
+        .find(|fact| {
+            native_test_map_value(fact, "namespace") == Some(Value::String(namespace.into()))
+                && native_test_map_value(fact, "desc") == Some(desc.clone())
+        })
+        .unwrap_or(Value::Nil))
+}
+
+fn native_test_desc_argument(value: Value, operation: &str) -> Result<Value, String> {
+    match value {
+        Value::String(value) if !value.is_empty() => Ok(Value::String(value)),
+        _ => Err(format!(
+            "std.native.Test/{operation} description must be a non-empty string"
+        )),
+    }
+}
+
+fn native_test_reset() -> Result<Value, String> {
+    native_test_set_state("facts", Value::Vector(PVector::new()))?;
+    native_test_set_state("results", Value::Vector(PVector::new()))?;
+    native_test_set_state("order", Value::Number(0))?;
+    native_test_set_state("last-run", Value::Nil)?;
+    Ok(Value::Nil)
 }
 
 fn native_test_await(value: Value) -> Result<Value, String> {
@@ -681,10 +1250,10 @@ fn native_test_values(operation: &str, values: Vec<Value>) -> Result<Value, Stri
             let comparison = values[3].clone();
             native_test_result(name, actual, expected, comparison)
         }
-        "run" => {
+        "check" => {
             if values.is_empty() || values.len() > 3 {
                 return Err(
-                    "std.native.Test/run expects cases, an optional check function, and an optional lifecycle map".into(),
+                    "std.native.Test/check expects cases, an optional check function, and an optional lifecycle map".into(),
                 );
             }
             let cases = values[0].clone();
@@ -708,10 +1277,156 @@ fn native_test_values(operation: &str, values: Vec<Value>) -> Result<Value, Stri
                 .as_ref()
                 .is_some_and(|value| map_entries(value).is_none())
             {
-                return Err("std.native.Test/run lifecycle must be a map".into());
+                return Err("std.native.Test/check lifecycle must be a map".into());
             }
-            native_test_run(cases, check_function, lifecycle)
+            native_test_check(cases, check_function, lifecycle)
         }
+        "register" => match values.as_slice() {
+            [fact] => native_test_register(fact.clone()),
+            _ => Err("std.native.Test/register expects one fact map".into()),
+        },
+        "facts" => {
+            if values.len() > 1 {
+                return Err("std.native.Test/facts expects an optional namespace".into());
+            }
+            let namespace = match values.as_slice() {
+                [] => native_test_current_namespace()?,
+                [namespace] => native_test_namespace(namespace.clone(), "facts")?,
+                _ => unreachable!(),
+            };
+            Ok(Value::Vector(PVector::from_iter(
+                native_test_facts()?.into_iter().filter(|fact| {
+                    native_test_map_value(fact, "namespace")
+                        == Some(Value::String(namespace.clone()))
+                }),
+            )))
+        }
+        "get" => {
+            let (namespace, desc) = match values.as_slice() {
+                [desc] => (
+                    native_test_current_namespace()?,
+                    native_test_desc_argument(desc.clone(), "get")?,
+                ),
+                [namespace, desc] => (
+                    native_test_namespace(namespace.clone(), "get")?,
+                    native_test_desc_argument(desc.clone(), "get")?,
+                ),
+                _ => {
+                    return Err(
+                        "std.native.Test/get expects a description and optional namespace".into(),
+                    )
+                }
+            };
+            native_test_lookup(&namespace, &desc)
+        }
+        "remove" => {
+            let (namespace, desc) = match values.as_slice() {
+                [desc] => (
+                    native_test_current_namespace()?,
+                    native_test_desc_argument(desc.clone(), "remove")?,
+                ),
+                [namespace, desc] => (
+                    native_test_namespace(namespace.clone(), "remove")?,
+                    native_test_desc_argument(desc.clone(), "remove")?,
+                ),
+                _ => {
+                    return Err(
+                        "std.native.Test/remove expects a description and optional namespace"
+                            .into(),
+                    )
+                }
+            };
+            let removed = native_test_lookup(&namespace, &desc)?;
+            let mut facts = native_test_facts()?;
+            facts.retain(|fact| {
+                native_test_map_value(fact, "namespace") != Some(Value::String(namespace.clone()))
+                    || native_test_map_value(fact, "desc") != Some(desc.clone())
+            });
+            native_test_set_facts(facts)?;
+            Ok(removed)
+        }
+        "purge" => {
+            if values.len() > 1 {
+                return Err("std.native.Test/purge expects an optional namespace".into());
+            }
+            let namespace = match values.as_slice() {
+                [] => native_test_current_namespace()?,
+                [namespace] => native_test_namespace(namespace.clone(), "purge")?,
+                _ => unreachable!(),
+            };
+            let facts = native_test_facts()?;
+            let removed = facts
+                .iter()
+                .filter(|fact| {
+                    native_test_map_value(fact, "namespace")
+                        == Some(Value::String(namespace.clone()))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            native_test_set_facts(
+                facts
+                    .into_iter()
+                    .filter(|fact| {
+                        native_test_map_value(fact, "namespace")
+                            != Some(Value::String(namespace.clone()))
+                    })
+                    .collect(),
+            )?;
+            Ok(Value::Vector(PVector::from_iter(removed)))
+        }
+        "reset" => {
+            if !values.is_empty() {
+                return Err("std.native.Test/reset expects no arguments".into());
+            }
+            native_test_reset()
+        }
+        "run-fact" => {
+            let (fact, options) = match values.as_slice() {
+                [fact] => (fact.clone(), Value::Map(PMap::new())),
+                [fact, options] if map_entries(options).is_some() => {
+                    (fact.clone(), options.clone())
+                }
+                [_, _] => return Err("std.native.Test/run-fact options must be a map".into()),
+                _ => return Err(
+                    "std.native.Test/run-fact expects a fact or description and optional options"
+                        .into(),
+                ),
+            };
+            let fact = if map_entries(&fact).is_some() {
+                fact
+            } else {
+                let desc = native_test_desc_argument(fact, "run-fact")?;
+                let namespace = native_test_current_namespace()?;
+                let fact = native_test_lookup(&namespace, &desc)?;
+                if matches!(fact, Value::Nil) {
+                    return Err(format!(
+                        "std.native.Test/run-fact fact not found: {}",
+                        desc.display()
+                    ));
+                }
+                fact
+            };
+            native_test_run_fact(fact, options)
+        }
+        "run" => {
+            if values.len() > 1 {
+                return Err(
+                    "std.native.Test/run expects an optional options map; use Test/check for cases"
+                        .into(),
+                );
+            }
+            let options = values
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| Value::Map(PMap::new()));
+            native_test_run(options)
+        }
+        "summary" => match values.as_slice() {
+            [Value::Vector(results)] => native_test_summary(results.iter().cloned().collect()),
+            [Value::Tuple(results)] => native_test_summary(results.iter().cloned().collect()),
+            [_] => Err("std.native.Test/summary expects a vector of fact results".into()),
+            _ => Err("std.native.Test/summary expects one vector of fact results".into()),
+        },
         "passed?" => {
             if values.len() != 1 {
                 return Err("std.native.Test/passed? expects one result".into());
@@ -1469,11 +2184,7 @@ fn native_host_values(operation: &str, values: Vec<Value>) -> Result<Value, Stri
             if values.len() != 1 {
                 return Err("std.native.Host/capability? expects one capability".into());
             }
-            (
-                "host".into(),
-                "capability?".into(),
-                vec![values[0].clone()],
-            )
+            ("host".into(), "capability?".into(), vec![values[0].clone()])
         }
         _ => return Err(format!("unknown std.native.Host method: {method}")),
     };
@@ -1569,7 +2280,11 @@ fn native_runtime_values(
                 [Value::Symbol(name)] if name.get_namespace().is_none() => name.as_str().to_owned(),
                 [Value::String(name)] => name.clone(),
                 [Value::Namespace(namespace)] => namespace.name().as_str().to_owned(),
-                _ => return Err("std.native.Runtime/ns-publics expects a namespace symbol or string".into()),
+                _ => {
+                    return Err(
+                        "std.native.Runtime/ns-publics expects a namespace symbol or string".into(),
+                    )
+                }
             };
             let target = registry
                 .find(&namespace)
@@ -1579,7 +2294,10 @@ fn native_runtime_values(
             mappings.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
             Ok(Value::OrderedMap(Box::new(POrderedMap::from_iter(
                 mappings.into_iter().map(|(name, var)| {
-                    (Value::Symbol(Symbol::create(None, name.as_str())), Value::Var(var))
+                    (
+                        Value::Symbol(Symbol::create(None, name.as_str())),
+                        Value::Var(var),
+                    )
                 }),
             ))))
         }
@@ -1793,7 +2511,12 @@ fn native_runtime_values(
             let prefix = match values.as_slice() {
                 [] => "G__".to_owned(),
                 [Value::String(prefix)] => prefix.clone(),
-                [value] => return Err(format!("gensym expects a string prefix, got {}", portable_type_name(value))),
+                [value] => {
+                    return Err(format!(
+                        "gensym expects a string prefix, got {}",
+                        portable_type_name(value)
+                    ))
+                }
                 _ => return Err("gensym expects zero or one arguments".into()),
             };
             Ok(Value::Symbol(Symbol::from(gensym(&prefix))))
@@ -1852,7 +2575,10 @@ fn native_runtime_values(
                 );
             }
             let (owner, alias_value) = if values.len() == 2 {
-                (namespace_identifier(values[0].clone(), operation)?, &values[1])
+                (
+                    namespace_identifier(values[0].clone(), operation)?,
+                    &values[1],
+                )
             } else {
                 (registry.current().name().as_str().to_owned(), &values[0])
             };
@@ -1872,19 +2598,22 @@ fn native_runtime_values(
             // Global aliases are resolver-visible even when the owning namespace
             // has not materialized a local alias entry. Report the same target
             // and lifecycle state that qualified symbol resolution observes.
-            let target = namespace.lazy_target(alias.as_str()).or_else(|| {
-                namespace
-                    .aliases()
-                    .into_iter()
-                    .find(|(name, _)| name == alias)
-                    .map(|(_, target)| target.name().clone())
-            }).or_else(|| {
-                registry
-                    .global_aliases()
-                    .into_iter()
-                    .find(|(name, _)| name == alias)
-                    .map(|(_, target)| target)
-            });
+            let target = namespace
+                .lazy_target(alias.as_str())
+                .or_else(|| {
+                    namespace
+                        .aliases()
+                        .into_iter()
+                        .find(|(name, _)| name == alias)
+                        .map(|(_, target)| target.name().clone())
+                })
+                .or_else(|| {
+                    registry
+                        .global_aliases()
+                        .into_iter()
+                        .find(|(name, _)| name == alias)
+                        .map(|(_, target)| target)
+                });
             let Some(target) = target else {
                 return Ok(Value::Nil);
             };
@@ -2517,7 +3246,8 @@ pub(crate) fn without_direct_native_execution<R>(action: impl FnOnce() -> R) -> 
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 fn direct_native_namespace_loader(
-) -> Option<Rc<dyn Fn(&str, NamespaceResource, &mut HashMap<String, Value>) -> Result<(), String>>> {
+) -> Option<Rc<dyn Fn(&str, NamespaceResource, &mut HashMap<String, Value>) -> Result<(), String>>>
+{
     ACTIVE_DIRECT_NATIVE_NAMESPACE_LOADER.with(|active| active.borrow().clone())
 }
 

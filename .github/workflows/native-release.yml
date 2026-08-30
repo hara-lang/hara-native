@@ -285,7 +285,7 @@ jobs:
       - name: Verify release payload and write checksums
         run: |
           set -euo pipefail
-          test -z "$(find . -type f -name '*.hal' -print -quit)"
+          test -z "$(find . -path './examples' -prune -o -type f -name '*.hal' -print -quit)"
           for archive in dist/*.tar.gz dist/*.tgz; do
             ! tar -tzf "$archive" | rg -n '\\.hal$|(^|/)hal-src/|std\.foundation\.hbx$|cli\.hbx$'
           done

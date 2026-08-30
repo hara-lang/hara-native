@@ -1,0 +1,8 @@
+(ns hara-native.smoke.require.main-test
+  (:require [hara-native.smoke.require.main :as main]))
+
+^{:refer hara-native.smoke.require.main/main}
+(Test/run
+ [{:name "requires and executes a sibling core namespace"
+   :test (fn [] (main/main))
+   :expected 42}])

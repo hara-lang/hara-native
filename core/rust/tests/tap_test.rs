@@ -56,6 +56,10 @@ fn official_bootstrap_is_narrowly_scoped_and_accepts_read_only_mirrors() {
     .unwrap();
     assert_eq!(tap.trust, TrustMode::SignedRoot);
     assert_eq!(tap.registry[0], "https://packages.hara-lang.org");
+    assert_eq!(
+        tap.identity[0],
+        "https://github.com/hara-lang/hara-identity.git"
+    );
     let updated = tap::add_mirror(
         &root,
         "hara",

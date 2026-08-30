@@ -121,6 +121,7 @@ num-traits = "0.2"
 semver = "1.0"
 hara-abi = { version = "0.1.6", path = "crates/abi" }
 wasm-encoder = "0.41.2"
+zeroize = "1.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
@@ -160,6 +161,10 @@ required-features = ["bytecode-vm"]
 [[bin]]
 name = "hara-native-language-conformance-artifact"
 path = "src/bin/hara-native-language-conformance-artifact.rs"
+
+[[test]]
+name = "native-test-registry"
+path = "tests/native_test_registry.rs"
 
 [dev-dependencies]
 hara-hta = { version = "0.1.6", path = "crates/hta-codec" }

@@ -1,0 +1,5 @@
+(ns hara-native.smoke.require.math
+  (:config {:role :internal}))
+
+(defn advance [value]
+  (+ value 1))

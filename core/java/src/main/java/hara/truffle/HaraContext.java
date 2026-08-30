@@ -129,6 +129,8 @@ public final class HaraContext {
   private final HaraNativeCapabilityBoundary nativeCapabilityBoundary;
   private final IFilesystem ownedFilesystem;
   private final java.util.List<Object> nativeTestResults = new ArrayList<>();
+  private final java.util.List<Object> nativeTestFacts = new ArrayList<>();
+  private long nativeTestOrder;
   private final Map<String, HaraNamespace> namespaces = new ConcurrentHashMap<>();
   private final Map<String, Map<String, HaraMacro>> macros = new ConcurrentHashMap<>();
   private final Map<String, Map<String, String>> aliases = new ConcurrentHashMap<>();
@@ -4369,13 +4371,15 @@ public final class HaraContext {
     return new hara.lang.data.Pointer(Keyword.create("test"), fields);
   }
 
-  private Object nativeTestContext(Object name, Object actual, Object expected, Object failures) {
+  private Object nativeTestContext(Object desc, Object actual, Object expected, Object failures) {
     return hara.lang.data.Map.Standard.from(
         null,
         Keyword.create("test"),
         hara.lang.data.Map.Standard.from(
             null,
-            Keyword.create("name"), name,
+            Keyword.create("desc"), desc,
+            // :name remains an input/output compatibility alias while :desc is canonical.
+            Keyword.create("name"), desc,
             Keyword.create("actual"), actual,
             Keyword.create("expected"), expected),
         Keyword.create("failures"), failures);
@@ -4422,23 +4426,24 @@ public final class HaraContext {
     return comparison.withContext(nativeTestContext(name, actual, expected, failures));
   }
 
-  private Object nativeTestError(Object name, Object actual, Object expected, String error) {
+  private Object nativeTestError(Object desc, Object actual, Object expected, String error) {
     return HaraResult.error(
         new HaraException(error),
-        nativeTestContext(name, actual, expected, BuiltinStruct.vector(new Object[0])));
+        nativeTestContext(desc, actual, expected, BuiltinStruct.vector(new Object[0])));
   }
 
   @SuppressWarnings("unchecked")
-  private Object nativeTestCheckedResult(Object name, Object metadata, Object rawResult) {
+  private Object nativeTestCheckedResult(Object desc, Object metadata, Object rawResult) {
     Object resultValue = HaraBox.unwrap(rawResult);
     if (!(resultValue instanceof HaraResult result)) {
-      return nativeTestError(name, null, null, "Test/run check function must return a Result");
+      return nativeTestError(desc, null, null, "Test/check function must return a Result");
     }
     Object rawTest = result.context().lookup(Keyword.create("test"), hara.lang.data.Map.Standard.EMPTY);
     IMapType<Object, Object> test = rawTest instanceof IMapType<?, ?>
         ? (IMapType<Object, Object>) rawTest
         : hara.lang.data.Map.Standard.EMPTY;
-    test = (IMapType<Object, Object>) test.assoc(Keyword.create("name"), name);
+    test = (IMapType<Object, Object>) test.assoc(Keyword.create("desc"), desc);
+    test = (IMapType<Object, Object>) test.assoc(Keyword.create("name"), desc);
     IMapType<Object, Object> context = result.context();
     context = (IMapType<Object, Object>) context.assoc(Keyword.create("test"), test);
     if (metadata != null) {
@@ -4448,83 +4453,510 @@ public final class HaraContext {
     return result.withContext(context);
   }
 
-  private Object nativeTestRun(Object[] values) {
+  private static Object nativeTestVector(java.util.List<Object> values) {
+    return hara.lang.data.Vector.Standard.from(null, values.toArray());
+  }
+
+  @SuppressWarnings("unchecked")
+  private String nativeTestDescription(IMapType<?, ?> descriptor, String operation) {
+    Object desc = hasMapKey(descriptor, Keyword.create("desc"))
+        ? HaraBox.unwrap(lookupValue(descriptor, Keyword.create("desc"))) : null;
+    Object name = hasMapKey(descriptor, Keyword.create("name"))
+        ? HaraBox.unwrap(lookupValue(descriptor, Keyword.create("name"))) : null;
+    if (desc instanceof String descString && name instanceof String nameString) {
+      if (!descString.isEmpty() && descString.equals(nameString)) return descString;
+      throw new HaraException(
+          "std.native.Test/" + operation + " :desc and legacy :name must agree");
+    }
+    Object candidate = desc == null ? name : desc;
+    if (candidate instanceof String value && !value.isEmpty()) return value;
+    if (desc != null || name != null) {
+      throw new HaraException(
+          "std.native.Test/" + operation + " :desc must be a non-empty string");
+    }
+    throw new HaraException("std.native.Test/" + operation + " requires :desc");
+  }
+
+  private String nativeTestDescriptionArgument(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (raw instanceof String desc && !desc.isEmpty()) return desc;
+    throw new HaraException(
+        "std.native.Test/" + operation + " description must be a non-empty string");
+  }
+
+  private String nativeTestNamespace(Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    if (raw instanceof String namespace && !namespace.isEmpty()) return namespace;
+    if (raw instanceof Symbol symbol && !symbol.display().isEmpty()) return symbol.display();
+    throw new HaraException(
+        "std.native.Test/" + operation + " namespace must be a string or symbol");
+  }
+
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private Object nativeTestMetadata(IMapType<?, ?> descriptor, String namespace) {
+    Object raw = hasMapKey(descriptor, Keyword.create("meta"))
+        ? HaraBox.unwrap(lookupValue(descriptor, Keyword.create("meta")))
+        : hara.lang.data.Map.Standard.EMPTY;
+    if (!(raw instanceof IMapType)) {
+      throw new HaraException("std.native.Test/register :meta must be a map");
+    }
+    IMapType metadata = (IMapType) raw;
+    metadata = (IMapType) metadata.assoc(Keyword.create("test", "namespace"), namespace);
+    metadata = (IMapType) metadata.assoc(Keyword.create("test", "order"), ++nativeTestOrder);
+    return metadata;
+  }
+
+  @SuppressWarnings("unchecked")
+  private Object nativeTestFactValue(IMapType<?, ?> descriptor, String namespace, String desc, Object metadata) {
+    boolean function = hasMapKey(descriptor, Keyword.create("function"));
+    boolean test = hasMapKey(descriptor, Keyword.create("test"));
+    boolean expected = hasMapKey(descriptor, Keyword.create("expected"));
+    if (function && (test || expected)) {
+      throw new HaraException(
+          "std.native.Test/register accepts either :function or :test with :expected");
+    }
+    if (!function && (!test || !expected)) {
+      throw new HaraException(
+          "std.native.Test/register requires :function or both :test and :expected");
+    }
+    java.util.ArrayList<Object> fields = new java.util.ArrayList<>();
+    fields.add(Keyword.create("namespace")); fields.add(namespace);
+    fields.add(Keyword.create("desc")); fields.add(desc);
+    fields.add(Keyword.create("name")); fields.add(desc);
+    fields.add(Keyword.create("meta")); fields.add(metadata);
+    if (function) {
+      fields.add(Keyword.create("function"));
+      fields.add(lookupValue(descriptor, Keyword.create("function")));
+    } else {
+      fields.add(Keyword.create("test"));
+      fields.add(lookupValue(descriptor, Keyword.create("test")));
+      fields.add(Keyword.create("expected"));
+      fields.add(lookupValue(descriptor, Keyword.create("expected")));
+    }
+    for (String hook : new String[] {"before", "after"}) {
+      if (hasMapKey(descriptor, Keyword.create(hook))) {
+        fields.add(Keyword.create(hook));
+        fields.add(lookupValue(descriptor, Keyword.create(hook)));
+      }
+    }
+    return hara.lang.data.Map.Standard.from(null, fields.toArray());
+  }
+
+  private Object nativeTestRegister(Object[] values) {
+    if (values.length != 1 || !(HaraBox.unwrap(values[0]) instanceof IMapType<?, ?> descriptor)) {
+      throw new HaraException("std.native.Test/register expects one fact map");
+    }
+    String namespace = currentNamespace.name();
+    String desc = nativeTestDescription(descriptor, "register");
+    Object fact = nativeTestFactValue(descriptor, namespace, desc, nativeTestMetadata(descriptor, namespace));
+    nativeTestFacts.removeIf(candidate -> {
+      IMapType<?, ?> map = (IMapType<?, ?>) HaraBox.unwrap(candidate);
+      return namespace.equals(lookupValue(map, Keyword.create("namespace")))
+          && desc.equals(lookupValue(map, Keyword.create("desc")));
+    });
+    nativeTestFacts.add(fact);
+    return fact;
+  }
+
+  private Object nativeTestCheck(Object[] values) {
     if (values.length < 1 || values.length > 3) {
       throw new HaraException(
-          "std.native.Test/run expects cases, an optional check function, and an optional lifecycle map");
+          "std.native.Test/check expects cases, an optional check function, and an optional lifecycle map");
     }
     Object rawCases = HaraBox.unwrap(values[0]);
-    boolean vectorCases = rawCases instanceof hara.lang.data.Vector<?>
-        || rawCases.getClass().getName().startsWith("hara.lang.data.Tuple$");
-    if (!vectorCases) {
-      throw new HaraException("std.native.Test/run expects one vector of test cases");
+    if (!(rawCases instanceof ILinearType<?> cases)) {
+      throw new HaraException("std.native.Test/check expects a vector of test cases");
     }
-    ILinearType<?> cases = (ILinearType<?>) rawCases;
     Object second = values.length >= 2 ? HaraBox.unwrap(values[1]) : null;
     Object lifecycle = values.length == 3 ? HaraBox.unwrap(values[2])
         : second instanceof IMapType<?, ?> ? second : null;
     Object checkFunction = lifecycle == second ? null : second;
     if (lifecycle != null && !(lifecycle instanceof IMapType<?, ?>)) {
-      throw new HaraException("std.native.Test/run lifecycle must be a map");
+      throw new HaraException("std.native.Test/check lifecycle must be a map");
     }
-    boolean setupOk = nativeTestLifecycle(lifecycle, "setup");
-    int index = 0;
-    if (setupOk) for (Object rawCase : cases) {
-      index += 1;
-      Object fallbackName = "invalid case " + index;
-      if (!(HaraBox.unwrap(rawCase) instanceof IMapType<?, ?> testCase)) {
-        nativeTestResults.add(nativeTestError(fallbackName, null, null, "Test/run case must be a map"));
-        continue;
-      }
-      Object name = hasMapKey(testCase, Keyword.create("name"))
-          ? lookupValue(testCase, Keyword.create("name")) : fallbackName;
-      boolean hasExpected = hasMapKey(testCase, Keyword.create("expected"));
-      Object expected = hasExpected ? lookupValue(testCase, Keyword.create("expected")) : null;
-      Object metadata = hasMapKey(testCase, Keyword.create("meta"))
-          ? lookupValue(testCase, Keyword.create("meta")) : null;
-      boolean hasTest = hasMapKey(testCase, Keyword.create("test"));
-      if (!hasTest) {
-        nativeTestResults.add(nativeTestError(name, null, expected, "Test/run case requires :test"));
-      } else if (!hasExpected) {
-        nativeTestResults.add(nativeTestError(name, null, null, "Test/run case requires :expected"));
-      } else {
+    java.util.ArrayList<Object> results = new java.util.ArrayList<>();
+    if (nativeTestLifecycle(lifecycle, "setup", results)) {
+      int index = 0;
+      for (Object rawCase : cases) {
+        index += 1;
+        String fallback = "invalid case " + index;
+        if (!(HaraBox.unwrap(rawCase) instanceof IMapType<?, ?> testCase)) {
+          results.add(nativeTestError(fallback, null, null, "Test/check case must be a map"));
+          continue;
+        }
+        String desc;
         try {
-          Object testFunction = lookupValue(testCase, Keyword.create("test"));
-          if (checkFunction == null) {
-            Object actual = nativeTestAwait(invokeCallable(testFunction, new Object[0]));
-            Object comparison = nativeTestCompare(new Object[] {actual, expected});
-            nativeTestResults.add(nativeTestResult(new Object[] {name, actual, expected, comparison}));
-          } else {
-            Object checked = invokeCallable(checkFunction, new Object[] {testFunction, expected});
-            nativeTestResults.add(nativeTestCheckedResult(name, metadata, checked));
+          desc = nativeTestDescription(testCase, "check");
+        } catch (HaraException invalid) {
+          desc = fallback;
+        }
+        boolean hasTest = hasMapKey(testCase, Keyword.create("test"));
+        boolean hasExpected = hasMapKey(testCase, Keyword.create("expected"));
+        Object expected = hasExpected ? lookupValue(testCase, Keyword.create("expected")) : null;
+        Object metadata = hasMapKey(testCase, Keyword.create("meta"))
+            ? lookupValue(testCase, Keyword.create("meta")) : null;
+        if (!hasTest) {
+          results.add(nativeTestError(desc, null, expected, "Test/check case requires :test"));
+        } else if (!hasExpected) {
+          results.add(nativeTestError(desc, null, null, "Test/check case requires :expected"));
+        } else {
+          try {
+            Object result;
+            if (checkFunction == null) {
+              Object actual = nativeTestAwait(invokeCallable(lookupValue(testCase, Keyword.create("test")), new Object[0]));
+              Object comparison = nativeTestCompare(new Object[] {actual, expected});
+              result = nativeTestResult(new Object[] {desc, actual, expected, comparison});
+            } else {
+              Object checked = nativeTestAwait(invokeCallable(
+                  checkFunction,
+                  new Object[] {lookupValue(testCase, Keyword.create("test")), expected}));
+              result = nativeTestCheckedResult(desc, metadata, checked);
+            }
+            results.add(result);
+          } catch (RuntimeException error) {
+            Object failed = nativeTestError(desc, null, expected, nativeTestErrorMessage(error));
+            results.add(
+                checkFunction == null ? failed : nativeTestCheckedResult(desc, metadata, failed));
           }
-        } catch (RuntimeException error) {
-          String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-          nativeTestResults.add(nativeTestError(name, null, expected, message));
         }
       }
     }
-    nativeTestLifecycle(lifecycle, "teardown");
-    return hara.lang.data.Vector.Standard.from(null, nativeTestResults.toArray());
+    nativeTestLifecycle(lifecycle, "teardown", results);
+    nativeTestResults.addAll(results);
+    return nativeTestVector(results);
   }
 
-  @SuppressWarnings("unchecked")
-  private boolean nativeTestLifecycle(Object lifecycle, String phase) {
+  private String nativeTestErrorMessage(RuntimeException error) {
+    return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+  }
+
+  private boolean nativeTestLifecycle(Object lifecycle, String phase, java.util.List<Object> results) {
     if (!(lifecycle instanceof IMapType<?, ?> lifecycleMap)
         || !hasMapKey(lifecycleMap, Keyword.create(phase))) {
       return true;
     }
     try {
-      Object function = lookupValue(lifecycleMap, Keyword.create(phase));
-      nativeTestAwait(invokeCallable(function, new Object[0]));
+      nativeTestAwait(invokeCallable(lookupValue(lifecycleMap, Keyword.create(phase)), new Object[0]));
       return true;
     } catch (RuntimeException error) {
-      String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-      HaraResult result = (HaraResult) nativeTestError("test " + phase, null, null, message);
-      nativeTestResults.add(result.withContext(
-          hara.lang.data.Map.Standard.from(null, Keyword.create("phase"), Keyword.create(phase))));
+      HaraResult result = (HaraResult) nativeTestError(
+          "test " + phase, null, null, nativeTestErrorMessage(error));
+      results.add(result.withContext(hara.lang.data.Map.Standard.from(
+          null, Keyword.create("phase"), Keyword.create(phase))));
       return false;
     }
+  }
+
+  private Object nativeTestFacts(Object[] values) {
+    if (values.length > 1) throw new HaraException("std.native.Test/facts expects an optional namespace");
+    String namespace = values.length == 0 ? currentNamespace.name() : nativeTestNamespace(values[0], "facts");
+    java.util.ArrayList<Object> facts = new java.util.ArrayList<>();
+    for (Object fact : nativeTestFacts) {
+      IMapType<?, ?> map = (IMapType<?, ?>) HaraBox.unwrap(fact);
+      if (namespace.equals(lookupValue(map, Keyword.create("namespace")))) facts.add(fact);
+    }
+    return nativeTestVector(facts);
+  }
+
+  private Object nativeTestGet(Object[] values, String operation) {
+    if (values.length < 1 || values.length > 2) {
+      throw new HaraException("std.native.Test/" + operation + " expects a description and optional namespace");
+    }
+    String namespace = values.length == 1 ? currentNamespace.name() : nativeTestNamespace(values[0], operation);
+    String desc = nativeTestDescriptionArgument(values[values.length - 1], operation);
+    for (Object fact : nativeTestFacts) {
+      IMapType<?, ?> map = (IMapType<?, ?>) HaraBox.unwrap(fact);
+      if (namespace.equals(lookupValue(map, Keyword.create("namespace")))
+          && desc.equals(lookupValue(map, Keyword.create("desc")))) return fact;
+    }
+    return null;
+  }
+
+  private Object nativeTestRemove(Object[] values) {
+    Object fact = nativeTestGet(values, "remove");
+    if (fact == null) return null;
+    IMapType<?, ?> map = (IMapType<?, ?>) HaraBox.unwrap(fact);
+    String namespace = (String) lookupValue(map, Keyword.create("namespace"));
+    String desc = (String) lookupValue(map, Keyword.create("desc"));
+    nativeTestFacts.removeIf(candidate -> {
+      IMapType<?, ?> candidateMap = (IMapType<?, ?>) HaraBox.unwrap(candidate);
+      return namespace.equals(lookupValue(candidateMap, Keyword.create("namespace")))
+          && desc.equals(lookupValue(candidateMap, Keyword.create("desc")));
+    });
+    return fact;
+  }
+
+  private Object nativeTestPurge(Object[] values) {
+    if (values.length > 1) throw new HaraException("std.native.Test/purge expects an optional namespace");
+    String namespace = values.length == 0 ? currentNamespace.name() : nativeTestNamespace(values[0], "purge");
+    java.util.ArrayList<Object> removed = new java.util.ArrayList<>();
+    java.util.Iterator<Object> iterator = nativeTestFacts.iterator();
+    while (iterator.hasNext()) {
+      Object fact = iterator.next();
+      if (namespace.equals(lookupValue((IMapType<?, ?>) HaraBox.unwrap(fact), Keyword.create("namespace")))) {
+        removed.add(fact);
+        iterator.remove();
+      }
+    }
+    return nativeTestVector(removed);
+  }
+
+  private Object nativeTestReset(Object[] values) {
+    if (values.length != 0) throw new HaraException("std.native.Test/reset expects no arguments");
+    nativeTestFacts.clear();
+    nativeTestResults.clear();
+    nativeTestOrder = 0;
+    return null;
+  }
+
+  private Object nativeTestHook(Object hook) {
+    if (hook == null) return null;
+    return nativeTestAwait(invokeCallable(hook, new Object[0]));
+  }
+
+  private boolean nativeTestCancelled(IMapType<?, ?> fact, IMapType<?, ?> options) {
+    if (!hasMapKey(options, Keyword.create("cancelled"))) return false;
+    Object cancelled = lookupValue(options, Keyword.create("cancelled"));
+    Object raw = HaraBox.unwrap(cancelled);
+    if (raw instanceof Boolean value) return value;
+    if (raw == null) return false;
+    return truthy(nativeTestAwait(invokeCallable(cancelled, new Object[] {fact})));
+  }
+
+  private java.util.List<Object> nativeTestChecks(Object output, String desc) {
+    Object raw = HaraBox.unwrap(output);
+    java.util.ArrayList<Object> checks = new java.util.ArrayList<>();
+    if (raw instanceof HaraResult) {
+      checks.add(raw);
+      return checks;
+    }
+    if (raw instanceof ILinearType<?> values) {
+      for (Object value : values) {
+        Object check = HaraBox.unwrap(value);
+        checks.add(check instanceof HaraResult ? check : nativeTestError(
+            desc,
+            check,
+            Keyword.create("Result"),
+            "Test fact functions must return Results or a vector of Results"));
+      }
+      return checks;
+    }
+    checks.add(HaraResult.success(
+        Boolean.TRUE,
+        nativeTestContext(desc, raw, Keyword.create("returned"), nativeTestVector(java.util.List.of()))));
+    return checks;
+  }
+
+  private boolean nativeTestPassedResult(Object value) {
+    return HaraBox.unwrap(value) instanceof HaraResult result
+        && result.isSuccess() && Boolean.TRUE.equals(result.data());
+  }
+
+  private boolean nativeTestTimedOutResult(Object value) {
+    return HaraBox.unwrap(value) instanceof HaraResult result && result.isTimeout();
+  }
+
+  private String nativeTestStatus(java.util.List<Object> checks) {
+    for (Object check : checks) if (nativeTestTimedOutResult(check)) return "timeout";
+    for (Object check : checks) {
+      if (HaraBox.unwrap(check) instanceof HaraResult result && result.isError()) return "error";
+    }
+    for (Object check : checks) if (!nativeTestPassedResult(check)) return "failed";
+    return "passed";
+  }
+
+  private java.util.List<Object> nativeTestFactChecks(IMapType<?, ?> fact, IMapType<?, ?> options) {
+    String desc = (String) lookupValue(fact, Keyword.create("desc"));
+    if (hasMapKey(fact, Keyword.create("function"))) {
+      return nativeTestChecks(nativeTestAwait(invokeCallable(
+          lookupValue(fact, Keyword.create("function")), new Object[] {options})), desc);
+    }
+    Object test = lookupValue(fact, Keyword.create("test"));
+    Object expected = lookupValue(fact, Keyword.create("expected"));
+    Object output = nativeTestCheck(new Object[] {nativeTestVector(java.util.List.of(
+        hara.lang.data.Map.Standard.from(
+            null,
+            Keyword.create("desc"), desc,
+            Keyword.create("test"), test,
+            Keyword.create("expected"), expected)))});
+    java.util.ArrayList<Object> checks = new java.util.ArrayList<>();
+    for (Object check : (ILinearType<?>) output) checks.add(check);
+    return checks;
+  }
+
+  private Object nativeTestFactResult(
+      IMapType<?, ?> fact, String status, java.util.List<Object> checks, String error, long elapsed) {
+    java.util.ArrayList<Object> fields = new java.util.ArrayList<>();
+    for (String field : new String[] {"namespace", "desc", "name", "meta"}) {
+      fields.add(Keyword.create(field));
+      fields.add(lookupValue(fact, Keyword.create(field)));
+    }
+    fields.add(Keyword.create("status")); fields.add(Keyword.create(status));
+    fields.add(Keyword.create("checks")); fields.add(nativeTestVector(checks));
+    fields.add(Keyword.create("elapsed")); fields.add(Math.max(0, elapsed));
+    if (error != null) {
+      fields.add(Keyword.create("error")); fields.add(error);
+    }
+    return hara.lang.data.Map.Standard.from(null, fields.toArray());
+  }
+
+  private Object nativeTestRunFact(Object[] values) {
+    if (values.length < 1 || values.length > 2) {
+      throw new HaraException("std.native.Test/run-fact expects a fact or description and optional options");
+    }
+    Object options = values.length == 2 ? HaraBox.unwrap(values[1]) : hara.lang.data.Map.Standard.EMPTY;
+    if (!(options instanceof IMapType<?, ?> optionMap)) {
+      throw new HaraException("std.native.Test/run-fact options must be a map");
+    }
+    Object rawFact = HaraBox.unwrap(values[0]);
+    Object found = rawFact instanceof IMapType<?, ?> ? rawFact : nativeTestGet(new Object[] {values[0]}, "run-fact");
+    if (!(found instanceof IMapType<?, ?> fact)) {
+      throw new HaraException("std.native.Test/run-fact fact not found: " + values[0]);
+    }
+    long started = System.currentTimeMillis();
+    IMapType<?, ?> metadata = (IMapType<?, ?>) HaraBox.unwrap(lookupValue(fact, Keyword.create("meta")));
+    if (truthy(lookupValue(metadata, Keyword.create("skip")))) {
+      return nativeTestFactResult(fact, "skipped", java.util.List.of(), null, 0);
+    }
+    if (nativeTestCancelled(fact, optionMap)) {
+      return nativeTestFactResult(fact, "cancelled", java.util.List.of(), null, 0);
+    }
+    java.util.ArrayList<Object> checks = new java.util.ArrayList<>();
+    String failure = null;
+    try {
+      nativeTestHook(hasMapKey(optionMap, Keyword.create("before-each"))
+          ? lookupValue(optionMap, Keyword.create("before-each")) : null);
+      nativeTestHook(hasMapKey(fact, Keyword.create("before")) ? lookupValue(fact, Keyword.create("before")) : null);
+      checks.addAll(nativeTestFactChecks(fact, optionMap));
+    } catch (RuntimeException error) {
+      failure = nativeTestErrorMessage(error);
+    }
+    for (Object hook : new Object[] {
+        hasMapKey(fact, Keyword.create("after")) ? lookupValue(fact, Keyword.create("after")) : null,
+        hasMapKey(optionMap, Keyword.create("after-each")) ? lookupValue(optionMap, Keyword.create("after-each")) : null}) {
+      try {
+        nativeTestHook(hook);
+      } catch (RuntimeException error) {
+        if (failure == null) failure = nativeTestErrorMessage(error);
+      }
+    }
+    return nativeTestFactResult(
+        fact,
+        failure == null ? nativeTestStatus(checks) : "error",
+        checks,
+        failure,
+        System.currentTimeMillis() - started);
+  }
+
+  private Object nativeTestSummary(Object[] values) {
+    if (values.length != 1 || !(HaraBox.unwrap(values[0]) instanceof ILinearType<?> results)) {
+      throw new HaraException("std.native.Test/summary expects one vector of fact results");
+    }
+    int passedFacts = 0, failedFacts = 0, errors = 0, timeouts = 0, skipped = 0, cancelled = 0;
+    int checks = 0, passedChecks = 0;
+    java.util.LinkedHashSet<Object> namespaces = new java.util.LinkedHashSet<>();
+    java.util.ArrayList<Object> copies = new java.util.ArrayList<>();
+    for (Object resultValue : results) {
+      if (!(HaraBox.unwrap(resultValue) instanceof IMapType<?, ?> result)) {
+        throw new HaraException("std.native.Test summary results must be maps");
+      }
+      copies.add(resultValue);
+      Object status = lookupValue(result, Keyword.create("status"));
+      if (Keyword.create("passed").equals(status)) passedFacts++;
+      else if (Keyword.create("failed").equals(status)) failedFacts++;
+      else if (Keyword.create("error").equals(status)) errors++;
+      else if (Keyword.create("timeout").equals(status)) timeouts++;
+      else if (Keyword.create("skipped").equals(status)) skipped++;
+      else if (Keyword.create("cancelled").equals(status)) cancelled++;
+      else throw new HaraException("std.native.Test summary has unknown status " + status);
+      namespaces.add(lookupValue(result, Keyword.create("namespace")));
+      Object rawChecks = lookupValue(result, Keyword.create("checks"));
+      if (rawChecks instanceof ILinearType<?> factChecks) for (Object check : factChecks) {
+        checks++;
+        if (nativeTestPassedResult(check)) passedChecks++;
+      }
+    }
+    int failedChecks = checks - passedChecks;
+    boolean passing = failedFacts + errors + timeouts == 0;
+    return hara.lang.data.Map.Standard.from(
+        null,
+        Keyword.create("status"), Keyword.create(passing ? "passed" : "failed"),
+        Keyword.create("counts"), hara.lang.data.Map.Standard.from(
+            null,
+            Keyword.create("passed"), passedFacts,
+            Keyword.create("failed"), failedFacts,
+            Keyword.create("error"), errors,
+            Keyword.create("timeout"), timeouts,
+            Keyword.create("skipped"), skipped,
+            Keyword.create("cancelled"), cancelled),
+        Keyword.create("check-counts"), hara.lang.data.Map.Standard.from(
+            null,
+            Keyword.create("total"), checks,
+            Keyword.create("passed"), passedChecks,
+            Keyword.create("failed"), failedChecks),
+        Keyword.create("files"), namespaces.size(),
+        Keyword.create("facts"), copies.size(),
+        Keyword.create("checks"), checks,
+        Keyword.create("passed"), passedChecks,
+        Keyword.create("failed"), failedChecks,
+        Keyword.create("throw"), errors,
+        Keyword.create("timeout"), timeouts,
+        Keyword.create("results"), nativeTestVector(copies));
+  }
+
+  private Object nativeTestRun(Object[] values) {
+    if (values.length > 1 || (values.length == 1 && !(HaraBox.unwrap(values[0]) instanceof IMapType<?, ?>))) {
+      throw new HaraException("std.native.Test/run expects an optional options map; use Test/check for cases");
+    }
+    IMapType<?, ?> options = values.length == 0
+        ? hara.lang.data.Map.Standard.EMPTY : (IMapType<?, ?>) HaraBox.unwrap(values[0]);
+    String namespace = hasMapKey(options, Keyword.create("namespace"))
+        ? nativeTestNamespace(lookupValue(options, Keyword.create("namespace")), "run") : currentNamespace.name();
+    java.util.ArrayList<Object> facts = new java.util.ArrayList<>();
+    for (Object fact : nativeTestFacts) {
+      if (namespace.equals(lookupValue((IMapType<?, ?>) HaraBox.unwrap(fact), Keyword.create("namespace")))) facts.add(fact);
+    }
+    java.util.ArrayList<Object> results = new java.util.ArrayList<>();
+    try {
+      nativeTestHook(hasMapKey(options, Keyword.create("before-all"))
+          ? lookupValue(options, Keyword.create("before-all")) : null);
+      boolean failFast = false;
+      for (Object fact : facts) {
+        IMapType<?, ?> factMap = (IMapType<?, ?>) HaraBox.unwrap(fact);
+        if (failFast) {
+          results.add(nativeTestFactResult(factMap, "cancelled", java.util.List.of(), null, 0));
+          continue;
+        }
+        Object result = nativeTestRunFact(new Object[] {fact, options});
+        results.add(result);
+        Object status = lookupValue((IMapType<?, ?>) HaraBox.unwrap(result), Keyword.create("status"));
+        failFast = truthy(lookupValue(options, Keyword.create("fail-fast")))
+            && (Keyword.create("failed").equals(status)
+                || Keyword.create("error").equals(status)
+                || Keyword.create("timeout").equals(status));
+      }
+    } catch (RuntimeException error) {
+      Object synthetic = hara.lang.data.Map.Standard.from(
+          null, Keyword.create("namespace"), namespace,
+          Keyword.create("desc"), "test before-all",
+          Keyword.create("name"), "test before-all",
+          Keyword.create("meta"), hara.lang.data.Map.Standard.EMPTY);
+      results.add(nativeTestFactResult(
+          (IMapType<?, ?>) synthetic, "error", java.util.List.of(), nativeTestErrorMessage(error), 0));
+    }
+    try {
+      nativeTestHook(hasMapKey(options, Keyword.create("after-all"))
+          ? lookupValue(options, Keyword.create("after-all")) : null);
+    } catch (RuntimeException error) {
+      Object synthetic = hara.lang.data.Map.Standard.from(
+          null, Keyword.create("namespace"), namespace,
+          Keyword.create("desc"), "test after-all",
+          Keyword.create("name"), "test after-all",
+          Keyword.create("meta"), hara.lang.data.Map.Standard.EMPTY);
+      results.add(nativeTestFactResult(
+          (IMapType<?, ?>) synthetic, "error", java.util.List.of(), nativeTestErrorMessage(error), 0));
+    }
+    return nativeTestSummary(new Object[] {nativeTestVector(results)});
   }
 
   private Object nativeTestAwait(Object value) {
@@ -4666,7 +5098,16 @@ public final class HaraContext {
     test.define("context", new VariadicBuiltin("std.native.Test/context", this::nativeTestContext));
     test.define("events", new VariadicBuiltin("std.native.Test/events", this::nativeTestEvents));
     test.define("compare", new VariadicBuiltin("std.native.Test/compare", this::nativeTestCompare));
+    test.define("check", new VariadicBuiltin("std.native.Test/check", this::nativeTestCheck));
+    test.define("register", new VariadicBuiltin("std.native.Test/register", this::nativeTestRegister));
+    test.define("facts", new VariadicBuiltin("std.native.Test/facts", this::nativeTestFacts));
+    test.define("get", new VariadicBuiltin("std.native.Test/get", values -> nativeTestGet(values, "get")));
+    test.define("remove", new VariadicBuiltin("std.native.Test/remove", this::nativeTestRemove));
+    test.define("purge", new VariadicBuiltin("std.native.Test/purge", this::nativeTestPurge));
+    test.define("reset", new VariadicBuiltin("std.native.Test/reset", this::nativeTestReset));
+    test.define("run-fact", new VariadicBuiltin("std.native.Test/run-fact", this::nativeTestRunFact));
     test.define("run", new VariadicBuiltin("std.native.Test/run", this::nativeTestRun));
+    test.define("summary", new VariadicBuiltin("std.native.Test/summary", this::nativeTestSummary));
     test.define("result", new VariadicBuiltin("std.native.Test/result", this::nativeTestResult));
     test.define("passed?", new VariadicBuiltin("std.native.Test/passed?", this::nativeTestPassed));
     test.define("actual", new VariadicBuiltin("std.native.Test/actual", values -> nativeTestInspect(values, "actual")));

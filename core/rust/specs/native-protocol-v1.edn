@@ -50,7 +50,8 @@
    {:type "std.native.Instrument"
     :methods ["provider" "validate" "inspect" "disassemble" "transform" "execute"]}
    {:type "std.native.Test"
-    :methods ["catalog" "config" "context" "events" "compare" "run" "result" "passed?" "actual"
+    :methods ["catalog" "config" "context" "events" "compare" "check" "register" "facts" "get"
+              "remove" "purge" "reset" "run-fact" "run" "summary" "result" "passed?" "actual"
               "expected" "failures" "failure-seq" "failure-count" "failure" "failure?"]}
    {:type "std.native.RegExp"
     :methods ["compile" "pattern" "find?" "find" "matches" "replace" "split"]}
@@ -700,18 +701,35 @@
                   (try (std.native.Instrument/execute :hbc (std.native.Base/bytes) {})
                        false (catch error true))])
      :expect {:display "true"}}
-    {:id :native/test-result-and-run-semantics
+    {:id :native/test-registry-and-result-semantics
      :program (let [config (std.native.Test/config {})
                     context (std.native.Test/context config)
                     equal (std.native.Test/compare 1 1)
                     different (std.native.Test/compare 1 2)
-                    passed (std.native.Test/result :pass 1 1 equal)
-                    failed (std.native.Test/result :fail 1 2 different)
-                    run-results (std.native.Test/run
-                                  [{:name :run :test (fn [] 3) :expected 3}])]
+                    passed (std.native.Test/result "pass" 1 1 equal)
+                    failed (std.native.Test/result "fail" 1 2 different)
+                    checks (std.native.Test/check
+                             [{:desc "direct check" :test (fn [] 3) :expected 3}])
+                    check-result (std.protocol.inth.INth/nth checks 0)
+                    _ (std.native.Test/reset)
+                    registered (std.native.Test/register
+                                 {:desc "advance increments"
+                                  :test (fn [] 3)
+                                  :expected 3
+                                  :meta {:id (quote advance-increments)}})
+                    facts (std.native.Test/facts)
+                    got (std.native.Test/get "advance increments")
+                    direct-fact (std.native.Test/run-fact "advance increments")
+                    aggregate (std.native.Test/summary [direct-fact])
+                    removed (std.native.Test/remove "advance increments")
+                    _ (std.native.Test/register
+                       {:desc "purge me" :test (fn [] 3) :expected 3})
+                    purged (std.native.Test/purge)
+                    run-summary (std.native.Test/run)]
                 (= [:std.native.HashMap :std.native.HashMap :std.native.Pointer
                     :std.native.Vector :std.native.Result true 1 1 0 1
-                    :std.native.Vector :std.native.Vector true true]
+                    :std.native.Vector :std.native.Vector true
+                    :std.native.Vector true 1 true true :passed :passed true 1 :passed]
                    [(std.native.Base/type (std.native.Test/catalog))
                     (std.native.Base/type config)
                     (std.native.Base/type context)
@@ -725,8 +743,16 @@
                     (std.native.Base/type (std.native.Test/failures failed))
                     (std.native.Base/type (std.native.Test/failure-seq failed))
                     (std.native.Test/failure? (std.native.Test/failure failed 0))
-                    (std.native.Test/passed?
-                      (std.protocol.inth.INth/nth run-results 0))]))
+                    (std.native.Base/type checks)
+                    (std.native.Test/passed? check-result)
+                    (std.protocol.icount.ICount/count facts)
+                    (= (:desc got) "advance increments")
+                    (= (:desc registered) "advance increments")
+                    (:status direct-fact)
+                    (:status aggregate)
+                    (= (:desc removed) "advance increments")
+                    (std.protocol.icount.ICount/count purged)
+                    (:status run-summary)]))
      :expect {:display "true"}}]}
 
   {:id :protocol

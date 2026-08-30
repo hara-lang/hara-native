@@ -1250,6 +1250,7 @@ dependencies = [
  "wasm-encoder",
  "wasmtime",
  "x25519-dalek",
+ "zeroize",
  "zip",
 ]
 

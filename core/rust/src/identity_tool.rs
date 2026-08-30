@@ -19,7 +19,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
             println!("{}/login/github", endpoint().trim_end_matches('/'));
             Ok(())
         }
-        Some("enroll") => enroll(&args[1..]),
+        Some("enroll") => {
+            let public_key = env::var("HARA_SIGNER_PUBLIC_KEY")
+                .map_err(|_| "id enroll requires HARA_SIGNER_PUBLIC_KEY".to_owned())?;
+            enroll_with_signer(&args[1..], &public_key, tap::sign)
+        }
         Some("status") => get("/v1/status", &args[1..]),
         Some("namespace") => get("/v1/namespaces", &args[1..]),
         Some("key") => key_command(&args[1..]),
@@ -27,7 +31,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn enroll(args: &[String]) -> Result<(), String> {
+/// Enroll a publisher key with a caller-owned signer. This lets an embedding
+/// host keep the private key in-process while the legacy CLI retains its
+/// external `HARA_SIGNER` adapter.
+pub fn enroll_with_signer<F>(args: &[String], public_key: &str, signer: F) -> Result<(), String>
+where
+    F: Fn(&[u8]) -> Result<(String, String), String>,
+{
     let owner = required_option(args, "--owner")?;
     let tap_name = optional_option(args, "--tap").unwrap_or_else(|| "hara".into());
     let tap_name = if tap_name == "official" {
@@ -35,16 +45,14 @@ fn enroll(args: &[String]) -> Result<(), String> {
     } else {
         tap_name
     };
-    let public_key = env::var("HARA_SIGNER_PUBLIC_KEY")
-        .map_err(|_| "id enroll requires HARA_SIGNER_PUBLIC_KEY".to_owned())?;
-    validate_hex(&public_key, 32, "HARA_SIGNER_PUBLIC_KEY")?;
+    validate_hex(public_key, 32, "HARA_SIGNER_PUBLIC_KEY")?;
     let challenge = if let Some(challenge) = optional_option(args, "--challenge") {
         challenge
     } else {
         fetch_challenge(&owner)?
     };
-    let request = canonical_enrollment(&tap_name, &owner, &public_key, &challenge);
-    let (key_id, signature) = tap::sign(request.as_bytes())?;
+    let request = canonical_enrollment(&tap_name, &owner, public_key, &challenge);
+    let (key_id, signature) = signer(request.as_bytes())?;
     if args.iter().any(|arg| arg == "--dry-run") {
         print!("{request}");
         println!("key-id={key_id} signature={signature}");

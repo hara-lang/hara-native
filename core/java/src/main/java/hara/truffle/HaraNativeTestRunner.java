@@ -65,10 +65,15 @@ public final class HaraNativeTestRunner {
         throw HaraException.withCause(
             "Unable to load test file: " + file + " (" + error.getMessage() + ")", error);
       }
-      Matcher namespace = TEST_NAMESPACE.matcher(source);
-      if (namespace.find()
-          && namespace.group(1).matches("[A-Za-z0-9_.-]+")
-          && !value.hasArrayElements()) {
+      try {
+        return parseResult(file, value);
+      } catch (HaraException directResultFailure) {
+        // Native Test files finish with Test/run or Test/check.  Source files that
+        // use code.test facts return an ordinary value and retain the old fallback.
+        Matcher namespace = TEST_NAMESPACE.matcher(source);
+        if (!namespace.find() || !namespace.group(1).matches("[A-Za-z0-9_.-]+")) {
+          throw directResultFailure;
+        }
         try {
           value = context.eval(HaraLanguage.ID, testRunSource(namespace.group(1)));
         } catch (RuntimeException error) {
@@ -80,8 +85,8 @@ public final class HaraNativeTestRunner {
                   + ")",
               error);
         }
+        return parseResult(file, value);
       }
-      return parseResult(file, value);
     }
   }
 
@@ -178,7 +183,7 @@ public final class HaraNativeTestRunner {
       Object status = lookup(summary, "status");
       Object countsValue = lookup(summary, "counts");
       if (!(status instanceof Keyword) || !(countsValue instanceof IMapType counts)) {
-        throw new HaraException("code.test/run result is missing :status or :counts");
+        throw new HaraException("test summary is missing :status or :counts");
       }
       int passedFacts = number(counts, "passed", 0);
       int failedFacts = number(counts, "failed", 0);
@@ -237,7 +242,7 @@ public final class HaraNativeTestRunner {
     }
 
     throw new HaraException(
-        "test file must return a code.test/run summary or test result vector");
+        "test file must return a Test/run summary or Test/check result vector");
   }
 
   private static final Pattern PRINTED_SUMMARY =

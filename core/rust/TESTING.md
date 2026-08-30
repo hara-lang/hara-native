@@ -13,9 +13,43 @@ cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- eval "(+ 20 
 ```
 
 The CLI suite checks generic command parsing, a nonempty serial test selection,
-unknown-group rejection, failure summaries, and verified archive installation.
-The raw-Wasm suite checks the host and HARP boundary without an embedded
-Foundation package.
+unknown-group rejection, failure summaries, local source-package archive build,
+and verified archive installation. The raw-Wasm suite checks the host and HARP
+boundary without an embedded Foundation package.
+
+## Native Test runner
+
+```text
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- test --project /path/to/project
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- test --project /path/to/project --file test/example/math_test.hal
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- test-json fixtures.json smoke
+```
+
+The project runner discovers only the `:project/test-paths` from `project.edn`,
+loads the project source catalog, and evaluates each selected Test file in a
+fresh runtime. A test file must finish with a `Test/run` summary or a
+`Test/check` Result vector. The native registry uses `:desc` as the canonical
+fact identity, preserves supplied `:meta` such as `:refer` and `:id`, and
+retains `:name` only as a compatibility alias. `Test/run` never accepts an ad
+hoc case vector; use `Test/check` for that legacy shape.
+
+## Native publication client
+
+```text
+make test-signer
+make test-publication
+```
+
+`hara-native signer` manages a local development key and preserves the legacy
+stdin/stdout `HARA_SIGNER` protocol for compatible external clients.
+`hara-native id enroll` and `hara-native publish` use that signer directly in
+the native process: they do not create a child signer process. The signer tests
+prove a generated 0600 private seed derives the reported public key, an emitted
+signature verifies against that key, and a publisher key id cannot escape the
+EDN response. The publication target covers native command parsing and the
+in-process enrollment signer against exact canonical enrollment bytes. It does
+not contact the identity or registry services. Publication workflow and
+production-key guidance live in [PUBLISHING.md](../../PUBLISHING.md).
 
 ## JVM host
 
@@ -24,9 +58,11 @@ make test-jvm
 java -jar core/java/target/hara-native-jvm-0.1.0.jar eval "(+ 20 22)"
 ```
 
-The Maven suite is explicitly scoped to the native CLI serial runner and HARP
-manifest/install integrity checks. Source-library conformance is owned by the
-Hara package repository.
+The Maven suite is explicitly scoped to the native CLI serial runner, HARP
+manifest/install integrity checks, and the JVM-native Test registry runner.
+The JVM test proves that a direct `Test/register` / `Test/run` file preserves
+`:desc`, `:refer`, and `:id` metadata through the isolated host result. Source
+library conformance is owned by the Hara package repository.
 
 ## Native conformance
 
@@ -74,11 +110,14 @@ make test-conformance
 make test-conformance-full
 ```
 
-Do not add `.hal` fixtures or Foundation calls. Registry material belongs under
-`specs/language/registry` as a verbatim, non-executable provenance import;
-HLC1 contains only the adopted, generated HBC0 cases. HLC1 covers the core
-parser/evaluator and ABI lowering; standard-library and source-package
-semantics remain outside the source-free host boundary.
+Do not add `.hal` fixtures or Foundation calls to `core/rust`. Registry material
+belongs under `specs/language/registry` as a verbatim, non-executable
+provenance import; HLC1 contains only the adopted, generated HBC0 cases. HLC1
+covers the core parser/evaluator and ABI lowering; standard-library and
+source-package semantics remain outside the source-free host boundary. The
+root `examples/` directory is the only exception in the repository: its source
+projects are explicit package smoke fixtures and are not Cargo or release
+inputs.
 
 Use `test-conformance-full` when a capability-bound operation needs its
 deterministic trusted-provider profile. The strict portable artifact must still
@@ -126,9 +165,11 @@ manifests and prebuilt Wasm façades are fetched as verified HARP packages from
 ## Source-free boundary
 
 ```text
-test -z "$(find . -type f -name '*.hal' -print -quit)"
+test -z "$(find . -path './examples' -prune -o -type f -name '*.hal' -print -quit)"
 test -z "$(find providers -type f \( -name 'project.edn' -o -name 'extension.edn' -o -name 'provider.sha256' \) -print -quit)"
 ```
 
-Both commands must succeed. The CI workflow also scans native build inputs for
-the old source-root and embedded-bundle paths.
+Both commands must succeed. The first intentionally prunes the root smoke
+fixtures while rejecting HAL everywhere that can feed the native host. The CI
+workflow also scans native build inputs for the old source-root and
+embedded-bundle paths.
