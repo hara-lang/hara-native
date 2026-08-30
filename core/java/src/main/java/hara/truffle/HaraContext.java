@@ -773,11 +773,17 @@ public final class HaraContext {
 
   private HaraNamespace nativeBaseNamespaceValue(Object value, String operation) {
     Object raw = HaraBox.unwrap(value);
-    if (!(raw instanceof HaraNamespace namespace)
-        || namespaces.get(namespace.name()) != namespace) {
+    if (!(raw instanceof HaraNamespace namespace)) {
       throw new HaraException("Base/" + operation + " expects a Namespace value");
     }
-    return namespace;
+    HaraNamespace current = namespaces.get(namespace.name());
+    if (current == null) {
+      throw new HaraException("Base/" + operation + " expects a Namespace value");
+    }
+    // Declaration rollback restores the namespace registry from a snapshot. Namespace values
+    // name their target, so a handle captured before that rollback must resolve to the restored
+    // namespace instead of becoming an invalid object-identity token.
+    return current;
   }
 
   private Symbol nativeBaseSymbol(Object value, String operation) {
@@ -988,12 +994,13 @@ public final class HaraContext {
     if (values.length != 2) {
       throw new HaraException("Base/with-declaration expects Namespace and a zero-argument function");
     }
-    nativeBaseNamespaceValue(values[0], "with-declaration");
+    HaraNamespace target = nativeBaseNamespaceValue(values[0], "with-declaration");
     Object thunk = HaraBox.unwrap(values[1]);
     if (!isNativeFunctionValue(thunk)) {
       throw new HaraException("Base/with-declaration expects a zero-argument function");
     }
-    return withDeclarationTransaction(() -> invokeCallable(thunk, new Object[0]));
+    return inNativeBaseNamespace(
+        target, () -> withDeclarationTransaction(() -> invokeCallable(thunk, new Object[0])));
   }
 
   private HaraProtocolInvoker nativeBaseProtocolImplementation(Object value) {
@@ -1049,42 +1056,68 @@ public final class HaraContext {
                 }));
   }
 
+  private HaraMultiFunction nativeBaseMultimethodValue(
+      HaraNamespace target, Object value, String operation) {
+    Object raw = HaraBox.unwrap(value);
+    HaraVar variable;
+    if (raw instanceof HaraVar supplied) {
+      variable = supplied;
+    } else if (raw instanceof Symbol symbol) {
+      String namespaceName =
+          symbol.getNamespace() == null ? target.name() : symbol.getNamespace();
+      HaraNamespace namespace = namespaces.get(namespaceName);
+      variable = namespace == null ? null : namespace.lookup(symbol.getName());
+    } else {
+      throw new HaraException(
+          "Base/" + operation + " expects a multimethod symbol or Var");
+    }
+    Object resolved = variable == null ? null : HaraBox.unwrap(variable.deref());
+    if (!(resolved instanceof HaraMultiFunction multimethod)) {
+      throw new HaraException("Base/" + operation + " expects an existing multimethod");
+    }
+    return multimethod;
+  }
+
   private Object nativeBaseMultimethod(Object[] values) {
     if (values.length != 3) {
-      throw new HaraException("Base/multimethod expects Namespace, symbol, and dispatch function");
+      throw new HaraException("Base/multimethod expects Namespace, name, and dispatch function");
     }
     HaraNamespace target = nativeBaseNamespaceValue(values[0], "multimethod");
     Symbol symbol = nativeBaseSymbol(values[1], "multimethod");
     Object dispatch = HaraBox.unwrap(values[2]);
     if (!isNativeFunctionValue(dispatch)) {
-      throw new HaraException("Base/multimethod expects a dispatch function");
+      throw new HaraException("Base/multimethod expects Namespace, name, and dispatch function");
     }
-    return withDeclarationTransaction(
+    return inNativeBaseNamespace(
+        target,
         () ->
-            inNativeBaseNamespace(
-                target, () -> define(symbol, new HaraMultiFunction(this, dispatch))));
+            withDeclarationTransaction(
+                () -> {
+                  HaraMultiFunction multimethod = new HaraMultiFunction(this, dispatch);
+                  target.define(symbol.getName(), multimethod, null, definitionOrigin);
+                  return multimethod;
+                }));
   }
 
   private Object nativeBaseMethod(Object[] values) {
     if (values.length != 4) {
-      throw new HaraException("Base/method expects Namespace, multimethod, dispatch value, and function");
+      throw new HaraException(
+          "Base/method expects Namespace, multimethod, dispatch value, and function");
     }
     HaraNamespace target = nativeBaseNamespaceValue(values[0], "method");
-    Symbol symbol = nativeBaseSymbol(values[1], "method");
+    HaraMultiFunction multimethod = nativeBaseMultimethodValue(target, values[1], "method");
     Object implementation = HaraBox.unwrap(values[3]);
     if (!isNativeFunctionValue(implementation)) {
-      throw new HaraException("Base/method expects an implementation function");
+      throw new HaraException(
+          "Base/method expects Namespace, multimethod, dispatch value, and function");
     }
-    return withDeclarationTransaction(
+    Object dispatchValue = HaraBox.unwrap(values[2]);
+    return inNativeBaseNamespace(
+        target,
         () ->
-            inNativeBaseNamespace(
-                target,
+            withDeclarationTransaction(
                 () -> {
-                  HaraVar variable = target.lookup(symbol.getName());
-                  if (variable == null || !(variable.deref() instanceof HaraMultiFunction multimethod)) {
-                    throw new HaraException("Base/method expects an existing multimethod");
-                  }
-                  multimethod.addMethod(HaraBox.unwrap(values[2]), implementation);
+                  multimethod.addMethod(dispatchValue, implementation);
                   return null;
                 }));
   }
@@ -7563,8 +7596,14 @@ public final class HaraContext {
       throw new HaraException(
           "protocol/arity: " + protocolName + "/" + methodName + " expects a receiver");
     }
-    HaraVar variable = resolve(Symbol.create(protocolName));
-    if (variable == null || !(variable.get() instanceof HaraProtocol)) {
+    HaraProtocol protocol = protocol(protocolName);
+    if (protocol == null) {
+      HaraVar variable = resolve(Symbol.create(protocolName));
+      if (variable != null && variable.get() instanceof HaraProtocol resolved) {
+        protocol = resolved;
+      }
+    }
+    if (protocol == null) {
       throw new HaraException("Missing protocol: " + protocolName);
     }
     Object receiver = HaraBox.unwrap(values[0]);
@@ -7610,7 +7649,7 @@ public final class HaraContext {
             pointer, HaraBox.unwrap(arguments[0]), "pointer/invoke", invokeArguments);
       }
     }
-    return ((HaraProtocol) variable.get()).invoke(methodName, receiver, arguments);
+    return protocol.invoke(methodName, receiver, arguments);
   }
 
   private hara.lang.data.Pointer requirePointer(Object value, String operation) {
