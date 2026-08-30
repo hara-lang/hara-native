@@ -62,16 +62,19 @@ jobs:
           set -euo pipefail
           git fetch origin release --tags --force
           test "$(git rev-parse origin/release)" = "$RELEASE_COMMIT"
-          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
-            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          if ! git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            git tag "$RELEASE_TAG" "$RELEASE_COMMIT"
+            git push origin "refs/tags/${RELEASE_TAG}"
+            git fetch origin --tags --force
+          fi
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          if gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = true
             printf 'resuming=true\n' >> "$GITHUB_OUTPUT"
           else
-            gh release create "$RELEASE_TAG" --draft --target "$RELEASE_COMMIT" \
+            gh release create "$RELEASE_TAG" --draft --verify-tag \
               --title "Hara Native ${RELEASE_VERSION}" \
               --notes "Release publication in progress for ${RELEASE_COMMIT}."
-            git fetch origin --tags --force
-            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
             printf 'resuming=false\n' >> "$GITHUB_OUTPUT"
           fi
 
