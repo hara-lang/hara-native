@@ -171,7 +171,7 @@ fn direct_native_compiles_async_try_finally_with_recur() {
     let runtime = Runtime::core();
     runtime
         .compile_bytecode(
-            "(fn [resolve reject] (try (if true resolve reject) (catch Exception error error)))",
+            "(fn [resolve reject] (try (if true resolve reject) (catch error error)))",
         )
         .expect("catch bindings must remain visible in nested functions");
     let program = runtime
@@ -197,7 +197,7 @@ fn direct_native_keeps_unbound_reads_catchable_at_runtime() {
     enable_native(&mut runtime);
     assert_eq!(
         runtime
-            .eval_direct_native("(try (missing-value) (catch Throwable error true))")
+            .eval_direct_native("(try (missing-value) (catch error true))")
             .unwrap(),
         "true"
     );
@@ -289,10 +289,10 @@ fn direct_native_eval_native_batches_macroexpansion_validation() {
     enable_native(&mut runtime);
     let source =
         "(ns example.direct-macro (:require [std.lib.collection :as collection]))
-         [(try (do (macroexpand (quote (collection/select {:a 1} :a))) false) (catch Throwable error true))
-          (try (do (macroexpand (quote (collection/select {} [:walk]))) false) (catch Throwable error true))
-          (try (do (macroexpand (quote (collection/transform {} [:walk :a] inc))) false) (catch Throwable error true))
-          (try (do (macroexpand (quote (collection/select {} [1.5]))) false) (catch Throwable error true))]";
+         [(try (do (macroexpand (quote (collection/select {:a 1} :a))) false) (catch error true))
+          (try (do (macroexpand (quote (collection/select {} [:walk]))) false) (catch error true))
+          (try (do (macroexpand (quote (collection/transform {} [:walk :a] inc))) false) (catch error true))
+          (try (do (macroexpand (quote (collection/select {} [1.5]))) false) (catch error true))]";
     let result = runtime.eval_native(source);
     assert_eq!(result.unwrap(), "[true true true true]");
     assert_eq!(runtime.native_execution_telemetry().invocations, 1);

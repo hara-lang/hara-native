@@ -54,9 +54,11 @@ impl Compiler {
             }
         }
         let body = &children[1..body_end.max(1)];
-        // Parse clauses. Shapes mirror the fiber: (catch name body) is the
-        // implicit Exception clause; (catch Class name body...) dispatches
-        // on a class symbol. Finally bodies concatenate.
+        // Parse clauses. Hara owns a deliberately small catch form:
+        // (catch name handler). The binding catches an Exception and the
+        // handler is one form (use do for a multi-form handler). In
+        // particular, the Clojure (catch Class name body...) spelling is
+        // invalid rather than guessed from its symbols.
         let mut catches: Vec<(String, String, Position, Vec<Child>)> = Vec::new();
         let mut finally_body: Vec<Child> = Vec::new();
         for clause in &children[body_end.max(1)..] {
@@ -78,89 +80,26 @@ impl Compiler {
                 finally_body.extend_from_slice(&clause_children[1..]);
                 continue;
             }
-            if clause_children.len() < 3 {
+            if clause_children.len() != 3 {
                 return Err(CompileError::new(
                     CompileErrorKind::Arity,
-                    "catch expects class, name, and body",
+                    "catch expects a binding symbol and one handler form",
                     Some(clause.span.start),
                 ));
             }
-            let implicit_catch = match clause_children.get(1).map(|child| &child.form) {
-                Some(Form::Symbol(name)) if !is_exception_class(name) => {
-                    clause_children.len() == 3
-                        || !matches!(
-                            clause_children.get(2).map(|child| &child.form),
-                            Some(Form::Symbol(_))
-                        )
-                }
-                _ => false,
+            let Form::Symbol(name) = clause_children[1].form else {
+                return Err(CompileError::new(
+                    CompileErrorKind::Arity,
+                    "catch binding must be symbol",
+                    Some(clause_children[1].span.start),
+                ));
             };
-            if implicit_catch {
-                let Form::Symbol(name) = clause_children[1].form else {
-                    return Err(CompileError::new(
-                        CompileErrorKind::Arity,
-                        "catch name must be symbol",
-                        Some(clause.span.start),
-                    ));
-                };
-                catches.push((
-                    "Exception".to_string(),
-                    name.clone(),
-                    clause_children[1].span.start,
-                    clause_children[2..].to_vec(),
-                ));
-            } else if clause_children.len() >= 4 {
-                let selector = match clause_children[1].form {
-                    Form::Symbol(class) => class.clone(),
-                    Form::Keyword(code) if code.contains('/') => format!(":{code}"),
-                    Form::Vector(codes)
-                        if !codes.is_empty()
-                            && codes.iter().all(
-                                |code| matches!(code, Form::Keyword(name) if name.contains('/')),
-                            ) =>
-                    {
-                        let selectors = codes
-                            .iter()
-                            .map(|code| match code {
-                                Form::Keyword(name) => format!(":{name}"),
-                                _ => unreachable!(),
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        format!("[{selectors}]")
-                    }
-                    _ => {
-                        return Err(CompileError::new(
-                            CompileErrorKind::Arity,
-                            if matches!(clause_children[1].form, Form::Symbol(_)) {
-                                "catch selector must be a namespaced keyword, a non-empty vector of namespaced keywords, or omitted"
-                            } else {
-                                "catch class must be symbol"
-                            },
-                            Some(clause_children[1].span.start),
-                        ))
-                    }
-                };
-                let Form::Symbol(name) = clause_children[2].form else {
-                    return Err(CompileError::new(
-                        CompileErrorKind::Arity,
-                        "catch name must be symbol",
-                        Some(clause_children[2].span.start),
-                    ));
-                };
-                catches.push((
-                    selector,
-                    name.clone(),
-                    clause_children[2].span.start,
-                    clause_children[3..].to_vec(),
-                ));
-            } else {
-                return Err(CompileError::new(
-                    CompileErrorKind::Arity,
-                    "catch expects class, name, and body",
-                    Some(clause.span.start),
-                ));
-            }
+            catches.push((
+                "Exception".to_string(),
+                name.clone(),
+                clause_children[1].span.start,
+                clause_children[2..].to_vec(),
+            ));
         }
 
         let has_finally = !finally_body.is_empty();
@@ -300,11 +239,4 @@ impl Compiler {
         self.ctx_mut().fallthrough = false;
         Ok(())
     }
-}
-
-fn is_exception_class(name: &str) -> bool {
-    matches!(
-        name,
-        "Exception" | "Throwable" | "std.native.Exception" | "std.native.Throwable"
-    )
 }

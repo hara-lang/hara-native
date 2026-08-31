@@ -832,39 +832,34 @@ fn workload_disassembly_is_deterministic() {
 #[test]
 fn throw_and_catch_basics() {
     assert_eq!(
-        eval("(try (throw (ex :test/failed {:value 41})) (catch Exception error (+ (:value (ex-data error)) 1)))"),
+        eval("(try (throw (ex :test/failed {:value 41})) (catch error (+ (:value (ex-data error)) 1)))"),
         "42"
     );
-    // The implicit (catch name body) form matches Exception.
+    // Hara catch binds one error name and evaluates one handler form.
     assert_eq!(
         eval("(try (throw (ex :test/failed {})) (catch error (:ex/code (ex-data error))))"),
         ":test/failed"
     );
     // First matching catch wins; later clauses do not run.
     assert_eq!(
-        eval("(try (throw (ex :test/failed {:value 41})) (catch Exception a 41) (catch Exception b 42))"),
+        eval("(try (throw (ex :test/failed {:value 41})) (catch a 41) (catch b 42))"),
         "41"
     );
-    // A non-matching class falls through to the next clause.
-    assert_eq!(
-        eval("(try (throw (ex :test/failed {:value 41})) (catch :problem/value error 0) (catch Exception error (+ (:value (ex-data error)) 1)))"),
-        "42"
-    );
-    // A body value passes through an unmatched-catch try unchanged.
-    assert_eq!(eval("(try 7 (catch Exception e 0))"), "7");
+    // A body value passes through a catch-bearing try unchanged.
+    assert_eq!(eval("(try 7 (catch e 0))"), "7");
 }
 
 #[test]
 fn catch_binds_runtime_error_messages() {
     // Runtime errors bind the message string.
     assert_eq!(
-        eval("(try (/ 1 0) (catch Exception error error))"),
+        eval("(try (/ 1 0) (catch error error))"),
         "\"division by zero\""
     );
     // Errors crossing a closure call bind the bare message string, not a
     // rendered composite.
     assert_eq!(
-        eval("(try ((fn [] (/ 1 0))) (catch Exception e e))"),
+        eval("(try ((fn [] (/ 1 0))) (catch e e))"),
         "\"division by zero\""
     );
 }
@@ -872,14 +867,6 @@ fn catch_binds_runtime_error_messages() {
 #[test]
 fn uncaught_throws_propagate() {
     assert_eval_error("(throw (ex :test/failed {}))", "thrown:");
-    assert_eval_error(
-        "(try (throw (ex :test/failed {})) (catch :problem/value error 0))",
-        "thrown:",
-    );
-    assert_eval_error(
-        "(try (try (throw (ex :test/failed {})) (catch :problem/value error 0)) (catch :problem/value error 0))",
-        "thrown:",
-    );
 }
 
 #[test]
@@ -889,19 +876,19 @@ fn finally_semantics() {
     assert_eq!(eval("(try 42 43 (finally 0 1))"), "43");
     // Finally runs after a caught error without changing the outcome.
     assert_eq!(
-        eval("(try (throw (ex :test/failed {:value 41})) (catch Exception error (+ (:value (ex-data error)) 1)) (finally 0))"),
+        eval("(try (throw (ex :test/failed {:value 41})) (catch error (+ (:value (ex-data error)) 1)) (finally 0))"),
         "42"
     );
     // An in-flight error rethrows with its identity after finally.
     assert_eq!(
-        eval("(try (try (throw (ex :test/original {})) (finally 0)) (catch Exception e (:ex/code (ex-data e))))"),
+        eval("(try (try (throw (ex :test/original {})) (finally 0)) (catch e (:ex/code (ex-data e))))"),
         ":test/original"
     );
     // An error in finally replaces the in-flight outcome (first error
     // short-circuits, matching the fiber).
     assert_eval_error("(try 1 (finally (throw (ex :test/finally {}))))", "thrown:");
     assert_eval_error(
-        "(try (throw (ex :test/body {})) (catch Exception e (throw (ex :test/catch {}))))",
+        "(try (throw (ex :test/body {})) (catch e (throw (ex :test/catch {}))))",
         "thrown:",
     );
     assert_eval_error(
@@ -914,12 +901,12 @@ fn finally_semantics() {
 fn exceptions_cross_function_boundaries() {
     // try inside a function body.
     assert_eq!(
-        eval("((fn [] (try (throw (ex :test/failed {})) (catch Exception e 42))))"),
+        eval("((fn [] (try (throw (ex :test/failed {})) (catch e 42))))"),
         "42"
     );
     // A throw inside a called function unwinds to the caller's catch.
     assert_eq!(
-        eval("(try ((fn [] (throw (ex :test/failed {:value 41})))) (catch Exception e (+ (:value (ex-data e)) 1)))"),
+        eval("(try ((fn [] (throw (ex :test/failed {:value 41})))) (catch e (+ (:value (ex-data e)) 1)))"),
         "42"
     );
 }
@@ -928,12 +915,12 @@ fn exceptions_cross_function_boundaries() {
 fn recur_through_catch_only_try() {
     // recur in the body of a catch-only try stays in tail position.
     assert_eq!(
-        eval("(loop [i 0] (try (if (< i 3) (recur (+ i 1)) i) (catch Exception e -1)))"),
+        eval("(loop [i 0] (try (if (< i 3) (recur (+ i 1)) i) (catch e -1)))"),
         "3"
     );
     // recur in a catch body of a catch-only try.
     assert_eq!(
-        eval("(loop [i 0] (try (throw (ex :test/failed {})) (catch Exception e (if (< i 3) (recur (+ i 1)) i))))"),
+        eval("(loop [i 0] (try (throw (ex :test/failed {})) (catch e (if (< i 3) (recur (+ i 1)) i))))"),
         "3"
     );
 }
@@ -941,20 +928,25 @@ fn recur_through_catch_only_try() {
 #[test]
 fn try_compile_errors() {
     // Body forms cannot follow catch/finally clauses.
-    let (kind, message) = compile_error("(try 1 (catch Exception e 2) 3)");
+    let (kind, message) = compile_error("(try 1 (catch e 2) 3)");
     assert_eq!(kind, CompileErrorKind::Arity);
     assert!(
         message.contains("try clauses must follow body"),
         "{message}"
     );
     // Malformed catch clauses are compile errors.
-    let (_, message) = compile_error("(try 1 (catch 42 e 0))");
-    assert!(message.contains("catch class must be symbol"), "{message}");
-    let (_, message) = compile_error("(try 1 (catch Exception 42 0))");
-    assert!(message.contains("catch name must be symbol"), "{message}");
+    let (_, message) = compile_error("(try 1 (catch 42 0))");
+    assert!(message.contains("catch binding must be symbol"), "{message}");
     let (_, message) = compile_error("(try 1 (catch))");
     assert!(
-        message.contains("catch expects class, name, and body"),
+        message.contains("catch expects a binding symbol and one handler form"),
+        "{message}"
+    );
+    // Hara rejects Clojure's optional class slot rather than guessing
+    // whether the first symbol is a class or the binding.
+    let (_, message) = compile_error("(try 1 (catch Throwable error 0))");
+    assert!(
+        message.contains("catch expects a binding symbol and one handler form"),
         "{message}"
     );
     // throw takes exactly one value.

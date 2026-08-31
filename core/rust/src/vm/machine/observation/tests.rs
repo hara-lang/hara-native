@@ -79,7 +79,7 @@ fn static_calls_report_enter_and_return_boundaries() {
 
 #[test]
 fn caught_runtime_errors_report_an_exact_unwind_boundary() {
-    let mut machine = machine("(try (/ 1 0) (catch Exception error 42))");
+    let mut machine = machine("(try (/ 1 0) (catch error 42))");
     let (kinds, value) = run_observed(&mut machine);
     assert_eq!(value, Value::Number(42));
     assert!(kinds.contains(&ObservationEventKind::ExceptionUnwind));

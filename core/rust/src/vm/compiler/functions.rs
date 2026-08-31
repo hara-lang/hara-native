@@ -449,13 +449,13 @@ impl Compiler {
                                 self.collect_syntax_free(template, bound, free);
                             }
                         }
-                        // Catch clauses bind their name symbol over the
-                        // clause body; the class symbol is not a
-                        // reference. Shapes mirror the compiler:
-                        // (catch name body) or (catch Class name body...).
+                        // Catch clauses bind their name symbol over their
+                        // one handler form. Malformed shapes are rejected
+                        // by compile_try; collect free names conservatively
+                        // until that validation runs.
                         "catch" => {
                             let marked = bound.len();
-                            if matches!(children.get(1).map(|child| child.form), Some(Form::Symbol(name)) if !matches!(name.as_str(), "Exception" | "Throwable" | "std.native.Exception" | "std.native.Throwable"))
+                            if matches!(children.get(1).map(|child| child.form), Some(Form::Symbol(_)))
                             {
                                 if let Form::Symbol(name) = children[1].form {
                                     bound.push(name.clone());

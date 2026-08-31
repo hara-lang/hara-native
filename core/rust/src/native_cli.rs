@@ -18,8 +18,8 @@ mod arguments;
 mod documentation;
 mod kernel;
 use arguments::{
-    boolean as boolean_argument, keyword, optional_string as optional_string_argument,
-    string as string_argument, strings as strings_argument, strings_value, tap_value,
+    keyword, optional_string as optional_string_argument, string as string_argument,
+    strings as strings_argument, strings_value, tap_value,
 };
 pub use documentation::{Documentation, DocumentationValue};
 use kernel::kernel_call;

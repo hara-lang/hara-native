@@ -244,6 +244,7 @@ struct PackageCatalogEntry {
     descriptor: Value,
     name: Option<String>,
     namespaces: Vec<String>,
+    root: Option<std::path::PathBuf>,
     state: String,
     pending: Option<Promise>,
 }
@@ -260,6 +261,7 @@ impl PackageCatalog {
         name: Option<String>,
         descriptor: Value,
         namespaces: Vec<String>,
+        root: Option<std::path::PathBuf>,
     ) {
         self.entries.borrow_mut().insert(
             coordinate,
@@ -267,6 +269,7 @@ impl PackageCatalog {
                 descriptor,
                 name,
                 namespaces,
+                root,
                 state: "available".into(),
                 pending: None,
             },
@@ -333,7 +336,43 @@ impl PackageCatalog {
             .map(|entry| entry.state.clone())
     }
 
-    fn set_state(&self, coordinate: &str, state: &str) {
+    fn read(&self, descriptor: &Value, relative: &str) -> Result<Vec<u8>, String> {
+        let coordinate = package_descriptor_coordinate(descriptor)
+            .ok_or("std.native.Package/read descriptor requires :package/coordinate")?;
+        let expected_version = package_descriptor_version(descriptor)
+            .ok_or("std.native.Package/read descriptor requires :package/version")?;
+        let entries = self.entries.borrow();
+        let entry = entries
+            .get(&coordinate)
+            .ok_or_else(|| format!("package/not-installed: {coordinate}"))?;
+        let actual_version = package_descriptor_version(&entry.descriptor)
+            .ok_or_else(|| format!("package/invalid-descriptor: {coordinate}"))?;
+        if expected_version != actual_version {
+            return Err(format!(
+                "package/version-mismatch: {coordinate} expected {expected_version}, installed {actual_version}"
+            ));
+        }
+        let root = entry
+            .root
+            .as_ref()
+            .ok_or_else(|| format!("package/content-unavailable: {coordinate}"))?;
+        let path = std::path::Path::new(relative);
+        if path.is_absolute()
+            || path.as_os_str().is_empty()
+            || path.components().any(|component| {
+                matches!(component, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_))
+            })
+        {
+            return Err("std.native.Package/read path must be a non-empty safe relative path".into());
+        }
+        std::fs::read(root.join(path)).map_err(|error| {
+            format!(
+                "package/content-read-failed: {coordinate} {relative}: {error}"
+            )
+        })
+    }
+
+    pub(crate) fn set_state(&self, coordinate: &str, state: &str) {
         if let Some(entry) = self.entries.borrow_mut().get_mut(coordinate) {
             entry.state = state.into();
         }
@@ -375,6 +414,16 @@ fn package_descriptor_coordinate(descriptor: &Value) -> Option<String> {
     match values.get(&Value::Keyword("package/coordinate".into())) {
         Some(Value::String(coordinate)) => Some(coordinate.clone()),
         Some(Value::Symbol(coordinate)) => Some(coordinate.as_str().to_owned()),
+        _ => None,
+    }
+}
+
+fn package_descriptor_version(descriptor: &Value) -> Option<String> {
+    let Value::OrderedMap(values) = descriptor else {
+        return None;
+    };
+    match values.get(&Value::Keyword("package/version".into())) {
+        Some(Value::String(version)) => Some(version.clone()),
         _ => None,
     }
 }
@@ -446,7 +495,7 @@ pub fn native_type_values() -> Vec<(String, Value)> {
     NATIVE_DECLARATIONS
         .iter()
         .map(|declaration| {
-            (declaration.name.to_owned(), native_descriptor_value(*declaration))
+            (declaration.qualified_name(), native_descriptor_value(*declaration))
         })
         .collect()
 }
@@ -459,16 +508,17 @@ pub fn native_type_values() -> Vec<(String, Value)> {
 pub fn native_manifest() -> Vec<String> {
     let mut manifest = NATIVE_DECLARATIONS
         .iter()
+        .filter(|declaration| declaration.namespace == "std.native")
         .map(|declaration| {
             let mut methods = declaration
                 .methods
                 .iter()
-                .map(|method| format!("std.native.{}/{}", declaration.name, method))
+                .map(|method| format!("{}/{method}", declaration.qualified_name()))
                 .collect::<Vec<_>>();
             methods.sort();
             format!(
-                "native|std.native.{}|{}|{}|annotation|{}",
-                declaration.name,
+                "native|{}|{}|{}|annotation|{}",
+                declaration.qualified_name(),
                 native_availability_name(declaration.availability),
                 declaration.capability.unwrap_or_default(),
                 methods.join(",")
@@ -598,14 +648,14 @@ pub(crate) fn canonical_native_symbol(symbol: &str) -> Option<String> {
     }
     if NATIVE_DECLARATIONS
         .iter()
-        .any(|declaration| declaration.name == symbol)
+        .any(|declaration| declaration.namespace == "std.native" && declaration.name == symbol)
     {
         return Some(format!("std.native.{symbol}"));
     }
     let (native_type, method) = symbol.rsplit_once('/')?;
     NATIVE_DECLARATIONS
         .iter()
-        .any(|declaration| declaration.name == native_type)
+        .any(|declaration| declaration.namespace == "std.native" && declaration.name == native_type)
         .then(|| format!("std.native.{native_type}/{method}"))
 }
 
@@ -619,10 +669,9 @@ pub(crate) fn canonical_intrinsic_symbol(symbol: &str) -> Option<String> {
 /// `std.foundation` has been loaded.
 pub(crate) fn canonical_intrinsic_callable_symbol(symbol: &str) -> Option<String> {
     let canonical = canonical_intrinsic_symbol(symbol).unwrap_or_else(|| symbol.to_owned());
-    if let Some(native) = canonical.strip_prefix("std.native.") {
-        let (native_type, method) = native.split_once('/')?;
+    if let Some((native_type, method)) = canonical.rsplit_once('/') {
         if NATIVE_DECLARATIONS.iter().any(|declaration| {
-            declaration.name == native_type && declaration.method(method)
+            declaration.qualified_name() == native_type && declaration.method(method)
         }) {
             return Some(canonical);
         }

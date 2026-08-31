@@ -7,6 +7,7 @@ use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) mod guest;
+pub mod plan;
 mod scope;
 mod types;
 

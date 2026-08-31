@@ -13,6 +13,9 @@ const FOUNDATION_INTRINSICS: &[&str] = &[
 pub fn install_foundation_intrinsics(namespaces: &NamespaceRegistry<Value>) {
     let foundation = namespaces.find_or_create("std.foundation");
     for declaration in NATIVE_DECLARATIONS {
+        if declaration.namespace != "std.native" {
+            continue;
+        }
         let qualified = Symbol::parse(&declaration.qualified_name());
         if let Some(descriptor) = namespaces.resolve(&qualified) {
             foundation.map_var(Symbol::parse(declaration.name), descriptor);
@@ -63,13 +66,15 @@ pub fn minimal_namespace_registry() -> NamespaceRegistry<Value> {
             },
         );
         namespace.map_var(Symbol::parse(&name), var);
-        namespaces
-            .register_global_alias(declaration.name, declaration.qualified_name())
-            .unwrap_or_else(|error| panic!("{error}"));
+        if declaration.namespace == "std.native" {
+            namespaces
+                .register_global_alias(declaration.name, declaration.qualified_name())
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
         for method in declaration.methods {
             namespace.intern_with_origin(
                 method,
-                native_type_function_value(declaration.name, method)
+                native_qualified_type_function_value(&declaration.qualified_name(), method)
                     .unwrap_or_else(|error| panic!("{error}")),
                 VarOrigin::RuntimePrimitive,
             );

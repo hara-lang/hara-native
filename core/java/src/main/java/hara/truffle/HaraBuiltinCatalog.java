@@ -63,8 +63,29 @@ import java.util.Set;
 @HaraNativeBinding(namespace = "std.native", name = "Algo", methods = {"deque", "ordered-map", "ordered-set", "priority-map", "queue", "sorted-map", "sorted-set", "trie", "deque?", "ordered-map?", "ordered-set?", "priority-map?", "queue?", "sorted-map?", "sorted-set?", "trie?"})
 @HaraNativeBinding(namespace = "std.native", name = "Iter", methods = {"seq", "iter", "iter-finite?", "iter-materialize", "iter-next?", "iter-next", "iter-close", "iter-concat", "iter-map", "iter-filter", "iter-take-while", "iter-drop-while", "iter-mapcat", "iter-keep", "iter-interpose", "iter-interleave", "iter-every?", "iter-any?", "iter-take", "iter-drop", "iter-zip", "iter-cycle", "iter-partition-pair", "iter-partition-all", "iter-partition", "iter-range", "iter-constantly", "iter-repeatedly", "iter-iterate"})
 @HaraNativeBinding(
-    namespace = "std.native", name = "Work", availability = HaraAvailability.CAPABILITY_GATED,
-    capability = "native-runtime", methods = {"default-host", "current-run", "cancelled?", "check-cancelled", "deadline-nanos", "emit", "submit-child", "on-close"})
+    namespace = "std.native", name = "Work", methods = {
+        "default-host", "reset-host", "current-run", "cancelled?", "check-cancelled", "deadline-nanos", "emit", "submit-child", "on-close",
+        "plan?", "configured", "pure", "step", "chain", "all", "each", "filter", "fold", "choose", "graph", "batch", "bind", "ensure", "await", "encode-hta", "decode-hta",
+        "new-registry", "bind-target", "unbind-target", "target", "target-names", "reset-registry",
+        "new-runtime", "runtime-registry", "evaluate", "reset-runtime", "submit-plan"})
+@HaraNativeBinding(namespace = "std.lang", name = "BookMeta", methods = {"create", "data"})
+@HaraNativeBinding(namespace = "std.lang", name = "BookEntry", methods = {"create", "data"})
+@HaraNativeBinding(namespace = "std.lang", name = "BookModule", methods = {"create", "data"})
+@HaraNativeBinding(namespace = "std.lang", name = "Book", methods = {"create", "data"})
+@HaraNativeBinding(
+    namespace = "std.lang", name = "Library", methods = {
+        "create", "config", "install", "remove", "resolve", "books", "snapshot", "restore",
+        "reset", "state"})
+@HaraNativeBinding(namespace = "std.lang", name = "Snapshot", methods = {"data"})
+@HaraNativeBinding(namespace = "std.lang", name = "Compiler", methods = {"create", "config"})
+@HaraNativeBinding(namespace = "std.lang", name = "Compilation", methods = {"create", "data"})
+@HaraNativeBinding(
+    namespace = "std.lang", name = "Runtime", methods = {
+        "create", "config", "state", "reset", "close", "closed?"})
+@HaraNativeBinding(
+    namespace = "std.lang", name = "Harness", methods = {
+        "create", "config", "library", "runtime", "snapshot", "restore", "reset", "close",
+        "closed?", "state"})
 final class HaraBuiltinCatalog {
   /** Closed accounting inventory for forms; this is not a std.native type. */
   static final Map<String, java.util.List<String>> LANGUAGE_BUILTINS =

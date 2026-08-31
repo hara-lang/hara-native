@@ -223,7 +223,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             println!("package install: {}", installed.display());
             Ok(())
         }
-        Some("publish") => publish(&args[1..]),
+        Some("publish") => Err(github_workflow_required()),
         Some("tap") => tap_command(&args[1..]),
         Some("registry") => registry_command(&args[1..]),
         Some("sync") | Some("add") | Some("remove") | Some("update") | Some("search")
@@ -244,12 +244,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
                  tap add NAME --registry URL --identity URL --identity-key SHA256\n\
                  tap mirror add NAME [--registry URL] [--identity URL]\n\
                  tap list|remove NAME|verify NAME\n\
-                 publish [--tap official] [--dry-run] [PATH]"
+                 publication is requested by the source repository's protected GitHub workflow"
             );
             Ok(())
         }
         Some(command) => Err(format!("unknown package command: {command}")),
     }
+}
+
+pub fn github_workflow_required() -> String {
+    "package/publication-github-workflow-required: push a signed source tag; the repository workflow must create the reviewed hara-packages receipt".into()
 }
 
 #[derive(Default)]
@@ -471,27 +475,6 @@ pub fn tap_command(args: &[String]) -> Result<(), String> {
             Err("usage: hara package tap <bootstrap|init|add|mirror add|remove|list|verify>".into())
         }
     }
-}
-
-fn publish(args: &[String]) -> Result<(), String> {
-    let tap_name = optional_option(args, "--tap")
-        .map(|name| {
-            if name == "official" {
-                "hara".into()
-            } else {
-                name
-            }
-        })
-        .unwrap_or_else(|| "hara".into());
-    let dry_run = args.iter().any(|arg| arg == "--dry-run");
-    let path = args
-        .iter()
-        .skip(1)
-        .find(|arg| !arg.starts_with('-') && *arg != &tap_name)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    println!("{}", publish_path(&path, &tap_name, dry_run)?);
-    Ok(())
 }
 
 pub fn publish_path(path: &Path, tap_name: &str, dry_run: bool) -> Result<String, String> {

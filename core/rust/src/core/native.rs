@@ -2336,6 +2336,7 @@ fn native_regex_values(operation: &str, values: Vec<Value>) -> Result<Value, Str
             };
             let regexp =
                 regex::Regex::new(&pattern).map_err(|error| format!("invalid regexp: {error}"))?;
+            let replacement = native_regexp_replacement(&replacement, regexp.captures_len());
             Ok(Value::String(
                 regexp
                     .replace_all(&input, replacement.as_str())
@@ -2374,6 +2375,52 @@ fn native_regex_values(operation: &str, values: Vec<Value>) -> Result<Value, Str
         }
         _ => Err(format!("unknown std.native.RegExp operation: {operation}")),
     }
+}
+
+/// Converts Hara's numbered `$1` capture syntax to the unambiguous form used
+/// by Rust's regex engine. A following digit extends the capture number only
+/// when that group exists, matching Java/Clojure replacement semantics.
+fn native_regexp_replacement(replacement: &str, capture_count: usize) -> String {
+    let mut output = String::with_capacity(replacement.len());
+    let mut characters = replacement.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if character != '$' {
+            output.push(character);
+            continue;
+        }
+
+        let Some(first) = characters.peek().and_then(|value| value.to_digit(10)) else {
+            output.push('$');
+            continue;
+        };
+        let mut capture = first as usize;
+        if capture >= capture_count {
+            output.push('$');
+            continue;
+        }
+        characters.next();
+
+        while let Some(next) = characters.peek().and_then(|value| value.to_digit(10)) {
+            let Some(candidate) = capture
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(next as usize))
+            else {
+                break;
+            };
+            if candidate >= capture_count {
+                break;
+            }
+            capture = candidate;
+            characters.next();
+        }
+
+        output.push_str("${");
+        output.push_str(&capture.to_string());
+        output.push('}');
+    }
+
+    output
 }
 
 fn file_error(operation: &str, error: FileError) -> String {
@@ -3499,6 +3546,20 @@ fn native_package_values(
         .unwrap_or(operation);
     if matches!(method, "build" | "inspect" | "seal" | "inspect-seal" | "verify-seal") {
         return native_package_artifact_values(method, arguments);
+    }
+    if method == "read" {
+        if arguments.len() != 2 {
+            return Err("std.native.Package/read expects an exact descriptor and relative path".into());
+        }
+        let Value::OrderedMap(_) = &arguments[0] else {
+            return Err("std.native.Package/read expects an exact package descriptor".into());
+        };
+        let Value::String(relative) = &arguments[1] else {
+            return Err("std.native.Package/read expects a relative path string".into());
+        };
+        return package_catalog()
+            .read(&arguments[0], relative)
+            .map(Value::Bytes);
     }
     let expected = match method {
         "catalog" => 0..=0,

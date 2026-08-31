@@ -2,6 +2,7 @@ use crate::kernel::{parse_forms, Form};
 use crate::package_manifest::PackageManifest;
 use crate::project::Project;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -10,16 +11,19 @@ use zip::{CompressionMethod, ZipWriter};
 
 pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), String> {
     let mut entries = Vec::new();
+    let mut source_entries = Vec::new();
     if let Some(source_files) = &project.source_files {
         for source_file in source_files {
-            collect_source_file(source_file, &project.root, &mut entries)?;
+            collect_source_file(source_file, &project.root, &mut source_entries)?;
         }
     } else {
         for source_path in &project.source_paths {
             let base = project.root.join(source_path);
-            collect_files(&base, &project.root, false, false, &mut entries)?;
+            collect_files(&base, &project.root, false, false, &mut source_entries)?;
         }
     }
+    let source_entries = source_entries.into_iter().collect::<BTreeSet<_>>();
+    entries.extend(source_entries.iter().cloned());
     for artifact_path in &project.artifact_paths {
         let base = project.root.join(artifact_path);
         collect_files(&base, &project.root, true, true, &mut entries)?;
@@ -87,6 +91,11 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
         }
         archive_entries.push((archive, source));
     }
+    let source_archive_paths = archive_entries
+        .iter()
+        .filter(|(_, source)| source_entries.contains(source))
+        .map(|(archive, _)| archive.clone())
+        .collect::<BTreeSet<_>>();
     archive_entries.sort_by(|left, right| left.0.cmp(&right.0));
     for pair in archive_entries.windows(2) {
         if pair[0].0 == pair[1].0 {
@@ -111,7 +120,10 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
     #[cfg(feature = "bytecode-vm")]
     let compilation_context = contents
         .iter()
-        .filter(|(path, _)| path.extension().and_then(|value| value.to_str()) == Some("hal"))
+        .filter(|(path, _)| {
+            source_archive_paths.contains(path)
+                && path.extension().and_then(|value| value.to_str()) == Some("hal")
+        })
         .map(|(path, bytes)| {
             let source = std::str::from_utf8(bytes)
                 .map_err(|_| format!("HAL package resource is not UTF-8: {}", path.display()))?;
@@ -144,7 +156,9 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
         let definitions = crate::package_catalog::definitions_from_packages_edn(&profile_source)?;
         let mut available = Vec::new();
         for (path, bytes) in &contents {
-            if path.extension().and_then(|value| value.to_str()) != Some("hal") {
+            if !source_archive_paths.contains(path)
+                || path.extension().and_then(|value| value.to_str()) != Some("hal")
+            {
                 continue;
             }
             let source = std::str::from_utf8(bytes)
@@ -175,7 +189,9 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
     if let Some((_, selected)) = &selected_package {
         let mut filtered = Vec::with_capacity(contents.len());
         for (path, bytes) in contents {
-            if path.extension().and_then(|value| value.to_str()) == Some("hal") {
+            if source_archive_paths.contains(&path)
+                && path.extension().and_then(|value| value.to_str()) == Some("hal")
+            {
                 let source = std::str::from_utf8(&bytes).map_err(|_| {
                     format!("HAL package resource is not UTF-8: {}", path.display())
                 })?;
@@ -198,7 +214,10 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
     #[cfg(feature = "bytecode-vm")]
     let hal_modules = contents
         .iter()
-        .filter(|(path, _)| path.extension().and_then(|value| value.to_str()) == Some("hal"))
+        .filter(|(path, _)| {
+            source_archive_paths.contains(path)
+                && path.extension().and_then(|value| value.to_str()) == Some("hal")
+        })
         .map(|(path, bytes)| {
             let source = std::str::from_utf8(bytes)
                 .map_err(|_| format!("HAL package resource is not UTF-8: {}", path.display()))?;
@@ -241,7 +260,7 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
             ));
         }
     }
-    let generated_manifest = package_manifest(project, &contents)?;
+    let generated_manifest = package_manifest(project, &contents, &source_archive_paths)?;
     let package_edn = PackageManifest::parse(&generated_manifest)
         .map_err(|error| error.to_string())?
         .canonical_edn()
@@ -282,11 +301,13 @@ pub(super) fn inspect_archive(path: &Path) -> Result<String, String> {
 pub(super) fn package_manifest(
     project: &Project,
     contents: &[(PathBuf, Vec<u8>)],
+    source_archive_paths: &BTreeSet<PathBuf>,
 ) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut files = String::new();
     let mut resources = Vec::new();
     for (path, bytes) in contents {
+        let source_module = source_archive_paths.contains(path);
         let path = path_to_slash(path).expect("validated project-relative path");
         hasher.update(path.as_bytes());
         hasher.update([0]);
@@ -297,7 +318,7 @@ pub(super) fn package_manifest(
             hex(&Sha256::digest(bytes)),
             bytes.len()
         ));
-        if path.ends_with(".hal") {
+        if source_module && path.ends_with(".hal") {
             let source = std::str::from_utf8(bytes)
                 .map_err(|_| format!("HAL package resource is not UTF-8: {path}"))?;
             if let Some(namespace) = hal_namespace(source)
@@ -305,7 +326,7 @@ pub(super) fn package_manifest(
             {
                 resources.push((namespace, path.clone()));
             }
-        } else if path.ends_with(".halc") || path.ends_with(".hir") {
+        } else if source_module && (path.ends_with(".halc") || path.ends_with(".hir")) {
             let module = crate::kernel::halc::decode_halc(bytes)
                 .map_err(|error| format!("cannot decode package resource {path}: {error}"))?;
             resources.push((module.namespace, path.clone()));

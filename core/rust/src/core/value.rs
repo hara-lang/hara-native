@@ -737,7 +737,7 @@ pub(crate) fn native_fixed_variadic_function(
     Value::Function(function)
 }
 
-pub(crate) fn native_variadic_function(
+pub fn native_variadic_function(
     name: &str,
     callback: impl Fn(Vec<Value>) -> Result<Value, String> + 'static,
 ) -> Value {
@@ -1078,20 +1078,28 @@ pub(crate) fn direct_function_value(name: &str) -> Option<Value> {
 /// so makes alias precedence part of native invocation and permits facade →
 /// native → facade recursion.
 pub fn native_type_function_value(native_type: &str, method: &str) -> Result<Value, String> {
+    native_qualified_type_function_value(&format!("std.native.{native_type}"), method)
+}
+
+/// Creates a callable owned by an explicitly qualified native type namespace.
+///
+/// Short type names deliberately continue to resolve through the closed
+/// `std.native` compatibility surface; new host families must opt into their
+/// full identity to avoid global alias collisions.
+pub fn native_qualified_type_function_value(
+    native_type: &str,
+    method: &str,
+) -> Result<Value, String> {
     let declaration = NATIVE_DECLARATIONS
         .iter()
-        .find(|declaration| declaration.name == native_type)
+        .find(|declaration| declaration.qualified_name() == native_type)
         .ok_or_else(|| {
-            format!(
-                "missing annotated native declaration: std.native.{native_type}/{method}"
-            )
+            format!("missing annotated native declaration: {native_type}/{method}")
         })?;
     if !declaration.method(method) {
-        return Err(format!(
-            "unknown annotated native method: std.native.{native_type}/{method}"
-        ));
+        return Err(format!("unknown annotated native method: {native_type}/{method}"));
     }
-    (declaration.provider)(native_type, method)
+    (declaration.provider)(declaration.name, method)
 }
 
 fn native_display_name(native_type: &str, method: &str) -> String {
@@ -1414,6 +1422,10 @@ fn native_work_provider(_native_type: &str, method: &str) -> Result<Value, Strin
         .find(|(name, _)| *name == method)
         .map(|(_, value)| value)
         .ok_or_else(|| format!("unknown std.native.Work operation: {method}"))
+}
+
+fn native_lang_provider(native_type: &str, method: &str) -> Result<Value, String> {
+    crate::lang_harness::function(native_type, method)
 }
 
 fn native_coroutine_create(arguments: Vec<Value>) -> Result<Value, String> {
@@ -2020,8 +2032,13 @@ pub(crate) fn bytecode_dynamic_unbind(name: &str) -> Result<(), String> {
     var.unbind().map(|_| ())
 }
 
-fn macro_environment() -> Result<Value, String> {
+fn macro_environment(env: &HashMap<String, Value>) -> Result<Value, String> {
     let namespace = namespace_registry()?.current().name().as_str().to_owned();
+    let locals = env
+        .iter()
+        .filter(|(name, value)| !name.contains('/') && !matches!(value, Value::Var(_)))
+        .map(|(name, _)| (Value::Symbol(Symbol::from(name.clone())), Value::Nil))
+        .collect::<Vec<_>>();
     let entries = vec![
         (
             Value::Keyword(Keyword::from("ns")),
@@ -2029,7 +2046,7 @@ fn macro_environment() -> Result<Value, String> {
         ),
         (
             Value::Keyword(Keyword::from("locals")),
-            Value::OrderedMap(Box::new(POrderedMap::new())),
+            Value::OrderedMap(Box::new(POrderedMap::from_iter(locals))),
         ),
         (
             Value::Keyword(Keyword::from("aliases")),
@@ -2042,7 +2059,7 @@ fn macro_environment() -> Result<Value, String> {
 fn macroexpand_call(
     name: &str,
     invocation: &[Form],
-    _env: &mut HashMap<String, Value>,
+    env: &mut HashMap<String, Value>,
 ) -> Result<Option<Form>, String> {
     let function = match resolve_macro(name) {
         Some(function) => function,
@@ -2050,7 +2067,7 @@ fn macroexpand_call(
     };
     let mut arguments = Vec::with_capacity(invocation.len() + 1);
     arguments.push(form_to_value(&Form::List(invocation.to_vec()))?);
-    arguments.push(macro_environment()?);
+    arguments.push(macro_environment(env)?);
     for form in &invocation[1..] {
         arguments.push(form_to_value(form)?);
     }

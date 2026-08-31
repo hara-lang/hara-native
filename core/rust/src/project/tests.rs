@@ -67,7 +67,7 @@ fn creates_and_validates_an_empty_lock() {
     let lock = sync_lock(&project, LockMode::Default).unwrap();
     assert_eq!(
         fs::read_to_string(&lock).unwrap(),
-        "{:lock/format \"0.0.0-alpha\" :packages {}}\n"
+        "{:lock/format \"0.0.1\" :packages {}}\n"
     );
     sync_lock(&project, LockMode::Frozen).unwrap();
     fs::remove_dir_all(root).unwrap();

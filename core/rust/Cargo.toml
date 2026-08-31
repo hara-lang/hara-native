@@ -167,5 +167,9 @@ path = "tests/native_test_registry.rs"
 name = "native-command"
 path = "tests/native_command.rs"
 
+[[test]]
+name = "native-lang"
+path = "tests/native_lang.rs"
+
 [dev-dependencies]
 hara-hta = { version = "0.1.13", path = "crates/hta-codec" }

@@ -3039,7 +3039,7 @@ mod tests {
                 5,
                 "(try \
                    (throw (ex-info \"bad input\" {:kind :invalid})) \
-                   (catch Throwable error \
+                   (catch error \
                      [(ex-message error) \
                       (ex-data error)]))",
             )

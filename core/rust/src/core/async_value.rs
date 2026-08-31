@@ -43,6 +43,12 @@ fn portable_type_keyword(value: &Value) -> Result<Keyword, String> {
         Value::Iterator(_) => "Iterator",
         Value::Var(_) => "Var",
         Value::Namespace(_) => "Namespace",
+        Value::Extension(value) if value.provider == "std.native.Work" => {
+            return Ok(Keyword::from(format!("std.native.{}", value.type_name)));
+        }
+        Value::Extension(value) if value.provider == "std.lang" => {
+            return Ok(Keyword::from(format!("std.lang.{}", value.type_name)));
+        }
         Value::Extension(_) => "Extension",
         Value::StructType(_) => "StructType",
         Value::Struct(value) => return Ok(Keyword::from(value.ty.name.replace('/', "."))),

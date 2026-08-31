@@ -1,12 +1,16 @@
+use super::plan::{target_name, WorkOperation, WorkPlan, WorkRegistry, WorkRuntime};
 use super::*;
 use crate::core::{ExtensionValue, ProtocolRegistry};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 const PROVIDER: &str = "std.native.Work";
 const HOST_TYPE: &str = "WorkHost";
 const RUN_TYPE: &str = "WorkRun";
+const REGISTRY_TYPE: &str = "WorkRegistry";
+const RUNTIME_TYPE: &str = "WorkRuntime";
 const HOST_HANDLE: u64 = 1;
 
 #[derive(Default)]
@@ -14,6 +18,10 @@ struct GuestHandles {
     next: u64,
     runs: HashMap<u64, WorkRun>,
     ids: HashMap<String, u64>,
+    registries: HashMap<u64, WorkRegistry>,
+    registry_ids: HashMap<usize, u64>,
+    targets: HashMap<(u64, String), Value>,
+    runtimes: HashMap<u64, WorkRuntime>,
 }
 
 thread_local! {
@@ -38,6 +46,18 @@ pub(crate) fn values() -> Vec<(&'static str, Value)> {
             "default-host",
             crate::core::native_function("std.native.Work/default-host", 0, |_| {
                 Ok(default_host_value())
+            }),
+        ),
+        (
+            "reset-host",
+            crate::core::native_function("std.native.Work/reset-host", 1, |arguments| {
+                host(&arguments, 1)?.reset();
+                HANDLES.with(|handles| {
+                    let mut handles = handles.borrow_mut();
+                    handles.runs.clear();
+                    handles.ids.clear();
+                });
+                Ok(arguments[0].clone())
             }),
         ),
         (
@@ -145,7 +165,409 @@ pub(crate) fn values() -> Vec<(&'static str, Value)> {
                 })))
             }),
         ),
+        (
+            "plan?",
+            crate::core::native_function("std.native.Work/plan?", 1, |arguments| {
+                Ok(Value::Bool(
+                    WorkPlan::from_value(arguments[0].clone()).is_ok(),
+                ))
+            }),
+        ),
+        (
+            "configured",
+            crate::core::native_function("std.native.Work/configured", 2, |arguments| {
+                Ok(
+                    WorkPlan::generic(WorkOperation::parse(&arguments[0])?, arguments[1].clone())?
+                        .value(),
+                )
+            }),
+        ),
+        (
+            "pure",
+            crate::core::native_function("std.native.Work/pure", 1, |arguments| {
+                Ok(WorkPlan::pure(target_name(arguments[0].clone())?)?.value())
+            }),
+        ),
+        (
+            "step",
+            crate::core::native_function("std.native.Work/step", 1, |arguments| {
+                Ok(WorkPlan::step(target_name(arguments[0].clone())?)?.value())
+            }),
+        ),
+        (
+            "chain",
+            crate::core::native_function("std.native.Work/chain", 1, |arguments| {
+                Ok(WorkPlan::chain(plan_children(arguments[0].clone())?)?.value())
+            }),
+        ),
+        (
+            "all",
+            crate::core::native_function("std.native.Work/all", 1, |arguments| {
+                Ok(WorkPlan::all(plan_children(arguments[0].clone())?)?.value())
+            }),
+        ),
+        (
+            "each",
+            crate::core::native_function("std.native.Work/each", 1, |arguments| {
+                Ok(WorkPlan::each(work_plan(arguments[0].clone())?)?.value())
+            }),
+        ),
+        (
+            "filter",
+            crate::core::native_function("std.native.Work/filter", 1, |arguments| {
+                Ok(WorkPlan::filter(work_plan(arguments[0].clone())?)?.value())
+            }),
+        ),
+        (
+            "fold",
+            crate::core::native_function("std.native.Work/fold", 2, |arguments| {
+                Ok(WorkPlan::fold(arguments[0].clone(), work_plan(arguments[1].clone())?)?.value())
+            }),
+        ),
+        (
+            "choose",
+            crate::core::native_function("std.native.Work/choose", 2, |arguments| {
+                Ok(
+                    WorkPlan::choose(work_plan(arguments[0].clone())?, arguments[1].clone())?
+                        .value(),
+                )
+            }),
+        ),
+        (
+            "graph",
+            crate::core::native_function("std.native.Work/graph", 2, |arguments| {
+                Ok(WorkPlan::generic(
+                    WorkOperation::Graph,
+                    work_map([
+                        ("work/nodes", arguments[0].clone()),
+                        ("work/order", arguments[1].clone()),
+                    ]),
+                )?
+                .value())
+            }),
+        ),
+        (
+            "batch",
+            crate::core::native_function("std.native.Work/batch", 1, |arguments| {
+                Ok(WorkPlan::generic(
+                    WorkOperation::Batch,
+                    work_map([("work/process", arguments[0].clone())]),
+                )?
+                .value())
+            }),
+        ),
+        (
+            "bind",
+            crate::core::native_function("std.native.Work/bind", 2, |arguments| {
+                Ok(WorkPlan::bind(
+                    work_plan(arguments[0].clone())?,
+                    target_name(arguments[1].clone())?,
+                )?
+                .value())
+            }),
+        ),
+        (
+            "ensure",
+            crate::core::native_function("std.native.Work/ensure", 2, |arguments| {
+                Ok(WorkPlan::ensure(
+                    work_plan(arguments[0].clone())?,
+                    work_plan(arguments[1].clone())?,
+                )?
+                .value())
+            }),
+        ),
+        (
+            "await",
+            crate::core::native_function("std.native.Work/await", 1, |arguments| {
+                Ok(WorkPlan::await_(arguments[0].clone())?.value())
+            }),
+        ),
+        (
+            "encode-hta",
+            crate::core::native_function("std.native.Work/encode-hta", 1, |arguments| {
+                Ok(Value::Bytes(work_plan(arguments[0].clone())?.encode_hta()?))
+            }),
+        ),
+        (
+            "decode-hta",
+            crate::core::native_function("std.native.Work/decode-hta", 1, |arguments| {
+                let Value::Bytes(bytes) = &arguments[0] else {
+                    return Err("decode-hta expects bytes".into());
+                };
+                Ok(WorkPlan::decode_hta(bytes)?.value())
+            }),
+        ),
+        (
+            "new-registry",
+            crate::core::native_function("std.native.Work/new-registry", 0, |_| {
+                Ok(register_registry(WorkRegistry::default()))
+            }),
+        ),
+        (
+            "bind-target",
+            crate::core::native_function("std.native.Work/bind-target", 3, |arguments| {
+                let registry = registry(&arguments, 3)?;
+                let handle = registry_handle(&arguments[0])?;
+                let name = target_name(arguments[1].clone())?;
+                let Value::Function(function) = arguments[2].clone() else {
+                    return Err("bind-target requires a callable target".into());
+                };
+                registry.bind(
+                    name.clone(),
+                    Rc::new(move |input, _| {
+                        crate::core::invoke_function_sync(function.clone(), vec![input])
+                            .map_err(work_failure)
+                    }),
+                )?;
+                HANDLES.with(|handles| {
+                    handles
+                        .borrow_mut()
+                        .targets
+                        .insert((handle, name), arguments[2].clone());
+                });
+                Ok(arguments[0].clone())
+            }),
+        ),
+        (
+            "unbind-target",
+            crate::core::native_function("std.native.Work/unbind-target", 2, |arguments| {
+                let handle = registry_handle(&arguments[0])?;
+                let name = target_name(arguments[1].clone())?;
+                let removed = registry(&arguments, 2)?.unbind(&name);
+                if removed {
+                    HANDLES.with(|handles| {
+                        handles.borrow_mut().targets.remove(&(handle, name));
+                    });
+                }
+                Ok(Value::Bool(removed))
+            }),
+        ),
+        (
+            "target",
+            crate::core::native_function("std.native.Work/target", 2, |arguments| {
+                let handle = registry_handle(&arguments[0])?;
+                let name = target_name(arguments[1].clone())?;
+                Ok(HANDLES.with(|handles| {
+                    handles
+                        .borrow()
+                        .targets
+                        .get(&(handle, name))
+                        .cloned()
+                        .unwrap_or(Value::Nil)
+                }))
+            }),
+        ),
+        (
+            "target-names",
+            crate::core::native_function("std.native.Work/target-names", 1, |arguments| {
+                Ok(Value::Vector(
+                    registry(&arguments, 1)?
+                        .target_names()
+                        .into_iter()
+                        .map(Value::String)
+                        .collect(),
+                ))
+            }),
+        ),
+        (
+            "reset-registry",
+            crate::core::native_function("std.native.Work/reset-registry", 1, |arguments| {
+                registry(&arguments, 1)?.reset();
+                let handle = registry_handle(&arguments[0])?;
+                HANDLES.with(|handles| {
+                    handles
+                        .borrow_mut()
+                        .targets
+                        .retain(|(target_handle, _), _| *target_handle != handle)
+                });
+                Ok(arguments[0].clone())
+            }),
+        ),
+        (
+            "new-runtime",
+            crate::core::native_fixed_variadic_function(
+                "std.native.Work/new-runtime",
+                1,
+                |arguments| {
+                    if !(1..=2).contains(&arguments.len()) {
+                        return Err(
+                            "new-runtime expects a registry and optional suspension target".into(),
+                        );
+                    }
+                    let registry = registry(&arguments, 1)?;
+                    let runtime = match arguments.get(1).cloned() {
+                        None | Some(Value::Nil) => WorkRuntime::new(registry),
+                        Some(Value::Function(function)) => WorkRuntime::new(registry)
+                            .with_suspension(Rc::new(move |wait, _| {
+                                crate::core::invoke_function_sync(function.clone(), vec![wait])
+                                    .map_err(work_failure)
+                            })),
+                        _ => return Err("new-runtime suspension target must be callable".into()),
+                    };
+                    Ok(register_runtime(runtime))
+                },
+            ),
+        ),
+        (
+            "runtime-registry",
+            crate::core::native_function("std.native.Work/runtime-registry", 1, |arguments| {
+                Ok(register_registry(runtime(&arguments, 1)?.registry()))
+            }),
+        ),
+        (
+            "evaluate",
+            crate::core::native_function("std.native.Work/evaluate", 3, |arguments| {
+                let run = process_work_host().submit_plan(
+                    runtime(&arguments, 3)?,
+                    work_plan(arguments[1].clone())?,
+                    arguments[2].clone(),
+                    WorkOptions::default(),
+                )?;
+                Ok(Value::Promise(run.work_result()))
+            }),
+        ),
+        (
+            "reset-runtime",
+            crate::core::native_function("std.native.Work/reset-runtime", 1, |arguments| {
+                let runtime = runtime(&arguments, 1)?;
+                let registry = runtime.registry();
+                runtime.reset();
+                clear_registry_target_values(&registry);
+                Ok(arguments[0].clone())
+            }),
+        ),
+        (
+            "submit-plan",
+            crate::core::native_fixed_variadic_function(
+                "std.native.Work/submit-plan",
+                4,
+                |arguments| {
+                    if !(4..=5).contains(&arguments.len()) {
+                        return Err(
+                            "submit-plan expects host, runtime, plan, input, and optional options"
+                                .into(),
+                        );
+                    }
+                    let options = arguments.get(4).cloned().unwrap_or(Value::Nil);
+                    let run = host(&arguments[..1], 1)?.submit_plan(
+                        runtime(&arguments[1..2], 1)?,
+                        work_plan(arguments[2].clone())?,
+                        arguments[3].clone(),
+                        work_options(&options)?,
+                    )?;
+                    Ok(register_run(run))
+                },
+            ),
+        ),
     ]
+}
+
+fn work_plan(value: Value) -> Result<WorkPlan, String> {
+    WorkPlan::from_value(value)
+}
+
+fn plan_children(value: Value) -> Result<Vec<WorkPlan>, String> {
+    let Value::Vector(values) = value else {
+        return Err("work/plan-invalid: work children must be a vector".into());
+    };
+    values.into_iter().map(work_plan).collect()
+}
+
+fn work_map(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+    Value::Map(
+        entries
+            .into_iter()
+            .map(|(name, value)| (Value::Keyword(name.into()), value))
+            .collect(),
+    )
+}
+
+fn extension_handle(value: &Value, type_name: &str) -> Result<u64, String> {
+    match value {
+        Value::Extension(extension)
+            if extension.provider == PROVIDER && extension.type_name == type_name =>
+        {
+            Ok(extension.handle)
+        }
+        _ => Err(format!(
+            "native {type_name} operation requires a native {type_name}"
+        )),
+    }
+}
+
+fn registry_handle(value: &Value) -> Result<u64, String> {
+    extension_handle(value, REGISTRY_TYPE)
+}
+
+fn registry(arguments: &[Value], arity: usize) -> Result<WorkRegistry, String> {
+    if arguments.len() != arity {
+        return Err(format!(
+            "native WorkRegistry operation expects {arity} arguments"
+        ));
+    }
+    let handle = registry_handle(&arguments[0])?;
+    HANDLES.with(|handles| {
+        handles
+            .borrow()
+            .registries
+            .get(&handle)
+            .cloned()
+            .ok_or_else(|| "native work registry handle is no longer available".into())
+    })
+}
+
+fn register_registry(registry: WorkRegistry) -> Value {
+    HANDLES.with(|handles| {
+        let mut handles = handles.borrow_mut();
+        if let Some(handle) = handles.registry_ids.get(&registry.identity()).copied() {
+            handles.registries.insert(handle, registry);
+            return extension(REGISTRY_TYPE, handle);
+        }
+        handles.next += 1;
+        let handle = handles.next;
+        handles.registry_ids.insert(registry.identity(), handle);
+        handles.registries.insert(handle, registry);
+        extension(REGISTRY_TYPE, handle)
+    })
+}
+
+fn clear_registry_target_values(registry: &WorkRegistry) {
+    HANDLES.with(|handles| {
+        let mut handles = handles.borrow_mut();
+        let Some(handle) = handles.registry_ids.get(&registry.identity()).copied() else {
+            return;
+        };
+        handles
+            .targets
+            .retain(|(target_handle, _), _| *target_handle != handle);
+    });
+}
+
+fn runtime(arguments: &[Value], arity: usize) -> Result<WorkRuntime, String> {
+    if arguments.len() != arity {
+        return Err(format!(
+            "native WorkRuntime operation expects {arity} arguments"
+        ));
+    }
+    let handle = extension_handle(&arguments[0], RUNTIME_TYPE)?;
+    HANDLES.with(|handles| {
+        handles
+            .borrow()
+            .runtimes
+            .get(&handle)
+            .cloned()
+            .ok_or_else(|| "native work runtime handle is no longer available".into())
+    })
+}
+
+fn register_runtime(runtime: WorkRuntime) -> Value {
+    HANDLES.with(|handles| {
+        let mut handles = handles.borrow_mut();
+        handles.next += 1;
+        let handle = handles.next;
+        handles.runtimes.insert(handle, runtime);
+        extension(RUNTIME_TYPE, handle)
+    })
 }
 
 fn host(arguments: &[Value], arity: usize) -> Result<WorkHost, String> {
@@ -409,6 +831,79 @@ pub(crate) fn install(protocols: &mut ProtocolRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn native(name: &str, arguments: Vec<Value>) -> Value {
+        let Value::Function(function) = values()
+            .into_iter()
+            .find(|(candidate, _)| *candidate == name)
+            .expect("native Work method must be registered")
+            .1
+        else {
+            panic!("native Work method must be a function");
+        };
+        crate::core::invoke_function_sync(function, arguments)
+            .unwrap_or_else(|error| panic!("native Work/{name} failed: {error}"))
+    }
+
+    #[test]
+    fn plan_registry_runtime_and_host_are_exercised_through_direct_native_methods() {
+        let registry = native("new-registry", vec![]);
+        let target =
+            crate::core::native_function("fixture/value", 1, |arguments| Ok(arguments[0].clone()));
+        native(
+            "bind-target",
+            vec![
+                registry.clone(),
+                Value::String("fixture/value".into()),
+                target,
+            ],
+        );
+        let plan = native("pure", vec![Value::String("fixture/value".into())]);
+        assert_eq!(native("plan?", vec![plan.clone()]), Value::Bool(true));
+        assert!(matches!(
+            native("encode-hta", vec![plan.clone()]),
+            Value::Bytes(_)
+        ));
+        let runtime = native("new-runtime", vec![registry.clone()]);
+        assert_eq!(native("runtime-registry", vec![runtime.clone()]), registry);
+        let promise = native(
+            "evaluate",
+            vec![runtime.clone(), plan.clone(), Value::Number(7)],
+        );
+        process_work_host().drain();
+        let Value::Promise(promise) = promise else {
+            panic!("Work/evaluate must return a promise");
+        };
+        assert_eq!(
+            promise.wait_state(),
+            PromiseState::Fulfilled(Value::Number(7))
+        );
+
+        let run = native(
+            "submit-plan",
+            vec![
+                default_host_value(),
+                runtime,
+                plan,
+                Value::Number(9),
+                Value::Map([].into_iter().collect()),
+            ],
+        );
+        assert!(matches!(
+            &run,
+            Value::Extension(value)
+                if value.provider == PROVIDER && value.type_name == RUN_TYPE
+        ));
+        process_work_host().drain();
+        let result = work_result(&[run]).expect("native work result must resolve");
+        let Value::Promise(result) = result else {
+            panic!("IWorkRun/work-result must return a promise");
+        };
+        assert_eq!(
+            result.wait_state(),
+            PromiseState::Fulfilled(Value::Number(9))
+        );
+    }
 
     #[test]
     fn guest_handles_are_opaque_and_stable_per_run() {

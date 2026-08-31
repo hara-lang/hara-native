@@ -11,6 +11,8 @@ import hara.lang.protocol.IStream;
 import hara.lang.protocol.IWorkHost;
 import hara.lang.protocol.IWorkRef;
 import hara.lang.protocol.IWorkRun;
+import hara.work.WorkPlan;
+import hara.work.WorkRuntime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -62,6 +64,7 @@ public final class HaraWorkHost implements IWorkHost {
   private static final Keyword CHILD_COUNT = Keyword.create("child-count");
   private static final Keyword DEADLINE_EXCEEDED = Keyword.create("deadline-exceeded");
   private static final Keyword HOST_STOPPED = Keyword.create("host-stopped");
+  private static final Keyword HOST_RESET = Keyword.create("host-reset");
   private static final Keyword EVENT_TYPE = Keyword.create("event", "type");
   private static final Keyword EVENT_RUN = Keyword.create("event", "run");
   private static final Keyword EVENT_SEQUENCE = Keyword.create("event", "sequence");
@@ -106,15 +109,25 @@ public final class HaraWorkHost implements IWorkHost {
         current != null && current.host == this && !truthy(option(options, DETACHED))
             ? current.run
             : null;
-    return workSubmit(context, parent, work, input, options);
+    return workSubmit(context, parent, work, input, options, null);
   }
 
   private IWorkRun workSubmit(
       HaraContext context, HaraWorkRun parent, Object work, Object input, Object options) {
+    return workSubmit(context, parent, work, input, options, null);
+  }
+
+  private IWorkRun workSubmit(
+      HaraContext context,
+      HaraWorkRun parent,
+      Object work,
+      Object input,
+      Object options,
+      Object suppliedExecutor) {
     if (!started.get()) {
       throw new HaraException("Native work host is stopped");
     }
-    Object executor = option(options, EXECUTE);
+    Object executor = suppliedExecutor == null ? option(options, EXECUTE) : suppliedExecutor;
     if (executor == null && work instanceof IFn<?, ?, ?>) {
       executor = work;
     }
@@ -151,6 +164,35 @@ public final class HaraWorkHost implements IWorkHost {
     }
     run.start();
     return run;
+  }
+
+  IWorkRun submitPlan(
+      HaraContext context, WorkRuntime runtime, WorkPlan plan, Object input, Object options) {
+    WorkContext current = CURRENT_CONTEXT.get();
+    HaraWorkRun parent =
+        current != null && current.host == this && !truthy(option(options, DETACHED))
+            ? current.run
+            : null;
+    Object executor =
+        context.libraryFunction(
+            "std.native.Work/plan-execute",
+            arguments -> {
+              WorkContext workContext = currentWorkContext();
+              if (workContext == null) {
+                throw new HaraException("plan execution requires an active native work context");
+              }
+              WorkRuntime.Context planContext =
+                  new WorkRuntime.Context(
+                      new AtomicBoolean(),
+                      event ->
+                          workContext.emit(
+                              event.type(), HaraPersistentValues.normalize(event.data())));
+              return context.promiseValue(
+                  runtime
+                      .evaluate(plan, arguments[1], planContext)
+                      .toCompletableFuture());
+            });
+    return workSubmit(context, parent, plan.value(), input, options, executor);
   }
 
   @Override
@@ -200,6 +242,15 @@ public final class HaraWorkHost implements IWorkHost {
   public IWorkHost kill() {
     started.set(false);
     for (HaraWorkRun run : runs.values()) run.requestCancellation(HOST_STOPPED);
+    return this;
+  }
+
+  /** Restore the process host to an accepting empty baseline. */
+  HaraWorkHost reset() {
+    List<HaraWorkRun> admitted = new ArrayList<>(runs.values());
+    runs.clear();
+    started.set(true);
+    for (HaraWorkRun run : admitted) run.requestCancellation(HOST_RESET);
     return this;
   }
 

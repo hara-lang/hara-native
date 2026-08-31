@@ -20,30 +20,34 @@ import java.util.Objects;
 @ExportLibrary(InteropLibrary.class)
 public final class HaraNativeType
     implements TruffleObject, IDisplay, INamespaced, IObjType {
+  private final String namespace;
   private final String name;
   private final List<String> methods;
   private final HaraAvailability availability;
   private final String capability;
   private final IMetadata metadata;
 
-  HaraNativeType(String name, List<String> methods) {
-    this(name, methods, HaraAvailability.PORTABLE, "", Map.Standard.EMPTY);
+  HaraNativeType(String namespace, String name, List<String> methods) {
+    this(namespace, name, methods, HaraAvailability.PORTABLE, "", Map.Standard.EMPTY);
   }
 
   HaraNativeType(
+      String namespace,
       String name,
       List<String> methods,
       HaraAvailability availability,
       String capability) {
-    this(name, methods, availability, capability, Map.Standard.EMPTY);
+    this(namespace, name, methods, availability, capability, Map.Standard.EMPTY);
   }
 
   private HaraNativeType(
+      String namespace,
       String name,
       List<String> methods,
       HaraAvailability availability,
       String capability,
       IMetadata metadata) {
+    this.namespace = Objects.requireNonNull(namespace);
     this.name = Objects.requireNonNull(name);
     this.methods = List.copyOf(methods);
     this.availability = Objects.requireNonNull(availability);
@@ -70,7 +74,7 @@ public final class HaraNativeType
 
   @Override
   public String getNamespace() {
-    return "std.native";
+    return namespace;
   }
 
   @Override
@@ -80,17 +84,17 @@ public final class HaraNativeType
 
   @Override
   public HaraNativeType withMeta(IMetadata metadata) {
-    return new HaraNativeType(name, methods, availability, capability, metadata);
+    return new HaraNativeType(namespace, name, methods, availability, capability, metadata);
   }
 
   @Override
   public long hashCalc(Constant.HashType type) {
-    return name.hashCode();
+    return Objects.hash(namespace, name);
   }
 
   @Override
   public String display() {
-    return "#<native-type std.native." + name + ">";
+    return "#<native-type " + namespace + "." + name + ">";
   }
 
   @ExportMessage
@@ -111,12 +115,14 @@ public final class HaraNativeType
 
   @Override
   public boolean equals(Object other) {
-    return other instanceof HaraNativeType type && name.equals(type.name);
+    return other instanceof HaraNativeType type
+        && namespace.equals(type.namespace)
+        && name.equals(type.name);
   }
 
   @Override
   public int hashCode() {
-    return name.hashCode();
+    return Objects.hash(namespace, name);
   }
 
   @Override

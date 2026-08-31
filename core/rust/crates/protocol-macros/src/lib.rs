@@ -145,10 +145,10 @@ fn expand_native_registry(mut input: ItemMod) -> Result<proc_macro2::TokenStream
                 "hara_native requires a provider function",
             )
         })?;
-        if namespace.value() != "std.native" {
+        if !matches!(namespace.value().as_str(), "std.native" | "std.lang") {
             return Err(Error::new_spanned(
                 &namespace,
-                "hara_native declarations must use the std.native namespace",
+                "hara_native declarations must use the std.native or std.lang namespace",
             ));
         }
         if name.value().is_empty() {
@@ -157,8 +157,12 @@ fn expand_native_registry(mut input: ItemMod) -> Result<proc_macro2::TokenStream
                 "hara_native requires a non-empty name",
             ));
         }
-        if !type_names.insert(name.value()) {
-            return Err(Error::new_spanned(&name, "duplicate hara_native type name"));
+        let qualified_name = format!("{}.{}", namespace.value(), name.value());
+        if !type_names.insert(qualified_name) {
+            return Err(Error::new_spanned(
+                &name,
+                "duplicate hara_native type name in namespace",
+            ));
         }
         if args.methods.is_empty() {
             return Err(Error::new_spanned(
