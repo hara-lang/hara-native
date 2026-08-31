@@ -281,6 +281,28 @@ fn validates_typed_recipes_and_installs_content_addressed_roots() {
 }
 
 #[test]
+fn publication_errors_include_the_registry_problem_body() {
+    assert_eq!(
+        publication_request_error(
+            b"curl: (22) The requested URL returned error: 400\n",
+            b"{\"error\":{\"code\":\"PUBLICATION_REJECTED\",\"message\":\"Publication authorization signature is invalid\"}}\n",
+        ),
+        "publication request failed: curl: (22) The requested URL returned error: 400: {\"error\":{\"code\":\"PUBLICATION_REJECTED\",\"message\":\"Publication authorization signature is invalid\"}}"
+    );
+}
+
+#[test]
+fn publication_error_diagnostics_are_bounded() {
+    let response = vec![b'x'; MAX_PUBLICATION_DIAGNOSTIC_BYTES + 1];
+    let diagnostic = publication_request_error(b"", &response);
+    assert_eq!(
+        diagnostic.len(),
+        "publication request failed: ".len() + MAX_PUBLICATION_DIAGNOSTIC_BYTES + "…".len()
+    );
+    assert!(diagnostic.ends_with('…'));
+}
+
+#[test]
 fn installs_semantic_packages_under_their_manifest_identity() {
     let root = fixture();
     fs::create_dir_all(root.join("config")).unwrap();

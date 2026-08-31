@@ -17,6 +17,8 @@ mod install;
 use archive::*;
 use install::{install_archive, install_archive_at, json_string, validate_recipe};
 
+const MAX_PUBLICATION_DIAGNOSTIC_BYTES: usize = 4096;
+
 /// Capability adapter used by the Hara-owned CLI policy. These functions
 /// expose package mechanics without parsing command-line arguments or writing
 /// user-facing output.
@@ -650,15 +652,33 @@ where
         .output()
         .map_err(|error| format!("cannot start publication client: {error}"))?;
     if !output.status.success() {
-        return Err(format!(
-            "publication request failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(publication_request_error(&output.stderr, &output.stdout));
     }
     Ok(format!(
         "publish requested: {}",
         String::from_utf8_lossy(&output.stdout).trim()
     ))
+}
+
+fn publication_request_error(stderr: &[u8], response: &[u8]) -> String {
+    let transport = publication_diagnostic(stderr);
+    let body = publication_diagnostic(response);
+    match (transport.is_empty(), body.is_empty()) {
+        (true, true) => "publication request failed".into(),
+        (false, true) => format!("publication request failed: {transport}"),
+        (true, false) => format!("publication request failed: {body}"),
+        (false, false) => format!("publication request failed: {transport}: {body}"),
+    }
+}
+
+fn publication_diagnostic(bytes: &[u8]) -> String {
+    let length = bytes.len().min(MAX_PUBLICATION_DIAGNOSTIC_BYTES);
+    let text = String::from_utf8_lossy(&bytes[..length]).trim().to_owned();
+    if bytes.len() > length && !text.is_empty() {
+        format!("{text}…")
+    } else {
+        text
+    }
 }
 
 /// Resolves the commit that a publication intent names. Untagged publication

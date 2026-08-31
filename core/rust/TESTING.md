@@ -55,7 +55,7 @@ production-key guidance live in [PUBLISHING.md](../../PUBLISHING.md).
 
 ```text
 make test-jvm
-java -jar core/java/target/hara-native-jvm-0.1.9.jar eval "(+ 20 22)"
+java -jar core/java/target/hara-native-jvm-0.1.11.jar eval "(+ 20 22)"
 ```
 
 The Maven suite is explicitly scoped to the native CLI serial runner, HARP
