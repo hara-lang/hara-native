@@ -39,7 +39,7 @@ fn source_index_path(project_root: &Path) -> Option<PathBuf> {
         .parent()
         .and_then(Path::parent)
         .is_some_and(|parent| parent.file_name().is_some_and(|name| name == "roots"));
-    (!installed).then(|| project_root.join("target/hara/source-catalog-v1.index"))
+    (!installed).then(|| project_root.join("target/hara-cache/source-catalog-v1.index"))
 }
 
 fn file_stamp(path: &Path) -> Option<FileStamp> {

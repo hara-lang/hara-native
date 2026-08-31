@@ -214,6 +214,10 @@ include!("core/package_tool.rs");
 pub(crate) fn package_tool_provider_values() -> Vec<(&'static str, Value)> {
     Vec::new()
 }
+#[cfg(any(not(feature = "bytecode-vm"), feature = "raw-wasm"))]
+pub(crate) fn hbx_operation(_operation: &str, _arguments: Vec<Value>) -> Result<Value, String> {
+    Err("std.native.HBX is unavailable in this runtime profile".into())
+}
 include!("core/inspection.rs");
 include!("core/environment.rs");
 include!("core/native.rs");

@@ -163,7 +163,7 @@ fn source_catalog_does_not_mutate_an_installed_package_root() {
             .collect::<Vec<_>>(),
         vec!["demo.main"]
     );
-    assert!(!root.join("target/hara/source-catalog-v1.index").exists());
+    assert!(!root.join("target/hara-cache/source-catalog-v1.index").exists());
     fs::remove_dir_all(root.ancestors().nth(3).unwrap()).unwrap();
 }
 

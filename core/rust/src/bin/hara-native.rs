@@ -563,9 +563,9 @@ fn install_bundle(archive: &Path) -> Result<PathBuf, String> {
     Ok(installed)
 }
 
-fn install_bundle_silent(archive: &Path) -> Result<PathBuf, String> {
+fn install_bundle_silent_at(archive: &Path, install_root: &Path) -> Result<PathBuf, String> {
     PackageManifest::read_archive(archive).map_err(|error| error.to_string())?;
-    package::install_path(archive)
+    package::install_path_at(archive, install_root)
 }
 
 fn run_bundle(archive: &Path, entry: Option<&str>) -> Result<(), String> {
@@ -1343,7 +1343,11 @@ fn main() {
 fn run_sealed_distribution(arguments: &[String]) -> Result<Option<i32>, String> {
     let native = env::current_exe()
         .map_err(|error| format!("cannot determine native launcher path: {error}"))?;
-    let Some(installed) = distribution::install_sealed(&native)? else {
+    let Some(manifest) = distribution::inspect_sealed(&native)? else {
+        return Ok(None);
+    };
+    let installation_root = sealed_installation_root(&package::install_root(), &manifest);
+    let Some(installed) = distribution::install_sealed_at(&native, &installation_root)? else {
         return Ok(None);
     };
     run_installed_distribution_roots(
@@ -1353,6 +1357,15 @@ fn run_sealed_distribution(arguments: &[String]) -> Result<Option<i32>, String> 
         arguments,
     )
     .map(Some)
+}
+
+fn sealed_installation_root(
+    install_root: &Path,
+    manifest: &distribution::SealedManifest,
+) -> PathBuf {
+    install_root
+        .join("sealed")
+        .join(manifest.payload_sha256.trim_start_matches("sha256:"))
 }
 
 fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, String> {
@@ -1366,7 +1379,8 @@ fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, Strin
     }
     let manifest = distribution::verify(&root, &native)?;
     let archive = root.join(&manifest.archive);
-    let installed = install_bundle_silent(&archive)?;
+    let installation_root = companion_installation_root(&package::install_root(), &manifest.archive_sha256);
+    let installed = install_bundle_silent_at(&archive, &installation_root)?;
     run_installed_distribution(&installed, &manifest.entry, arguments).map(Some)
 }
 
@@ -1412,13 +1426,20 @@ fn companion_root(native: &Path) -> Option<PathBuf> {
     bin.parent().map(Path::to_path_buf)
 }
 
+fn companion_installation_root(install_root: &Path, archive_sha256: &str) -> PathBuf {
+    install_root
+        .join("companion")
+        .join(archive_sha256.trim_start_matches("sha256:"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        companion_command_response, companion_host_action, companion_root, parse_arguments,
+        companion_command_response, companion_host_action, companion_installation_root,
+        companion_root, parse_arguments,
         parse_test_suite, reject_top_level_test_run, resp_launch, run_id, run_project_tests,
-        run_test_suite, select_test_cases, signer, start_companion_resp, Command,
-        CompanionHostAction,
+        run_test_suite, sealed_installation_root, select_test_cases, signer, start_companion_resp,
+        Command, CompanionHostAction,
     };
     use hara_native::{
         identity_tool, package,
@@ -1578,6 +1599,60 @@ mod tests {
         assert_eq!(
             companion_root(std::path::Path::new("target/hara-native")),
             None
+        );
+    }
+
+    #[test]
+    fn isolates_a_companion_archive_beneath_its_configured_package_root() {
+        assert_eq!(
+            companion_installation_root(std::path::Path::new("cache"), "sha256:archive"),
+            std::path::PathBuf::from("cache/companion/archive")
+        );
+    }
+
+    #[test]
+    fn failed_distribution_build_removes_its_staging_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-distribution-staging-{}",
+            std::process::id()
+        ));
+        let output = root.join("release");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/fixture")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main fixture.main :project/distribution {:launcher \"fixture\" :entry fixture.main/main} :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/fixture/main.hal"), ")\n").unwrap();
+
+        let host = std::env::current_exe().unwrap();
+        let result = hara_native::distribution::build(&root, &host, &output);
+        let staging = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".release.staging-"))
+            .collect::<Vec<_>>();
+        let output_exists = output.exists();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(result.is_err());
+        assert!(!output_exists);
+        assert!(staging.is_empty());
+    }
+
+    #[test]
+    fn isolates_a_sealed_payload_beneath_its_configured_package_root() {
+        let manifest = hara_native::distribution::SealedManifest {
+            entry: "demo.cli/main".into(),
+            archives: vec![],
+            host_sha256: "sha256:host".into(),
+            payload_sha256: "sha256:payload".into(),
+        };
+        assert_eq!(
+            sealed_installation_root(std::path::Path::new("cache"), &manifest),
+            std::path::PathBuf::from("cache/sealed/payload")
         );
     }
 

@@ -964,7 +964,13 @@ fn native_test_run(options: Value) -> Result<Value, String> {
                 (Value::Keyword("name".into()), desc),
                 (Value::Keyword("meta".into()), Value::Map(PMap::new())),
             ]));
-            native_test_fact_result(&fact, native_test_status(&[check.clone()]), vec![check], None, 0)
+            native_test_fact_result(
+                &fact,
+                native_test_status(&[check.clone()]),
+                vec![check],
+                None,
+                0,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut suite_error = None;
@@ -1552,7 +1558,10 @@ fn native_command_map(entries: impl IntoIterator<Item = (Value, Value)>) -> Valu
     Value::Map(PMap::from_iter(entries))
 }
 
-fn native_command_pointer(context: &str, entries: impl IntoIterator<Item = (Value, Value)>) -> Value {
+fn native_command_pointer(
+    context: &str,
+    entries: impl IntoIterator<Item = (Value, Value)>,
+) -> Value {
     Value::Pointer(PPointer::new(
         Keyword::from(context),
         PMap::from_iter(entries),
@@ -1561,14 +1570,20 @@ fn native_command_pointer(context: &str, entries: impl IntoIterator<Item = (Valu
 
 fn native_command_handle(value: &Value, context: &str, operation: &str) -> Result<u64, String> {
     let Value::Pointer(pointer) = value else {
-        return Err(format!("std.native.Command/{operation} expects a {context} handle"));
+        return Err(format!(
+            "std.native.Command/{operation} expects a {context} handle"
+        ));
     };
     if pointer.context().as_str() != context {
-        return Err(format!("std.native.Command/{operation} expects a {context} handle"));
+        return Err(format!(
+            "std.native.Command/{operation} expects a {context} handle"
+        ));
     }
     match pointer.get(&native_command_keyword("id")) {
         Some(Value::Number(id)) if *id > 0 => Ok(*id as u64),
-        _ => Err(format!("std.native.Command/{operation} received an invalid {context} handle")),
+        _ => Err(format!(
+            "std.native.Command/{operation} received an invalid {context} handle"
+        )),
     }
 }
 
@@ -1576,7 +1591,11 @@ fn native_command_app(value: &Value, operation: &str) -> Result<u64, String> {
     native_command_handle(value, "command/app", operation)
 }
 
-fn native_command_route(value: &Value, app: u64, operation: &str) -> Result<crate::command::RouteHandle, String> {
+fn native_command_route(
+    value: &Value,
+    app: u64,
+    operation: &str,
+) -> Result<crate::command::RouteHandle, String> {
     let route = native_command_handle(value, "command/route", operation)?;
     let Value::Pointer(pointer) = value else {
         unreachable!()
@@ -1585,66 +1604,111 @@ fn native_command_route(value: &Value, app: u64, operation: &str) -> Result<crat
         Some(Value::Number(candidate)) if *candidate == app as i64 => {
             Ok(crate::command::RouteHandle::from_id(route))
         }
-        _ => Err(format!("std.native.Command/{operation} route belongs to a different application")),
+        _ => Err(format!(
+            "std.native.Command/{operation} route belongs to a different application"
+        )),
     }
 }
 
-fn native_command_config_argument(value: &Value, operation: &str) -> Result<crate::command::AppConfig, String> {
+fn native_command_config_argument(
+    value: &Value,
+    operation: &str,
+) -> Result<crate::command::AppConfig, String> {
     let Some(entries) = map_entries(value) else {
-        return Err(format!("std.native.Command/{operation} expects a config map"));
+        return Err(format!(
+            "std.native.Command/{operation} expects a config map"
+        ));
     };
     let config = Value::Map(PMap::from_iter(entries));
     let id = match map_value(&config, &native_command_keyword("id")) {
         Some(Value::Symbol(id)) if !id.as_str().is_empty() => id.as_str().to_owned(),
-        _ => return Err(format!("std.native.Command/{operation} config :id must be a symbol")),
+        _ => {
+            return Err(format!(
+                "std.native.Command/{operation} config :id must be a symbol"
+            ))
+        }
     };
     let desc = match map_value(&config, &native_command_keyword("desc")) {
         Some(Value::String(desc)) if !desc.trim().is_empty() => desc.clone(),
-        _ => return Err(format!("std.native.Command/{operation} config :desc must be a non-empty string")),
+        _ => {
+            return Err(format!(
+                "std.native.Command/{operation} config :desc must be a non-empty string"
+            ))
+        }
     };
     Ok(crate::command::AppConfig { id, desc })
 }
 
-fn native_command_vector(value: &Value, operation: &str, field: &str) -> Result<Vec<Value>, String> {
+fn native_command_vector(
+    value: &Value,
+    operation: &str,
+    field: &str,
+) -> Result<Vec<Value>, String> {
     match value {
         Value::Vector(values) => Ok(values.iter().cloned().collect()),
         Value::Tuple(values) => Ok(values.iter().cloned().collect()),
-        _ => Err(format!("std.native.Command/{operation} {field} must be a vector")),
+        _ => Err(format!(
+            "std.native.Command/{operation} {field} must be a vector"
+        )),
     }
 }
 
 fn native_command_string(value: &Value, operation: &str, field: &str) -> Result<String, String> {
     match value {
         Value::String(value) => Ok(value.clone()),
-        _ => Err(format!("std.native.Command/{operation} {field} must be a string")),
+        _ => Err(format!(
+            "std.native.Command/{operation} {field} must be a string"
+        )),
     }
 }
 
-fn native_command_strings(value: &Value, operation: &str, field: &str) -> Result<Vec<String>, String> {
+fn native_command_strings(
+    value: &Value,
+    operation: &str,
+    field: &str,
+) -> Result<Vec<String>, String> {
     native_command_vector(value, operation, field)?
         .into_iter()
         .map(|value| native_command_string(&value, operation, field))
         .collect()
 }
 
-fn native_command_keyword_argument(value: &Value, operation: &str, field: &str) -> Result<String, String> {
+fn native_command_keyword_argument(
+    value: &Value,
+    operation: &str,
+    field: &str,
+) -> Result<String, String> {
     match value {
         Value::Keyword(value) if !value.as_str().is_empty() => Ok(value.as_str().to_owned()),
-        _ => Err(format!("std.native.Command/{operation} {field} must be a keyword")),
+        _ => Err(format!(
+            "std.native.Command/{operation} {field} must be a keyword"
+        )),
     }
 }
 
-fn native_command_boolean(value: Option<&Value>, operation: &str, field: &str, fallback: bool) -> Result<bool, String> {
+fn native_command_boolean(
+    value: Option<&Value>,
+    operation: &str,
+    field: &str,
+    fallback: bool,
+) -> Result<bool, String> {
     match value {
         None | Some(Value::Nil) => Ok(fallback),
         Some(Value::Bool(value)) => Ok(*value),
-        _ => Err(format!("std.native.Command/{operation} {field} must be a boolean")),
+        _ => Err(format!(
+            "std.native.Command/{operation} {field} must be a boolean"
+        )),
     }
 }
 
-fn native_command_option(value: Value, operation: &str) -> Result<crate::command::OptionSpec, String> {
+fn native_command_option(
+    value: Value,
+    operation: &str,
+) -> Result<crate::command::OptionSpec, String> {
     let Some(entries) = map_entries(&value) else {
-        return Err(format!("std.native.Command/{operation} :options entries must be maps"));
+        return Err(format!(
+            "std.native.Command/{operation} :options entries must be maps"
+        ));
     };
     let value = Value::Map(PMap::from_iter(entries));
     let id = native_command_keyword_argument(
@@ -1660,12 +1724,24 @@ fn native_command_option(value: Value, operation: &str) -> Result<crate::command
     let short = match map_value(&value, &native_command_keyword("short")) {
         None | Some(Value::Nil) => None,
         Some(Value::String(value)) if value.chars().count() == 1 => value.chars().next(),
-        _ => return Err(format!("std.native.Command/{operation} option :short must be one character")),
+        _ => {
+            return Err(format!(
+                "std.native.Command/{operation} option :short must be one character"
+            ))
+        }
     };
     let kind = match map_value(&value, &native_command_keyword("type")) {
-        Some(Value::Keyword(kind)) if kind.as_str() == "boolean" => crate::command::OptionKind::Boolean,
-        Some(Value::Keyword(kind)) if kind.as_str() == "string" => crate::command::OptionKind::String,
-        _ => return Err(format!("std.native.Command/{operation} option :type must be :boolean or :string")),
+        Some(Value::Keyword(kind)) if kind.as_str() == "boolean" => {
+            crate::command::OptionKind::Boolean
+        }
+        Some(Value::Keyword(kind)) if kind.as_str() == "string" => {
+            crate::command::OptionKind::String
+        }
+        _ => {
+            return Err(format!(
+                "std.native.Command/{operation} option :type must be :boolean or :string"
+            ))
+        }
     };
     let many = native_command_boolean(
         map_value(&value, &native_command_keyword("many?")),
@@ -1677,11 +1753,9 @@ fn native_command_option(value: Value, operation: &str) -> Result<crate::command
         None | Some(Value::Nil) => None,
         Some(Value::Bool(value)) => Some(crate::command::ParsedValue::Boolean(*value)),
         Some(Value::String(value)) => Some(crate::command::ParsedValue::String(value.clone())),
-        Some(value) => Some(crate::command::ParsedValue::Strings(native_command_strings(
-            value,
-            operation,
-            "option :default",
-        )?)),
+        Some(value) => Some(crate::command::ParsedValue::Strings(
+            native_command_strings(value, operation, "option :default")?,
+        )),
     };
     Ok(crate::command::OptionSpec {
         id,
@@ -1693,15 +1767,21 @@ fn native_command_option(value: Value, operation: &str) -> Result<crate::command
     })
 }
 
-fn native_command_argument(value: Value, operation: &str) -> Result<crate::command::ArgumentSpec, String> {
+fn native_command_argument(
+    value: Value,
+    operation: &str,
+) -> Result<crate::command::ArgumentSpec, String> {
     let Some(entries) = map_entries(&value) else {
-        return Err(format!("std.native.Command/{operation} :arguments entries must be maps"));
+        return Err(format!(
+            "std.native.Command/{operation} :arguments entries must be maps"
+        ));
     };
     let value = Value::Map(PMap::from_iter(entries));
     Ok(crate::command::ArgumentSpec {
         id: native_command_keyword_argument(
-            map_value(&value, &native_command_keyword("id"))
-                .ok_or_else(|| format!("std.native.Command/{operation} argument :id is required"))?,
+            map_value(&value, &native_command_keyword("id")).ok_or_else(|| {
+                format!("std.native.Command/{operation} argument :id is required")
+            })?,
             operation,
             "argument :id",
         )?,
@@ -1720,9 +1800,14 @@ fn native_command_argument(value: Value, operation: &str) -> Result<crate::comma
     })
 }
 
-fn native_command_route_argument(value: Value, operation: &str) -> Result<crate::command::Route<Value>, String> {
+fn native_command_route_argument(
+    value: Value,
+    operation: &str,
+) -> Result<crate::command::Route<Value>, String> {
     let Some(entries) = map_entries(&value) else {
-        return Err(format!("std.native.Command/{operation} expects a route map"));
+        return Err(format!(
+            "std.native.Command/{operation} expects a route map"
+        ));
     };
     let value = Value::Map(PMap::from_iter(entries));
     let path = native_command_strings(
@@ -1754,21 +1839,27 @@ fn native_command_route_argument(value: Value, operation: &str) -> Result<crate:
     };
     let handler = match map_value(&value, &native_command_keyword("handler")) {
         Some(Value::Function(function)) => Value::Function(function.clone()),
-        _ => return Err(format!("std.native.Command/{operation} route :handler must be a function")),
+        _ => {
+            return Err(format!(
+                "std.native.Command/{operation} route :handler must be a function"
+            ))
+        }
     };
     Ok(crate::command::Route {
         spec: crate::command::RouteSpec {
             id: native_command_keyword_argument(
-                map_value(&value, &native_command_keyword("id"))
-                    .ok_or_else(|| format!("std.native.Command/{operation} route :id is required"))?,
+                map_value(&value, &native_command_keyword("id")).ok_or_else(|| {
+                    format!("std.native.Command/{operation} route :id is required")
+                })?,
                 operation,
                 "route :id",
             )?,
             path,
             aliases,
             desc: native_command_string(
-                map_value(&value, &native_command_keyword("desc"))
-                    .ok_or_else(|| format!("std.native.Command/{operation} route :desc is required"))?,
+                map_value(&value, &native_command_keyword("desc")).ok_or_else(|| {
+                    format!("std.native.Command/{operation} route :desc is required")
+                })?,
                 operation,
                 "route :desc",
             )?,
@@ -1789,18 +1880,23 @@ fn native_command_parsed_value(value: &crate::command::ParsedValue) -> Value {
     match value {
         crate::command::ParsedValue::Boolean(value) => Value::Bool(*value),
         crate::command::ParsedValue::String(value) => Value::String(value.clone()),
-        crate::command::ParsedValue::Strings(values) => {
-            Value::Vector(PVector::from_iter(values.iter().cloned().map(Value::String)))
-        }
+        crate::command::ParsedValue::Strings(values) => Value::Vector(PVector::from_iter(
+            values.iter().cloned().map(Value::String),
+        )),
     }
 }
 
 fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
     native_command_map([
-        (native_command_keyword("id"), native_command_keyword(&spec.id)),
+        (
+            native_command_keyword("id"),
+            native_command_keyword(&spec.id),
+        ),
         (
             native_command_keyword("path"),
-            Value::Vector(PVector::from_iter(spec.path.iter().cloned().map(Value::String))),
+            Value::Vector(PVector::from_iter(
+                spec.path.iter().cloned().map(Value::String),
+            )),
         ),
         (
             native_command_keyword("aliases"),
@@ -1808,7 +1904,10 @@ fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
                 Value::Vector(PVector::from_iter(alias.iter().cloned().map(Value::String)))
             }))),
         ),
-        (native_command_keyword("desc"), Value::String(spec.desc.clone())),
+        (
+            native_command_keyword("desc"),
+            Value::String(spec.desc.clone()),
+        ),
         (
             native_command_keyword("passthrough?"),
             Value::Bool(spec.passthrough),
@@ -1817,8 +1916,14 @@ fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
             native_command_keyword("options"),
             Value::Vector(PVector::from_iter(spec.options.iter().map(|option| {
                 let mut entries = vec![
-                    (native_command_keyword("id"), native_command_keyword(&option.id)),
-                    (native_command_keyword("long"), Value::String(option.long_name())),
+                    (
+                        native_command_keyword("id"),
+                        native_command_keyword(&option.id),
+                    ),
+                    (
+                        native_command_keyword("long"),
+                        Value::String(option.long_name()),
+                    ),
                     (
                         native_command_keyword("short"),
                         option
@@ -1836,7 +1941,10 @@ fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
                     (native_command_keyword("many?"), Value::Bool(option.many)),
                 ];
                 if let Some(default) = &option.default {
-                    entries.push((native_command_keyword("default"), native_command_parsed_value(default)));
+                    entries.push((
+                        native_command_keyword("default"),
+                        native_command_parsed_value(default),
+                    ));
                 }
                 native_command_map(entries)
             }))),
@@ -1845,8 +1953,14 @@ fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
             native_command_keyword("arguments"),
             Value::Vector(PVector::from_iter(spec.arguments.iter().map(|argument| {
                 native_command_map([
-                    (native_command_keyword("id"), native_command_keyword(&argument.id)),
-                    (native_command_keyword("required?"), Value::Bool(argument.required)),
+                    (
+                        native_command_keyword("id"),
+                        native_command_keyword(&argument.id),
+                    ),
+                    (
+                        native_command_keyword("required?"),
+                        Value::Bool(argument.required),
+                    ),
                     (native_command_keyword("many?"), Value::Bool(argument.many)),
                 ])
             }))),
@@ -1854,14 +1968,20 @@ fn native_command_spec_value(spec: &crate::command::RouteSpec) -> Value {
     ])
 }
 
-fn native_command_invocation(value: Value, operation: &str) -> Result<(Vec<String>, Value), String> {
+fn native_command_invocation(
+    value: Value,
+    operation: &str,
+) -> Result<(Vec<String>, Value), String> {
     let Some(entries) = map_entries(&value) else {
-        return Err(format!("std.native.Command/{operation} expects an invocation map"));
+        return Err(format!(
+            "std.native.Command/{operation} expects an invocation map"
+        ));
     };
     let value = Value::Map(PMap::from_iter(entries));
     let argv = native_command_strings(
-        map_value(&value, &native_command_keyword("argv"))
-            .ok_or_else(|| format!("std.native.Command/{operation} invocation :argv is required"))?,
+        map_value(&value, &native_command_keyword("argv")).ok_or_else(|| {
+            format!("std.native.Command/{operation} invocation :argv is required")
+        })?,
         operation,
         "invocation :argv",
     )?;
@@ -1869,36 +1989,55 @@ fn native_command_invocation(value: Value, operation: &str) -> Result<(Vec<Strin
         .cloned()
         .unwrap_or_else(|| Value::Map(PMap::new()));
     if map_entries(&context).is_none() {
-        return Err(format!("std.native.Command/{operation} invocation :context must be a map"));
+        return Err(format!(
+            "std.native.Command/{operation} invocation :context must be a map"
+        ));
     }
     Ok((argv, context))
 }
 
-fn native_command_request_value(request_id: u64, request: &crate::command::Request, context: Value) -> Value {
+fn native_command_request_value(
+    request_id: u64,
+    request: &crate::command::Request,
+    context: Value,
+) -> Value {
     native_command_map([
         (
             native_command_keyword("app/id"),
             Value::Symbol(Symbol::parse(&request.app_id)),
         ),
-        (native_command_keyword("route/id"), native_command_keyword(&request.route_id)),
+        (
+            native_command_keyword("route/id"),
+            native_command_keyword(&request.route_id),
+        ),
         (
             native_command_keyword("route/path"),
-            Value::Vector(PVector::from_iter(request.route_path.iter().cloned().map(Value::String))),
+            Value::Vector(PVector::from_iter(
+                request.route_path.iter().cloned().map(Value::String),
+            )),
         ),
         (
             native_command_keyword("argv"),
-            Value::Vector(PVector::from_iter(request.argv.iter().cloned().map(Value::String))),
+            Value::Vector(PVector::from_iter(
+                request.argv.iter().cloned().map(Value::String),
+            )),
         ),
         (
             native_command_keyword("arguments"),
             native_command_map(request.arguments.iter().map(|(key, value)| {
-                (native_command_keyword(key), native_command_parsed_value(value))
+                (
+                    native_command_keyword(key),
+                    native_command_parsed_value(value),
+                )
             })),
         ),
         (
             native_command_keyword("options"),
             native_command_map(request.options.iter().map(|(key, value)| {
-                (native_command_keyword(key), native_command_parsed_value(value))
+                (
+                    native_command_keyword(key),
+                    native_command_parsed_value(value),
+                )
             })),
         ),
         (native_command_keyword("context"), context),
@@ -1906,7 +2045,10 @@ fn native_command_request_value(request_id: u64, request: &crate::command::Reque
             native_command_keyword("command/request"),
             native_command_pointer(
                 "command/request",
-                [(native_command_keyword("id"), Value::Number(request_id as i64))],
+                [(
+                    native_command_keyword("id"),
+                    Value::Number(request_id as i64),
+                )],
             ),
         ),
     ])
@@ -1914,39 +2056,62 @@ fn native_command_request_value(request_id: u64, request: &crate::command::Reque
 
 fn native_command_response_value(response: crate::command::Response) -> Value {
     native_command_map([
-        (native_command_keyword("stdout"), Value::String(response.stdout)),
-        (native_command_keyword("stderr"), Value::String(response.stderr)),
+        (
+            native_command_keyword("stdout"),
+            Value::String(response.stdout),
+        ),
+        (
+            native_command_keyword("stderr"),
+            Value::String(response.stderr),
+        ),
         (native_command_keyword("exit"), Value::Number(response.exit)),
     ])
 }
 
-fn native_command_response_argument(value: Value, operation: &str) -> Result<crate::command::Response, String> {
+fn native_command_response_argument(
+    value: Value,
+    operation: &str,
+) -> Result<crate::command::Response, String> {
     let Some(entries) = map_entries(&value) else {
-        return Err(format!("std.native.Command/{operation} handler must return a response map"));
+        return Err(format!(
+            "std.native.Command/{operation} handler must return a response map"
+        ));
     };
     if entries.len() != 3 {
-        return Err(format!("std.native.Command/{operation} response must contain only :stdout, :stderr, and :exit"));
+        return Err(format!(
+            "std.native.Command/{operation} response must contain only :stdout, :stderr, and :exit"
+        ));
     }
     let value = Value::Map(PMap::from_iter(entries));
     let stdout = native_command_string(
-        map_value(&value, &native_command_keyword("stdout"))
-            .ok_or_else(|| format!("std.native.Command/{operation} response :stdout is required"))?,
+        map_value(&value, &native_command_keyword("stdout")).ok_or_else(|| {
+            format!("std.native.Command/{operation} response :stdout is required")
+        })?,
         operation,
         "response :stdout",
     )?;
     let stderr = native_command_string(
-        map_value(&value, &native_command_keyword("stderr"))
-            .ok_or_else(|| format!("std.native.Command/{operation} response :stderr is required"))?,
+        map_value(&value, &native_command_keyword("stderr")).ok_or_else(|| {
+            format!("std.native.Command/{operation} response :stderr is required")
+        })?,
         operation,
         "response :stderr",
     )?;
     let exit = match map_value(&value, &native_command_keyword("exit")) {
         Some(Value::Number(value)) => *value,
-        _ => return Err(format!("std.native.Command/{operation} response :exit must be an integer")),
+        _ => {
+            return Err(format!(
+                "std.native.Command/{operation} response :exit must be an integer"
+            ))
+        }
     };
-    crate::command::Response { stdout, stderr, exit }
-        .checked()
-        .map_err(|error| error.to_string())
+    crate::command::Response {
+        stdout,
+        stderr,
+        exit,
+    }
+    .checked()
+    .map_err(|error| error.to_string())
 }
 
 fn native_command_parse(app: u64, invocation: Value, operation: &str) -> Result<Value, String> {
@@ -1975,12 +2140,18 @@ fn native_command_parse(app: u64, invocation: Value, operation: &str) -> Result<
 
 fn native_command_request_id(value: &Value, operation: &str) -> Result<u64, String> {
     let Some(request) = map_value(value, &native_command_keyword("command/request")) else {
-        return Err(format!("std.native.Command/{operation} expects a Command/parse request"));
+        return Err(format!(
+            "std.native.Command/{operation} expects a Command/parse request"
+        ));
     };
     native_command_handle(request, "command/request", operation)
 }
 
-fn native_command_dispatch(app: u64, request_value: Value, operation: &str) -> Result<Value, String> {
+fn native_command_dispatch(
+    app: u64,
+    request_value: Value,
+    operation: &str,
+) -> Result<Value, String> {
     let request_id = native_command_request_id(&request_value, operation)?;
     let (handler, request, context) = NATIVE_COMMAND_STATE.with(|state| {
         let state = state.borrow();
@@ -1989,7 +2160,9 @@ fn native_command_dispatch(app: u64, request_value: Value, operation: &str) -> R
             .get(&request_id)
             .ok_or_else(|| format!("std.native.Command/{operation} request was not found"))?;
         if stored.app != app {
-            return Err(format!("std.native.Command/{operation} request belongs to a different application"));
+            return Err(format!(
+                "std.native.Command/{operation} request belongs to a different application"
+            ));
         }
         let application = state
             .apps
@@ -2001,7 +2174,10 @@ fn native_command_dispatch(app: u64, request_value: Value, operation: &str) -> R
             .clone();
         Ok::<_, String>((handler, stored.request.clone(), stored.context.clone()))
     })?;
-    let output = call_value(handler, vec![native_command_request_value(request_id, &request, context)])?;
+    let output = call_value(
+        handler,
+        vec![native_command_request_value(request_id, &request, context)],
+    )?;
     native_command_response_argument(output, operation).map(native_command_response_value)
 }
 
@@ -2017,9 +2193,10 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                     let mut state = state.borrow_mut();
                     let id = state.next_app;
                     state.next_app += 1;
-                    state
-                        .apps
-                        .insert(id, crate::command::App::create(config).map_err(|error| error.to_string())?);
+                    state.apps.insert(
+                        id,
+                        crate::command::App::create(config).map_err(|error| error.to_string())?,
+                    );
                     Ok(native_command_pointer(
                         "command/app",
                         [(native_command_keyword("id"), Value::Number(id as i64))],
@@ -2036,10 +2213,15 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                     let config = state
                         .apps
                         .get(&app)
-                        .ok_or_else(|| "std.native.Command/config application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/config application was not found".to_owned()
+                        })?
                         .config();
                     Ok(native_command_map([
-                        (native_command_keyword("id"), Value::Symbol(Symbol::parse(&config.id))),
+                        (
+                            native_command_keyword("id"),
+                            Value::Symbol(Symbol::parse(&config.id)),
+                        ),
                         (native_command_keyword("desc"), Value::String(config.desc)),
                     ]))
                 })
@@ -2055,13 +2237,18 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                     let handle = state
                         .apps
                         .get_mut(&app)
-                        .ok_or_else(|| "std.native.Command/install application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/install application was not found".to_owned()
+                        })?
                         .install(route)
                         .map_err(|error| error.to_string())?;
                     Ok(native_command_pointer(
                         "command/route",
                         [
-                            (native_command_keyword("id"), Value::Number(handle.id() as i64)),
+                            (
+                                native_command_keyword("id"),
+                                Value::Number(handle.id() as i64),
+                            ),
                             (native_command_keyword("app"), Value::Number(app as i64)),
                         ],
                     ))
@@ -2078,7 +2265,9 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                         .borrow_mut()
                         .apps
                         .get_mut(&app)
-                        .ok_or_else(|| "std.native.Command/uninstall application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/uninstall application was not found".to_owned()
+                        })?
                         .uninstall(route)
                         .map(Value::Bool)
                         .map_err(|error| error.to_string())
@@ -2094,9 +2283,15 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                         .borrow()
                         .apps
                         .get(&app)
-                        .ok_or_else(|| "std.native.Command/routes application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/routes application was not found".to_owned()
+                        })?
                         .routes()
-                        .map(|routes| Value::Vector(PVector::from_iter(routes.iter().map(native_command_spec_value))))
+                        .map(|routes| {
+                            Value::Vector(PVector::from_iter(
+                                routes.iter().map(native_command_spec_value),
+                            ))
+                        })
                         .map_err(|error| error.to_string())
                 })
             }
@@ -2110,12 +2305,16 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                     let snapshot = state
                         .apps
                         .get(&app)
-                        .ok_or_else(|| "std.native.Command/snapshot application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/snapshot application was not found".to_owned()
+                        })?
                         .snapshot()
                         .map_err(|error| error.to_string())?;
                     let id = state.next_snapshot;
                     state.next_snapshot += 1;
-                    state.snapshots.insert(id, NativeCommandSnapshot { app, snapshot });
+                    state
+                        .snapshots
+                        .insert(id, NativeCommandSnapshot { app, snapshot });
                     Ok(native_command_pointer(
                         "command/snapshot",
                         [
@@ -2160,7 +2359,9 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                     state
                         .apps
                         .get_mut(&app)
-                        .ok_or_else(|| "std.native.Command/reset application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/reset application was not found".to_owned()
+                        })?
                         .reset()
                         .map_err(|error| error.to_string())?;
                     state.requests.retain(|_, request| request.app != app);
@@ -2178,7 +2379,9 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                         .apps
                         .get(&app)
                         .map(|app| Value::Bool(app.closed()))
-                        .ok_or_else(|| "std.native.Command/closed? application was not found".to_owned())
+                        .ok_or_else(|| {
+                            "std.native.Command/closed? application was not found".to_owned()
+                        })
                 })
             }
             _ => Err("std.native.Command/closed? expects one application".into()),
@@ -2191,7 +2394,9 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                     state
                         .apps
                         .get_mut(&app)
-                        .ok_or_else(|| "std.native.Command/close application was not found".to_owned())?
+                        .ok_or_else(|| {
+                            "std.native.Command/close application was not found".to_owned()
+                        })?
                         .close();
                     state.requests.retain(|_, request| request.app != app);
                     Ok(Value::Nil)
@@ -2200,12 +2405,22 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
             _ => Err("std.native.Command/close expects one application".into()),
         },
         "parse" => match values.as_slice() {
-            [app, invocation] => native_command_parse(native_command_app(app, operation)?, invocation.clone(), operation),
+            [app, invocation] => native_command_parse(
+                native_command_app(app, operation)?,
+                invocation.clone(),
+                operation,
+            ),
             _ => Err("std.native.Command/parse expects an application and invocation map".into()),
         },
         "dispatch" => match values.as_slice() {
-            [app, request] => native_command_dispatch(native_command_app(app, operation)?, request.clone(), operation),
-            _ => Err("std.native.Command/dispatch expects an application and parsed request".into()),
+            [app, request] => native_command_dispatch(
+                native_command_app(app, operation)?,
+                request.clone(),
+                operation,
+            ),
+            _ => {
+                Err("std.native.Command/dispatch expects an application and parsed request".into())
+            }
         },
         "run" => match values.as_slice() {
             [app, invocation] => {
@@ -2213,9 +2428,13 @@ fn native_command_values(operation: &str, values: Vec<Value>) -> Result<Value, S
                 match native_command_parse(app, invocation.clone(), operation) {
                     Ok(request) => match native_command_dispatch(app, request, operation) {
                         Ok(response) => Ok(response),
-                        Err(error) => Ok(native_command_response_value(crate::command::Response::failure(1, error))),
+                        Err(error) => Ok(native_command_response_value(
+                            crate::command::Response::failure(1, error),
+                        )),
                     },
-                    Err(error) => Ok(native_command_response_value(crate::command::Response::failure(2, error))),
+                    Err(error) => Ok(native_command_response_value(
+                        crate::command::Response::failure(2, error),
+                    )),
                 }
             }
             _ => Err("std.native.Command/run expects an application and invocation map".into()),
@@ -3544,12 +3763,17 @@ fn native_package_values(
     let method = operation
         .strip_prefix("std.native.Package/")
         .unwrap_or(operation);
-    if matches!(method, "build" | "inspect" | "seal" | "inspect-seal" | "verify-seal") {
+    if matches!(
+        method,
+        "build" | "inspect" | "seal" | "inspect-seal" | "verify-seal" | "distribute"
+    ) {
         return native_package_artifact_values(method, arguments);
     }
     if method == "read" {
         if arguments.len() != 2 {
-            return Err("std.native.Package/read expects an exact descriptor and relative path".into());
+            return Err(
+                "std.native.Package/read expects an exact descriptor and relative path".into(),
+            );
         }
         let Value::OrderedMap(_) = &arguments[0] else {
             return Err("std.native.Package/read expects an exact package descriptor".into());
@@ -3727,25 +3951,35 @@ fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result
     match method {
         "build" => {
             if !(1..=4).contains(&arguments.len()) {
-                return Err("std.native.Package/build expects input and up to three options".into());
+                return Err(
+                    "std.native.Package/build expects input and up to three options".into(),
+                );
             }
-            let input = package_string_argument(&arguments, 0, "std.native.Package/build")?.to_owned();
-            let output = package_optional_string_argument(&arguments, 1, "std.native.Package/build")?
-                .map(str::to_owned);
-            let package = package_optional_string_argument(&arguments, 2, "std.native.Package/build")?
-                .map(str::to_owned);
-            let profile = package_optional_string_argument(&arguments, 3, "std.native.Package/build")?
-                .map(str::to_owned);
-            let built = std::thread::spawn(move || {
-                crate::package::build_path_with_package(
-                    std::path::Path::new(&input),
-                    output.as_deref().map(std::path::Path::new),
-                    package.as_deref(),
-                    profile.as_deref().map(std::path::Path::new),
-                )
-            })
-            .join()
-            .map_err(|_| "std.native.Package/build thread panicked".to_owned())??;
+            let input =
+                package_string_argument(&arguments, 0, "std.native.Package/build")?.to_owned();
+            let output =
+                package_optional_string_argument(&arguments, 1, "std.native.Package/build")?
+                    .map(str::to_owned);
+            let package =
+                package_optional_string_argument(&arguments, 2, "std.native.Package/build")?
+                    .map(str::to_owned);
+            let profile =
+                package_optional_string_argument(&arguments, 3, "std.native.Package/build")?
+                    .map(str::to_owned);
+            let built = std::thread::Builder::new()
+                .name("hara-package-build".into())
+                .stack_size(crate::package::BUILD_THREAD_STACK_SIZE)
+                .spawn(move || {
+                    crate::package::build_path_with_package(
+                        std::path::Path::new(&input),
+                        output.as_deref().map(std::path::Path::new),
+                        package.as_deref(),
+                        profile.as_deref().map(std::path::Path::new),
+                    )
+                })
+                .map_err(|error| format!("std.native.Package/build thread failed: {error}"))?
+                .join()
+                .map_err(|_| "std.native.Package/build thread panicked".to_owned())??;
             Ok(Value::String(built.to_string_lossy().into_owned()))
         }
         "inspect" => {
@@ -3767,9 +4001,23 @@ fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result
             let manifest = crate::distribution::seal(&sealed_package_spec(&arguments[0])?)?;
             Ok(sealed_manifest_value(&manifest))
         }
+        "distribute" => {
+            if arguments.len() != 1 {
+                return Err("std.native.Package/distribute expects one descriptor map".into());
+            }
+            let spec = distribution_build_spec(&arguments[0])?;
+            let manifest = if spec.replace {
+                crate::distribution::build_replace(&spec.project, &spec.host, &spec.output)?
+            } else {
+                crate::distribution::build(&spec.project, &spec.host, &spec.output)?
+            };
+            Ok(distribution_manifest_value(&manifest))
+        }
         "inspect-seal" | "verify-seal" => {
             if arguments.len() != 1 {
-                return Err(format!("std.native.Package/{method} expects one executable path"));
+                return Err(format!(
+                    "std.native.Package/{method} expects one executable path"
+                ));
             }
             let path = std::path::Path::new(package_string_argument(
                 &arguments,
@@ -3792,7 +4040,9 @@ fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result
 
 #[cfg(target_arch = "wasm32")]
 fn native_package_artifact_values(method: &str, _arguments: Vec<Value>) -> Result<Value, String> {
-    Err(format!("package/unsupported: Package/{method} is unavailable on wasm"))
+    Err(format!(
+        "package/unsupported: Package/{method} is unavailable on wasm"
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3800,12 +4050,12 @@ fn sealed_package_spec(value: &Value) -> Result<crate::distribution::SealSpec, S
     let entries = map_entries(value)
         .ok_or_else(|| "std.native.Package/seal expects one descriptor map".to_owned())?;
     let descriptor = Value::OrderedMap(Box::new(POrderedMap::from_iter(entries)));
-    let required_string = |key: &str| {
-        match map_value(&descriptor, &Value::Keyword(key.into())) {
-            Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
-            Some(_) => Err(format!("std.native.Package/seal :{key} must be a non-empty string")),
-            None => Err(format!("std.native.Package/seal is missing :{key}")),
-        }
+    let required_string = |key: &str| match map_value(&descriptor, &Value::Keyword(key.into())) {
+        Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
+        Some(_) => Err(format!(
+            "std.native.Package/seal :{key} must be a non-empty string"
+        )),
+        None => Err(format!("std.native.Package/seal is missing :{key}")),
     };
     let entry = match map_value(&descriptor, &Value::Keyword("entry".into())) {
         Some(Value::Symbol(value)) => value.as_str().to_owned(),
@@ -3838,7 +4088,9 @@ fn sealed_package_spec(value: &Value) -> Result<crate::distribution::SealSpec, S
         };
         let primary = match map_value(&archive, &Value::Keyword("primary".into())) {
             Some(Value::Bool(value)) => *value,
-            Some(_) => return Err("std.native.Package/seal archive :primary must be boolean".into()),
+            Some(_) => {
+                return Err("std.native.Package/seal archive :primary must be boolean".into())
+            }
             None => false,
         };
         Ok(crate::distribution::SealArchive { path, primary })
@@ -3849,6 +4101,39 @@ fn sealed_package_spec(value: &Value) -> Result<crate::distribution::SealSpec, S
         output: std::path::PathBuf::from(required_string("output")?),
         entry,
         archives,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct DistributionBuildSpec {
+    project: std::path::PathBuf,
+    host: std::path::PathBuf,
+    output: std::path::PathBuf,
+    replace: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn distribution_build_spec(value: &Value) -> Result<DistributionBuildSpec, String> {
+    let entries = map_entries(value)
+        .ok_or_else(|| "std.native.Package/distribute expects one descriptor map".to_owned())?;
+    let descriptor = Value::OrderedMap(Box::new(POrderedMap::from_iter(entries)));
+    let required_string = |key: &str| match map_value(&descriptor, &Value::Keyword(key.into())) {
+        Some(Value::String(value)) if !value.is_empty() => Ok(value),
+        Some(_) => Err(format!(
+            "std.native.Package/distribute :{key} must be a non-empty string"
+        )),
+        None => Err(format!("std.native.Package/distribute is missing :{key}")),
+    };
+    let replace = match map_value(&descriptor, &Value::Keyword("replace?".into())) {
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err("std.native.Package/distribute :replace? must be boolean".into()),
+        None => false,
+    };
+    Ok(DistributionBuildSpec {
+        project: std::path::PathBuf::from(required_string("project")?),
+        host: std::path::PathBuf::from(required_string("host")?),
+        output: std::path::PathBuf::from(required_string("output")?),
+        replace,
     })
 }
 
@@ -3879,7 +4164,10 @@ fn sealed_manifest_value(manifest: &crate::distribution::SealedManifest) -> Valu
                     Value::Keyword("length".into()),
                     Value::Number(i64::try_from(archive.length).unwrap_or(i64::MAX)),
                 ),
-                (Value::Keyword("primary".into()), Value::Bool(archive.primary)),
+                (
+                    Value::Keyword("primary".into()),
+                    Value::Bool(archive.primary),
+                ),
             ])))
         })
         .collect();
@@ -3892,7 +4180,10 @@ fn sealed_manifest_value(manifest: &crate::distribution::SealedManifest) -> Valu
             Value::Keyword("entry".into()),
             Value::Symbol(Symbol::parse(&manifest.entry)),
         ),
-        (Value::Keyword("archives".into()), Value::Vector(PVector::from(archives))),
+        (
+            Value::Keyword("archives".into()),
+            Value::Vector(PVector::from(archives)),
+        ),
         (
             Value::Keyword("host/sha256".into()),
             Value::String(manifest.host_sha256.clone()),
@@ -3905,6 +4196,48 @@ fn sealed_manifest_value(manifest: &crate::distribution::SealedManifest) -> Valu
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn distribution_manifest_value(manifest: &crate::distribution::Manifest) -> Value {
+    Value::OrderedMap(Box::new(POrderedMap::from_iter([
+        (
+            Value::Keyword("distribution/format".into()),
+            Value::String(crate::distribution::FORMAT.into()),
+        ),
+        (
+            Value::Keyword("launcher".into()),
+            Value::String(manifest.launcher.clone()),
+        ),
+        (
+            Value::Keyword("entry".into()),
+            Value::Symbol(Symbol::parse(&manifest.entry)),
+        ),
+        (
+            Value::Keyword("archive".into()),
+            Value::String(manifest.archive.to_string_lossy().into_owned()),
+        ),
+        (
+            Value::Keyword("archive/sha256".into()),
+            Value::String(manifest.archive_sha256.clone()),
+        ),
+        (
+            Value::Keyword("source/identity".into()),
+            Value::String(manifest.source_identity.clone()),
+        ),
+        (
+            Value::Keyword("source/version".into()),
+            Value::String(manifest.source_version.clone()),
+        ),
+        (
+            Value::Keyword("native/version".into()),
+            Value::String(manifest.native_version.clone()),
+        ),
+        (
+            Value::Keyword("native/sha256".into()),
+            Value::String(manifest.native_sha256.clone()),
+        ),
+    ])))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn package_string_argument<'a>(
     arguments: &'a [Value],
     index: usize,
@@ -3912,7 +4245,9 @@ fn package_string_argument<'a>(
 ) -> Result<&'a str, String> {
     match arguments.get(index) {
         Some(Value::String(value)) => Ok(value),
-        _ => Err(format!("{operation} expects a string argument at position {index}")),
+        _ => Err(format!(
+            "{operation} expects a string argument at position {index}"
+        )),
     }
 }
 
@@ -3925,7 +4260,9 @@ fn package_optional_string_argument<'a>(
     match arguments.get(index) {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value)),
-        _ => Err(format!("{operation} expects an optional string at position {index}")),
+        _ => Err(format!(
+            "{operation} expects an optional string at position {index}"
+        )),
     }
 }
 

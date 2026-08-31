@@ -19,6 +19,15 @@ use install::{install_archive, install_archive_at, json_string, validate_recipe}
 
 const MAX_PUBLICATION_DIAGNOSTIC_BYTES: usize = 4096;
 
+/// Package compilation walks the complete source graph and needs more stack
+/// than Rust's default worker thread. Keep native API and CLI package builds
+/// on the same bounded budget as the runtime broker.
+pub const BUILD_THREAD_STACK_SIZE: usize = if cfg!(debug_assertions) {
+    64 * 1024 * 1024
+} else {
+    8 * 1024 * 1024
+};
+
 /// Capability adapter used by the Hara-owned CLI policy. These functions
 /// expose package mechanics without parsing command-line arguments or writing
 /// user-facing output.
@@ -136,7 +145,16 @@ pub fn inspect_path(archive: &Path) -> Result<String, String> {
 }
 
 pub fn install_path(input: &Path) -> Result<PathBuf, String> {
-    install_path_at(input, &install::dist_root())
+    install_path_at(input, &install_root())
+}
+
+/// Returns the configured base directory for installed Hara packages.
+///
+/// Sealed executables derive a payload-specific child from this root so a
+/// rebuilt executable cannot conflict with an earlier package registration at
+/// the same semantic version.
+pub fn install_root() -> PathBuf {
+    install::dist_root()
 }
 
 /// Installs a package into an explicit distribution root. Embedders and
