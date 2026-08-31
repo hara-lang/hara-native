@@ -1,0 +1,33 @@
+name: Native release preparation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - release/version.json
+      - release/compatibility.json
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    name: native conformance (release preparation)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: core/rust/web/package-lock.json
+      - run: make test-conformance
