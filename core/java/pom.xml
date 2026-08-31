@@ -6,7 +6,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.hara-lang</groupId>
 	<artifactId>hara-native-jvm</artifactId>
-	<version>0.1.14</version>
+	<version>0.1.15</version>
 	<packaging>jar</packaging>
 	<name>Hara Native JVM Host</name>
 	<description>HAL-free JVM and GraalVM Truffle host runtime for Hara packages.</description>
