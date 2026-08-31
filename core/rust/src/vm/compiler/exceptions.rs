@@ -83,7 +83,7 @@ impl Compiler {
             if clause_children.len() != 3 {
                 return Err(CompileError::new(
                     CompileErrorKind::Arity,
-                    "catch expects a binding symbol and one handler form",
+                    "catch expects a binding symbol and one handler form; typed host catch clauses are not part of Hara",
                     Some(clause.span.start),
                 ));
             }

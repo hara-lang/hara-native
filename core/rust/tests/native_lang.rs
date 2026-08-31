@@ -1,6 +1,31 @@
 use hara_native::Runtime;
 
 #[test]
+fn direct_native_conforms_to_the_portable_catch_shape() {
+    let mut runtime = Runtime::core();
+    runtime
+        .set_execution_backend("direct-native")
+        .expect("native builds must expose the direct-native backend");
+    assert_eq!(
+        runtime
+            .eval_direct_native("(try (throw (ex :test/failure {})) (catch error :caught))")
+            .unwrap(),
+        ":caught"
+    );
+    let error = runtime
+        .eval_direct_native(
+            "(try (throw (ex :test/failure {})) (catch Throwable error :caught))",
+        )
+        .expect_err("typed host catch syntax must not compile as Hara");
+    assert!(
+        error.contains(
+            "catch expects a binding symbol and one handler form; typed host catch clauses are not part of Hara"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
 fn lang_values_are_qualified_and_library_snapshots_restore_the_baseline() {
     let mut runtime = Runtime::core();
     let display = runtime

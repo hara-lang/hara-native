@@ -228,7 +228,7 @@
   ;; ---- exceptions: try/catch/finally and guest throw ----
   {:id :error/catch-guest-value :source "(try (throw 41) (catch Exception error (+ error 1)))" :expect {:display "42"}}
   {:id :error/catch-first-match :source "(try (throw 1) (catch Exception a 41) (catch Exception b 42))" :expect {:display "41"}}
-  {:id :error/catch-implicit-form :source "(try (throw :failed) (catch error error))" :expect {:display ":failed"}}
+  {:id :error/catch-portable-binding :source "(try (throw (ex :test/failed {})) (catch error :caught))" :expect {:display ":caught"}}
   {:id :error/catch-binds-runtime-string :source "(try (/ 1 0) (catch Exception error error))" :expect {:display "\"division by zero\""}}
   {:id :error/unmatched-class :source "(try (throw 41) (catch Problem error 0))" :expect {:error-category "thrown"}}
   {:id :error/uncaught-throw :source "(throw :failed)" :expect {:error-category "thrown"}}

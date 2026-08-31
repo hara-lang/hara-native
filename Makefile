@@ -78,6 +78,7 @@ test-example-require:
 test-rust:
 	cargo check --manifest-path core/rust/Cargo.toml --bin hara-native
 	cargo test --manifest-path core/rust/Cargo.toml --bin hara-native
+	cargo test --manifest-path core/rust/Cargo.toml --test native-lang
 	cargo test --manifest-path core/rust/Cargo.toml --test native-test-registry
 
 build-signer:
