@@ -739,10 +739,13 @@ jobs:
           RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
         run: |
           set -euo pipefail
-          platforms="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq -r '.manifests[] | select(.platform.os == "linux") | .platform.os + "/" + .platform.architecture' | sort -u)"
+          manifest="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw)"
+          platforms="$(jq -r '.manifests[] | select(.platform.os == "linux") | .platform.os + "/" + .platform.architecture' <<<"$manifest" | sort -u)"
           test "$platforms" = $'linux/amd64\nlinux/arm64'
           for platform in linux/amd64 linux/arm64; do
-            test "$(docker run --rm --platform "$platform" "${IMAGE}@${DIGEST}" --version)" = "hara-native ${RELEASE_VERSION}"
+            architecture="${platform#linux/}"
+            platform_digest="$(jq -er --arg architecture "$architecture" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture) | .digest' <<<"$manifest")"
+            test "$(docker run --rm --platform "$platform" "${IMAGE}@${platform_digest}" --version)" = "hara-native ${RELEASE_VERSION}"
           done
 
   publish:
