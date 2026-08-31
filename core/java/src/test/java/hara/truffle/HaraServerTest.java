@@ -157,6 +157,42 @@ public class HaraServerTest {
   }
 
   @Test
+  public void protocolFourEvaluationErrorsCarryClickableDiagnostics() throws Exception {
+    try (Socket socket = new Socket("127.0.0.1", server.port())) {
+      Conn conn = new Conn(socket);
+      conn.write("HELLO", "4", "CLIENT", "TEST");
+      conn.read();
+
+      conn.write(
+          "EVAL",
+          "EVAL-ERROR",
+          "(ex :unknown {})",
+          "FILE",
+          "/tmp/diagnostic.hal",
+          "LINE",
+          "12",
+          "COLUMN",
+          "3");
+      List<?> error = (List<?>) conn.read();
+      assertEquals("ERROR", text(error.get(0)));
+      assertEquals("EVAL_ERROR", text(error.get(2)));
+      assertEquals(5, error.size());
+
+      assertTrue(error.get(4) instanceof List<?>);
+      List<?> diagnostic = (List<?>) error.get(4);
+      assertEquals("1", text(plist(diagnostic, "VERSION")));
+      List<?> primary = (List<?>) plist(diagnostic, "PRIMARY");
+      assertEquals("/tmp/diagnostic.hal", text(plist(primary, "FILE")));
+      assertEquals("12", text(plist(primary, "LINE")));
+      assertEquals("3", text(plist(primary, "COLUMN")));
+      assertTrue(plist(diagnostic, "EXCERPT") instanceof List<?>);
+      assertTrue(plist(diagnostic, "FRAMES") instanceof List<?>);
+      assertTrue(!((List<?>) plist(diagnostic, "FRAMES")).isEmpty());
+      assertEquals("DONE", text(((List<?>) conn.read()).get(0)));
+    }
+  }
+
+  @Test
   public void protocolFourReturnsStableErrorsAndRegisteredOperations() throws Exception {
     server.close();
     server = new HaraServer("127.0.0.1", 0, false);

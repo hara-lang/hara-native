@@ -760,6 +760,11 @@ public final class HaraContext {
     packages.define("load", new VariadicBuiltin("std.native.Package/load", values -> packageUnsupported("load", values, 1)));
     packages.define("unload", new VariadicBuiltin("std.native.Package/unload", values -> packageUnsupported("unload", values, values.length == 2 ? 2 : 1)));
     packages.define("state", new VariadicBuiltin("std.native.Package/state", values -> packageUnsupported("state", values, 1)));
+    packages.define("build", new VariadicBuiltin("std.native.Package/build", values -> packageUnsupported("build", values, values.length)));
+    packages.define("inspect", new VariadicBuiltin("std.native.Package/inspect", values -> packageUnsupported("inspect", values, 1)));
+    packages.define("seal", new VariadicBuiltin("std.native.Package/seal", values -> packageUnsupported("seal", values, 1)));
+    packages.define("inspect-seal", new VariadicBuiltin("std.native.Package/inspect-seal", values -> packageUnsupported("inspect-seal", values, 1)));
+    packages.define("verify-seal", new VariadicBuiltin("std.native.Package/verify-seal", values -> packageUnsupported("verify-seal", values, 1)));
     namespaceStates.put("std.native.Package", NamespaceLoadState.LOADED);
   }
 
@@ -3706,6 +3711,9 @@ public final class HaraContext {
       return character.text();
     }
     if (unwrapped instanceof Number) {
+      return G.display(unwrapped);
+    }
+    if (unwrapped instanceof java.util.UUID) {
       return G.display(unwrapped);
     }
     if (unwrapped instanceof IDisplay) {

@@ -109,6 +109,8 @@ public interface G {
       return ((IDisplay) e).display();
     } else if (e instanceof String) {
       return "\"" + Str.escapeJava((String) e) + "\"";
+    } else if (e instanceof java.util.UUID) {
+      return "#uuid " + display(e.toString());
     } else if (e instanceof Character) {
       return displayCharacter((Character) e);
     } else if (e instanceof byte[]) {

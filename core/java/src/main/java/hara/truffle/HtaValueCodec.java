@@ -154,6 +154,10 @@ public final class HtaValueCodec {
       Symbol symbol = (Symbol) value;
       output.write(SYMBOL);
       writeText(output, qualified(symbol.getNamespace(), symbol.getName()));
+    } else if (value instanceof java.util.UUID uuid) {
+      output.write(TAGGED);
+      write(output, Symbol.create("uuid"), depth + 1);
+      write(output, uuid.toString(), depth + 1);
     } else if (value instanceof HaraVar variable) {
       output.write(VAR_REF);
       write(
@@ -463,7 +467,20 @@ public final class HtaValueCodec {
         case TAGGED:
           Object tagValue = read(depth + 1);
           if (!(tagValue instanceof Symbol)) throw malformed("invalid tagged literal tag");
-          return new hara.lang.data.TaggedLiteral((Symbol) tagValue, read(depth + 1));
+          Object form = read(depth + 1);
+          if (tagValue instanceof Symbol uuidTag
+              && uuidTag.getNamespace() == null
+              && "uuid".equals(uuidTag.getName())) {
+            if (!(form instanceof String text)) throw malformed("invalid UUID tagged literal");
+            try {
+              java.util.UUID uuid = java.util.UUID.fromString(text);
+              if (!uuid.toString().equals(text)) throw malformed("invalid UUID tagged literal");
+              return uuid;
+            } catch (IllegalArgumentException error) {
+              throw malformed("invalid UUID tagged literal");
+            }
+          }
+          return new hara.lang.data.TaggedLiteral((Symbol) tagValue, form);
         case EXCEPTION_INFO:
           return exceptionInfo(depth + 1);
         case POINTER:

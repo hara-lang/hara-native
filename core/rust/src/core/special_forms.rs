@@ -52,6 +52,9 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
         Form::BigInteger(value) => Ok(crate::numeric::compact_integer(value.clone())),
         Form::Regex(value) => Ok(Value::Regex(value.clone())),
         Form::Tagged(tag, value) if tag == "ptr" => pointer_from_descriptor(literal_value(value)?),
+        Form::Tagged(tag, value) if tag == "uuid" => {
+            crate::core::uuid_tag_value(literal_value(value)?)
+        }
         Form::Tagged(tag, value) if tag == "arr" => {
             let Form::Vector(values) = value.as_ref() else {
                 return Err("#arr expects a vector literal".into());

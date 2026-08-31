@@ -707,6 +707,21 @@ fn frame_payload(frame: &crate::core::TraceFrame, origin: Option<&SourceOrigin>)
     ]))
 }
 
+fn evaluation_frame_payload(origin: &SourceOrigin) -> RespValue {
+    RespValue::Array(Some(vec![
+        RespValue::bulk("FUNCTION"),
+        RespValue::bulk("<eval>"),
+        RespValue::bulk("NAMESPACE"),
+        RespValue::Bulk(None),
+        RespValue::bulk("FILE"),
+        RespValue::bulk(origin.file.clone()),
+        RespValue::bulk("LINE"),
+        RespValue::Integer(origin.line as i64),
+        RespValue::bulk("COLUMN"),
+        RespValue::Integer(origin.column as i64),
+    ]))
+}
+
 fn source_excerpt(origin: Option<&SourceOrigin>, line: Option<usize>) -> RespValue {
     let Some(origin) = origin else {
         return RespValue::Bulk(None);
@@ -743,12 +758,17 @@ fn diagnostic_payload(diagnostic: &RuntimeDiagnostic, origin: Option<&SourceOrig
             .find_map(|frame| frame.site.clone())
     });
     let (_, primary_line, _) = site_location(primary_site.as_ref(), origin, true);
-    let frames = diagnostic
+    let mut frames = diagnostic
         .frames
         .iter()
         .rev()
         .map(|frame| frame_payload(frame, origin))
         .collect::<Vec<_>>();
+    if frames.is_empty() {
+        if let Some(origin) = origin {
+            frames.push(evaluation_frame_payload(origin));
+        }
+    }
     RespValue::Array(Some(vec![
         RespValue::bulk("VERSION"),
         RespValue::Integer(1),
@@ -1014,6 +1034,51 @@ mod tests {
         assert_eq!(
             client.read().unwrap().unwrap(),
             RespValue::array(["DONE", "REQ-ERROR", "ERROR"])
+        );
+        server.stop();
+    }
+
+    #[test]
+    fn server_v4_validation_errors_carry_a_clickable_evaluation_location() {
+        let broker = crate::native_cli::RuntimeBroker::start().unwrap();
+        let mut server = super::RespServer::start("127.0.0.1", 0, broker).unwrap();
+        let endpoint = server.endpoint();
+        let mut client = RespConnection::new(TcpStream::connect(&endpoint).unwrap()).unwrap();
+        client.write(&RespValue::array(["HELLO", "4"])).unwrap();
+        client.read().unwrap().unwrap();
+
+        client
+            .write(&RespValue::array([
+                "EVAL",
+                "REQ-VALIDATION-ERROR",
+                "(ex :unknown {})",
+                "FILE",
+                "/tmp/validation.hal",
+                "LINE",
+                "12",
+                "COLUMN",
+                "3",
+            ]))
+            .unwrap();
+        let error = client.read().unwrap().unwrap();
+        let error_values = array(&error);
+        assert_eq!(error_values.len(), 5);
+        assert_eq!(error_values[2].text().as_deref(), Some("EVAL_ERROR"));
+        let diagnostic = array(&error_values[4]);
+        let primary = array(field(diagnostic, "PRIMARY"));
+        assert_eq!(
+            field(primary, "FILE").text().as_deref(),
+            Some("/tmp/validation.hal")
+        );
+        assert_eq!(field(primary, "LINE"), &RespValue::Integer(12));
+        assert_eq!(field(primary, "COLUMN"), &RespValue::Integer(3));
+        assert!(field(array(field(diagnostic, "EXCERPT")), "TEXT")
+            .text()
+            .is_some_and(|text| text.contains("(ex :unknown {})")));
+        assert!(!array(field(diagnostic, "FRAMES")).is_empty());
+        assert_eq!(
+            client.read().unwrap().unwrap(),
+            RespValue::array(["DONE", "REQ-VALIDATION-ERROR", "ERROR"])
         );
         server.stop();
     }
