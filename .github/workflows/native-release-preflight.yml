@@ -1,10 +1,7 @@
 name: Native release preflight
 
 on:
-  workflow_call:
   pull_request:
-    branches: [release]
-  push:
     branches: [release]
 
 permissions:

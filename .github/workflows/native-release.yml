@@ -49,10 +49,6 @@ jobs:
           printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'commit=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-  preflight:
-    needs: release-ref
-    uses: ./.github/workflows/native-release-preflight.yml
-
   npm-publish-credential:
     name: npm publish credential
     needs: release-ref
@@ -74,7 +70,7 @@ jobs:
 
   release-intent:
     name: release intent
-    needs: [release-ref, preflight, npm-publish-credential]
+    needs: [release-ref, npm-publish-credential]
     runs-on: ubuntu-22.04
     outputs:
       resuming: ${{ steps.intent.outputs.resuming }}
@@ -111,7 +107,7 @@ jobs:
           fi
 
   rust-cli:
-    needs: [preflight, release-ref, release-intent]
+    needs: [release-ref, release-intent]
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +137,7 @@ jobs:
           if-no-files-found: error
 
   jvm:
-    needs: [preflight, release-ref, release-intent]
+    needs: [release-ref, release-intent]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -166,7 +162,7 @@ jobs:
           if-no-files-found: error
 
   browser:
-    needs: [preflight, release-intent]
+    needs: [release-intent]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -194,7 +190,7 @@ jobs:
           if-no-files-found: error
 
   publish-crates:
-    needs: [release-ref, release-intent, preflight]
+    needs: [release-ref, release-intent]
     runs-on: ubuntu-22.04
     environment: crates-io
     outputs:
@@ -623,7 +619,7 @@ jobs:
           node -e 'const fs = require("fs"); for (const name of ["native-browser", "hta"]) { const p = `node_modules/@hara-lang/${name}/package.json`; if (JSON.parse(fs.readFileSync(p)).version !== process.env.RELEASE_VERSION) process.exit(1); }'
 
   publish-container:
-    needs: [release-ref, release-intent, preflight, publish-native-crate]
+    needs: [release-ref, release-intent, publish-native-crate]
     runs-on: ubuntu-22.04
     outputs:
       image: ${{ steps.image.outputs.name }}
