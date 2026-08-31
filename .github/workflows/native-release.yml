@@ -835,6 +835,7 @@ jobs:
         with:
           tag_name: ${{ needs.release-ref.outputs.tag }}
           draft: false
+          body_path: release/release-notes.md
           generate_release_notes: true
           files: |
             dist/*
