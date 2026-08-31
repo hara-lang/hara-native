@@ -61,13 +61,48 @@ fn publication_tag_defaults_to_the_bare_project_version_and_allows_an_override()
 }
 
 #[test]
+fn project_native_is_an_exact_host_version_requirement() {
+    let root = temp("native-requirement");
+    fs::create_dir_all(&root).unwrap();
+    let base = "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.2.3\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}";
+    let host = env!("CARGO_PKG_VERSION");
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned()
+            + &format!(" :project/native {{:version \"{host}\"}}}}"),
+    )
+    .unwrap();
+    let project = read(&root).unwrap();
+    assert_eq!(project.native.unwrap().version.to_string(), host);
+
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned() + " :project/native {:version \"^0.1.14\"}}",
+    )
+    .unwrap();
+    assert!(read(&root)
+        .unwrap_err()
+        .contains(":project/native :version must be exact SemVer"));
+
+    let incompatible = if host == "0.0.0" { "0.0.1" } else { "0.0.0" };
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned()
+            + &format!(" :project/native {{:version \"{incompatible}\"}}}}"),
+    )
+    .unwrap();
+    assert!(read(&root).unwrap_err().contains("requires hara-native"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn creates_and_validates_an_empty_lock() {
     let root = temp("lock");
     let project = new_app(&root, "lock-app").unwrap();
     let lock = sync_lock(&project, LockMode::Default).unwrap();
     assert_eq!(
         fs::read_to_string(&lock).unwrap(),
-        "{:lock/format \"0.0.0-alpha\" :packages {}}\n"
+        "{:lock/format \"0.0.1\" :packages {}}\n"
     );
     sync_lock(&project, LockMode::Frozen).unwrap();
     fs::remove_dir_all(root).unwrap();

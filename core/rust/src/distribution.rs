@@ -89,6 +89,14 @@ pub fn seal(spec: &SealSpec) -> Result<SealedManifest, String> {
         ));
     }
 
+    let source_host_permissions = fs::metadata(&spec.host)
+        .map_err(|error| {
+            format!(
+                "cannot inspect sealed executable host {}: {error}",
+                spec.host.display()
+            )
+        })?
+        .permissions();
     let source_host = fs::read(&spec.host).map_err(|error| {
         format!(
             "cannot read sealed executable host {}: {error}",
@@ -172,7 +180,13 @@ pub fn seal(spec: &SealSpec) -> Result<SealedManifest, String> {
         &checksum_digest(&host),
         &checksum_digest(&payload),
     )?;
-    write_sealed_atomically(&spec.output, &host, &payload, &footer)?;
+    write_sealed_atomically(
+        &spec.output,
+        &host,
+        &payload,
+        &footer,
+        source_host_permissions,
+    )?;
     Ok(manifest)
 }
 
@@ -361,6 +375,7 @@ fn write_sealed_atomically(
     host: &[u8],
     payload: &[u8],
     footer: &[u8; SEALED_FOOTER_BYTES],
+    permissions: fs::Permissions,
 ) -> Result<(), String> {
     let parent = output
         .parent()
@@ -382,6 +397,7 @@ fn write_sealed_atomically(
         file.write_all(payload).map_err(io_error)?;
         file.write_all(footer).map_err(io_error)?;
         file.sync_all().map_err(io_error)?;
+        fs::set_permissions(&temporary, permissions).map_err(io_error)?;
         fs::rename(&temporary, output).map_err(io_error)
     })();
     if result.is_err() {

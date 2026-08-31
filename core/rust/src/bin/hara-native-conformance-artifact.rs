@@ -286,7 +286,10 @@ fn validate_native_behavioral_coverage(
     }
     let portable = native_declarations()
         .iter()
-        .filter(|declaration| declaration.availability == NativeAvailability::Portable)
+        .filter(|declaration| {
+            declaration.namespace == "std.native"
+                && declaration.availability == NativeAvailability::Portable
+        })
         .flat_map(|declaration| {
             declaration
                 .methods

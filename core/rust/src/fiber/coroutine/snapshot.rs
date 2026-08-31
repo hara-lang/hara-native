@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn raised_errors_and_selected_catches_are_explicit() {
-        let semantics = collect_semantics("(try (/ 1 0) (catch Exception error 42))");
+        let semantics = collect_semantics("(try (/ 1 0) (catch error 42))");
         let raised = semantics
             .iter()
             .find(|semantic| semantic.rule == "error/raise")

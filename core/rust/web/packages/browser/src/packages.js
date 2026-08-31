@@ -226,8 +226,8 @@ function safeArchivePath(path) {
 }
 
 /**
- * Downloads and verifies every HARP archive through the commit-pinned Packages
- * registry. Nothing is registered until all packages verify.
+ * Downloads and verifies every HARP archive through the GitHub Packages-backed
+ * Packages registry. Nothing is registered until all packages verify.
  */
 export async function loadLockedPackageResources(
   lockSource,
@@ -246,8 +246,8 @@ async function loadLockedPackageArtifacts(
   targets
 ) {
   const lock = parseEdn(lockSource);
-  if (lock["lock/format"] !== "0.0.0-alpha") {
-    throw new Error("project.lock.edn requires :lock/format \"0.0.0-alpha\"");
+  if (lock["lock/format"] !== "0.0.1") {
+    throw new Error("project.lock.edn requires :lock/format \"0.0.1\"");
   }
   lockedPackages(lock);
 
@@ -256,25 +256,26 @@ async function loadLockedPackageArtifacts(
   const packages = [];
   for (const coordinate of lockedClosure(lock, targets)) {
     const entry = lock.packages[coordinate];
-    const registryCommit = entry["registry-commit"];
-    const identityRevision = entry["identity-revision"];
+    const ociRepository = entry["oci/repository"];
+    const ociManifest = entry["oci/manifest"];
     const digest = entry["archive-sha256"];
     const version = entry.version;
-    if (!/^[0-9a-f]{40}$/.test(registryCommit ?? "")
-        || !/^[0-9a-f]{40}$/.test(identityRevision ?? "")
+    if (!/^ghcr\.io\/hara-packages\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(ociRepository ?? "")
+        || !/^sha256:[0-9a-f]{64}$/.test(ociManifest ?? "")
         || !/^sha256:[0-9a-f]{64}$/.test(digest ?? "")
         || typeof version !== "string") {
       throw new Error(`Locked package ${coordinate} has an incomplete exact descriptor`);
     }
     const base = String(origin).replace(/\/$/, "");
-    const registryResponse = await request(`${base}/v1/registry?ref=${registryCommit}`);
+    const registryResponse = await request(`${base}/v1/registry?ref=main`);
     if (!registryResponse.ok) {
       throw new Error(`Locked package ${coordinate} registry failed: ${registryResponse.status}`);
     }
     const registry = parseEdn(await registryResponse.text());
     const release = registry["registry/packages"]?.[coordinate]?.[version];
     if (release?.["archive-sha256"] !== digest
-        || release?.["identity-revision"] !== identityRevision) {
+        || release?.["oci/repository"] !== ociRepository
+        || release?.["oci/manifest"] !== ociManifest) {
       throw new Error(`Locked package ${coordinate} registry mismatch`);
     }
     const response = await request(`${base}/objects/sha256/${digest.slice(7)}`);

@@ -28,15 +28,6 @@ pub(super) fn optional_string<'a>(
     }
 }
 
-pub(super) fn boolean(arguments: &[Value], index: usize, operation: &str) -> Result<bool, String> {
-    match arguments.get(index) {
-        Some(Value::Bool(value)) => Ok(*value),
-        _ => Err(format!(
-            "foundation.kernel/{operation} expects a boolean argument"
-        )),
-    }
-}
-
 pub(super) fn strings(
     arguments: &[Value],
     index: usize,

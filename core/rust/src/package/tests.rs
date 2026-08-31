@@ -26,7 +26,7 @@ fn fixture() -> PathBuf {
     fs::write(root.join("project.edn"), "{:hara/type :project :hara/version \"1.0.0\" :project/id example/app :project/version \"1.2.3\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [\"extensions\"] :project/capabilities #{} :project/dependencies {\"hara:hara/graph\" {:version \"^1.2.0\"}}}").unwrap();
     fs::write(
         root.join("project.lock.edn"),
-        "{:lock/format \"0.0.0-alpha\" :packages {}}\n",
+        "{:lock/format \"0.0.1\" :packages {}}\n",
     )
     .unwrap();
     root
@@ -209,6 +209,44 @@ fn packages_declared_artifacts_under_the_archive_root() {
 }
 
 #[test]
+fn preserves_hal_artifact_data_without_compiling_it() {
+    let root = fixture();
+    fs::create_dir_all(root.join("spec/fixtures")).unwrap();
+    let fixture_source = "(ns spec.fixture) (bytes? (Bytes/new 1))\n";
+    fs::write(
+        root.join("spec/fixtures/native-behavioral.hal"),
+        fixture_source,
+    )
+    .unwrap();
+    fs::write(
+        root.join("spec/fixtures/duplicate-namespace.hal"),
+        "(ns spec.fixture) 0\n",
+    )
+    .unwrap();
+    let source = fs::read_to_string(root.join("project.edn")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        source.trim().strip_suffix('}').unwrap().to_owned()
+            + " :project/artifact-paths [\"spec\"]}",
+    )
+    .unwrap();
+
+    let archive = root.join("specs.harp");
+    build_archive(&read_project(&root).unwrap(), &archive).unwrap();
+
+    let file = File::open(&archive).unwrap();
+    let mut zip = ZipArchive::new(file).unwrap();
+    let mut archived = String::new();
+    zip.by_name("spec/fixtures/native-behavioral.hal")
+        .unwrap()
+        .read_to_string(&mut archived)
+        .unwrap();
+    assert_eq!(archived, fixture_source);
+    assert!(zip.by_name("spec/fixtures/duplicate-namespace.hal").is_ok());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rejects_missing_declared_artifacts() {
     let root = fixture();
     fs::write(
@@ -228,7 +266,7 @@ fn packages_lock_and_explicit_portable_workspace_only() {
     let root = fixture();
     fs::write(
         root.join("project.lock.edn"),
-        "{:lock/format \"0.0.0-alpha\" :packages {}}\n",
+        "{:lock/format \"0.0.1\" :packages {}}\n",
     )
     .unwrap();
     fs::write(
@@ -300,6 +338,12 @@ fn publication_error_diagnostics_are_bounded() {
         "publication request failed: ".len() + MAX_PUBLICATION_DIAGNOSTIC_BYTES + "…".len()
     );
     assert!(diagnostic.ends_with('…'));
+}
+
+#[test]
+fn direct_package_publication_requires_the_source_workflow() {
+    let error = run(&["publish".into()]).unwrap_err();
+    assert!(error.contains("publication-github-workflow-required"));
 }
 
 #[test]

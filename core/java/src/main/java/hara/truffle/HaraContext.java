@@ -239,6 +239,7 @@ public final class HaraContext {
         });
     installProjectMacro();
     installNativeLibraries();
+    HaraNativeLang.install(this);
     installEnvironmentLibraries();
     libraryLoader.installEagerJava(this);
     hideIteratorImplementationBindings();
@@ -485,7 +486,6 @@ public final class HaraContext {
   private void installNativeTypeDescriptors() {
     withDeclarationTransaction(
         () -> {
-          namespace("std.native");
           for (hara.lang.declaration.HaraNativeBinding binding : HaraNativeDeclarations.bindings()) {
             publishNativeDescriptor(binding);
           }
@@ -496,21 +496,25 @@ public final class HaraContext {
   /** Publishes one annotated native descriptor and all spec-defined aliases. */
   private void publishNativeDescriptor(hara.lang.declaration.HaraNativeBinding binding) {
     String name = binding.name();
-    String canonicalName = HaraNativeDeclarations.namespace(name);
+    String canonicalName = HaraNativeDeclarations.qualifiedName(binding);
     if (sandboxRestricted && sandboxForbiddenNamespace(canonicalName)) return;
+    namespace(binding.namespace());
     HaraNamespace intrinsic = namespace(INTRINSIC_NAMESPACE);
     HaraVar descriptor =
         intrinsic.define(
             canonicalName,
             new HaraNativeType(
+                binding.namespace(),
                 name,
-                HaraNativeDeclarations.methods(name),
+                HaraNativeDeclarations.methods(binding),
                 binding.availability(),
                 binding.capability()),
             null,
             HaraVar.Origin.RUNTIME_PRIMITIVE);
-    intrinsic.refer(name, descriptor);
-    namespace(FOUNDATION_NAMESPACE).refer(name, descriptor);
+    if ("std.native".equals(binding.namespace())) {
+      intrinsic.refer(name, descriptor);
+      namespace(FOUNDATION_NAMESPACE).refer(name, descriptor);
+    }
   }
 
   private void installNativeExports(String sourceNamespace) {
@@ -1576,6 +1580,7 @@ public final class HaraContext {
     Map<String, String> namespaceAliases =
         aliases.computeIfAbsent(target.name(), ignored -> new ConcurrentHashMap<>());
     for (hara.lang.declaration.HaraNativeBinding binding : HaraNativeDeclarations.bindings()) {
+      if (!"std.native".equals(binding.namespace())) continue;
       String name = binding.name();
       String namespace = HaraNativeDeclarations.namespace(name);
       if (!sandboxRestricted || !sandboxForbiddenNamespace(namespace)) {
@@ -1594,6 +1599,7 @@ public final class HaraContext {
   private void referNativeTypeDescriptors(HaraNamespace target) {
     HaraNamespace intrinsic = namespace(INTRINSIC_NAMESPACE);
     for (hara.lang.declaration.HaraNativeBinding binding : HaraNativeDeclarations.bindings()) {
+      if (!"std.native".equals(binding.namespace())) continue;
       String name = binding.name();
       String namespace = HaraNativeDeclarations.namespace(name);
       if (sandboxRestricted && sandboxForbiddenNamespace(namespace)) continue;
@@ -3152,7 +3158,8 @@ public final class HaraContext {
               Object type = HaraBox.unwrap(values[0]);
               Object value = HaraBox.unwrap(values[1]);
               if (type instanceof HaraNativeType nativeType) {
-                return portableType(value).equals(Keyword.create("std.native." + nativeType.getName()));
+                return portableType(value)
+                    .equals(Keyword.create(nativeType.getNamespace() + "." + nativeType.getName()));
               }
               if (!(type instanceof HaraType)) {
                 throw new HaraException("instance? expects a type descriptor");
@@ -3966,6 +3973,13 @@ public final class HaraContext {
     Object raw = HaraBox.unwrap(value);
     if (raw instanceof HaraStruct struct) return namedTypeKeyword(struct.type().name());
     if (raw instanceof HaraMutable mutable) return namedTypeKeyword(mutable.type().name());
+    if (raw instanceof HaraNativeLang.ImmutableValue lang) {
+      return Keyword.create("std.lang." + lang.type());
+    }
+    if (raw instanceof HaraNativeLang.Library) return Keyword.create("std.lang.Library");
+    if (raw instanceof HaraNativeLang.Snapshot) return Keyword.create("std.lang.Snapshot");
+    if (raw instanceof HaraNativeLang.Runtime) return Keyword.create("std.lang.Runtime");
+    if (raw instanceof HaraNativeLang.Harness) return Keyword.create("std.lang.Harness");
 
     String type;
     if (raw == null || raw == HaraNull.SINGLETON) type = "Nil";
@@ -3989,6 +4003,10 @@ public final class HaraContext {
     else if (raw instanceof HaraSchemaType) type = "SchemaType";
     else if (raw instanceof HaraResult) type = "Result";
     else if (raw instanceof hara.lang.protocol.IExInfo || raw instanceof HaraException) type = "Exception";
+    else if (raw instanceof HaraWorkHost) type = "WorkHost";
+    else if (raw instanceof hara.work.WorkRegistry) type = "WorkRegistry";
+    else if (raw instanceof hara.work.WorkRuntime) type = "WorkRuntime";
+    else if (raw instanceof hara.lang.protocol.IWorkRun) type = "WorkRun";
     else if (raw instanceof hara.lang.protocol.IStream) type = "Stream";
     else if (raw instanceof hara.lang.protocol.ICoroutine) type = "Coroutine";
     else if (raw instanceof IPromise) type = "Promise";
@@ -6629,6 +6647,10 @@ public final class HaraContext {
     return input instanceof HaraPromise
         ? ((HaraPromise) input).future
         : CompletableFuture.completedFuture(input);
+  }
+
+  CompletableFuture<Object> promiseFuture(Object value) {
+    return flatten(value);
   }
 
   private Object promiseAll(Object value) {

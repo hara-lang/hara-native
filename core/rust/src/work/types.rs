@@ -65,12 +65,44 @@ pub struct WorkHostStatus {
     pub queued_count: usize,
 }
 
+/// A portable absolute deadline on the runtime's monotonic nanosecond clock.
+///
+/// Unlike `std::time::Instant`, this remains available in browser Wasm where
+/// the native standard-library clock is intentionally absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WorkDeadline(u64);
+
+impl WorkDeadline {
+    pub fn at_monotonic_nanos(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn after(timeout: Duration) -> Self {
+        let timeout = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
+        Self(monotonic_nanos().saturating_add(timeout))
+    }
+
+    pub fn monotonic_nanos(self) -> u64 {
+        self.0
+    }
+
+    pub fn expired(self) -> bool {
+        monotonic_nanos() >= self.0
+    }
+
+    pub fn remaining_millis(self) -> u64 {
+        self.0
+            .saturating_sub(monotonic_nanos())
+            .saturating_div(1_000_000)
+    }
+}
+
 /// Submission-time scope and deadline options.
 #[derive(Clone, Debug, Default)]
 pub struct WorkOptions {
     pub id: Option<WorkId>,
     pub timeout: Option<Duration>,
-    pub deadline: Option<Instant>,
+    pub deadline: Option<WorkDeadline>,
     pub detached: bool,
 }
 

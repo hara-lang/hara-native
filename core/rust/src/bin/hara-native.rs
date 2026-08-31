@@ -63,12 +63,7 @@ enum Command {
     },
     Signer(Vec<String>),
     Id(Vec<String>),
-    Publish {
-        project: PathBuf,
-        tap: String,
-        dry_run: bool,
-        skip_signed_tag: bool,
-    },
+    Publish,
     Help,
     Version,
 }
@@ -365,16 +360,10 @@ fn cli_command(request: &Request) -> Result<Command, String> {
             if tap.is_empty() || tap.starts_with('-') {
                 return Err("hara-native publish --tap requires a tap name".into());
             }
-            let dry_run = enabled("dry-run")?;
-            let skip_signed_tag = enabled("skip-signed-tag")?;
-            Ok(Command::Publish {
-                project: non_empty(argument("project")?)
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(".")),
-                tap,
-                dry_run,
-                skip_signed_tag,
-            })
+            enabled("dry-run")?;
+            enabled("skip-signed-tag")?;
+            let _ = non_empty(argument("project")?);
+            Ok(Command::Publish)
         }
         route => Err(format!("unhandled hara-native command route: {route}")),
     }
@@ -455,23 +444,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::DistributionBuild { project, output } => build_distribution(&project, &output),
         Command::Signer(arguments) => signer::run(arguments),
         Command::Id(arguments) => run_id(&arguments),
-        Command::Publish {
-            project,
-            tap,
-            dry_run,
-            skip_signed_tag,
-        } => {
-            let public_key = signer::public_key_from_environment()?;
-            package::publish_path_with_signer_and_identity(
-                &project,
-                &tap,
-                dry_run,
-                skip_signed_tag,
-                signer::sign_intent_from_environment,
-                Some(&public_key),
-            )
-        }
-        .map(|result| println!("{result}")),
+        Command::Publish => Err(package::github_workflow_required()),
         Command::Help => {
             usage();
             Ok(())
@@ -621,6 +594,15 @@ fn execute_installed_bundle(
     entry: Option<&str>,
     argv: Option<&[String]>,
 ) -> Result<String, String> {
+    execute_installed_bundle_roots(root, &[root.to_path_buf()], entry, argv)
+}
+
+fn execute_installed_bundle_roots(
+    root: &Path,
+    roots: &[PathBuf],
+    entry: Option<&str>,
+    argv: Option<&[String]>,
+) -> Result<String, String> {
     let project = project::read(&root)?;
     let main = project::main_file(&project)?;
     let source = fs::read_to_string(&main)
@@ -640,6 +622,9 @@ fn execute_installed_bundle(
         )?,
     );
     runtime.register_source_catalog(&catalog);
+    for package_root in roots {
+        runtime.register_installed_package(package_root)?;
+    }
     if catalog.path("std.foundation").is_some() {
         runtime.bootstrap_source_foundation()?;
     }
@@ -1361,7 +1346,13 @@ fn run_sealed_distribution(arguments: &[String]) -> Result<Option<i32>, String> 
     let Some(installed) = distribution::install_sealed(&native)? else {
         return Ok(None);
     };
-    run_installed_distribution(&installed.primary, &installed.manifest.entry, arguments).map(Some)
+    run_installed_distribution_roots(
+        &installed.primary,
+        &installed.roots,
+        &installed.manifest.entry,
+        arguments,
+    )
+    .map(Some)
 }
 
 fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, String> {
@@ -1384,7 +1375,16 @@ fn run_installed_distribution(
     entry: &str,
     arguments: &[String],
 ) -> Result<i32, String> {
-    let result = execute_installed_bundle(installed, Some(entry), Some(arguments))?;
+    run_installed_distribution_roots(installed, &[installed.to_path_buf()], entry, arguments)
+}
+
+fn run_installed_distribution_roots(
+    installed: &Path,
+    roots: &[PathBuf],
+    entry: &str,
+    arguments: &[String],
+) -> Result<i32, String> {
+    let result = execute_installed_bundle_roots(installed, roots, Some(entry), Some(arguments))?;
     match companion_host_action(&result)? {
         Some(CompanionHostAction::Resp) => {
             run_companion_resp(installed, arguments)?;
@@ -1565,16 +1565,7 @@ mod tests {
                 "--dry-run".into(),
                 "package-root".into(),
             ]),
-            Ok(Command::Publish {
-                project,
-                tap,
-                dry_run,
-                skip_signed_tag,
-            })
-                if project == std::path::PathBuf::from("package-root")
-                    && tap == "partner"
-                    && dry_run
-                    && !skip_signed_tag
+            Ok(Command::Publish)
         ));
     }
 
@@ -1782,6 +1773,51 @@ mod tests {
     }
 
     #[test]
+    fn sealed_bundle_execution_mounts_companion_package_content_for_package_read() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-package-content-{}",
+            std::process::id()
+        ));
+        let store = root.join("store");
+        let primary = root.join("primary");
+        let specs = root.join("specs");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(primary.join("src/demo")).unwrap();
+        fs::create_dir_all(specs.join("content")).unwrap();
+        fs::write(
+            primary.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/cli :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main demo.cli :project/capabilities #{:kernel}}\n",
+        )
+        .unwrap();
+        fs::write(
+            primary.join("src/demo/cli.hal"),
+            "(ns demo.cli)\n(defn main [_] (String/decode-utf8 (Package/read (Package/find \"hara:fixture/specs\") \"content/suite.edn\")))\n",
+        )
+        .unwrap();
+        fs::write(
+            specs.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/specs :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/artifact-paths [\"content\"] :project/capabilities #{:kernel}}\n",
+        )
+        .unwrap();
+        fs::write(specs.join("content/suite.edn"), "{:suite/id :fixture/specs}\n").unwrap();
+
+        let primary_archive = package::build_path(&primary, None).unwrap();
+        let specs_archive = package::build_path(&specs, None).unwrap();
+        let primary_root = package::install_path_at(&primary_archive, &store).unwrap();
+        let specs_root = package::install_path_at(&specs_archive, &store).unwrap();
+        let result = super::execute_installed_bundle_roots(
+            &primary_root,
+            &[primary_root.clone(), specs_root],
+            Some("demo.cli/main"),
+            Some(&[]),
+        )
+        .unwrap();
+        assert_eq!(result, "\"{:suite/id :fixture/specs}\\n\"");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_unknown_bundle_operations() {
         let error =
             parse_arguments(["bundle".into(), "publish".into(), "x.harp".into()]).unwrap_err();
@@ -1812,15 +1848,7 @@ mod tests {
             "--skip-signed-tag".into(),
             "examples/smoke-answer".into(),
         ]);
-        assert!(matches!(
-            parsed,
-            Ok(Command::Publish {
-                project,
-                tap,
-                dry_run: false,
-                skip_signed_tag: true,
-            }) if project == std::path::PathBuf::from("examples/smoke-answer") && tap == "hara"
-        ));
+        assert!(matches!(parsed, Ok(Command::Publish)));
 
         assert!(matches!(
             parse_arguments([
@@ -1828,11 +1856,7 @@ mod tests {
                 "--dry-run".into(),
                 "--skip-signed-tag".into(),
             ]),
-            Ok(Command::Publish {
-                dry_run: true,
-                skip_signed_tag: true,
-                ..
-            })
+            Ok(Command::Publish)
         ));
     }
 

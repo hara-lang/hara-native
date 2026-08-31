@@ -137,11 +137,7 @@ pub(super) fn kernel_call(
             .to_string_lossy()
             .into_owned(),
         )),
-        "package-publish" => Ok(Value::String(crate::package::publish_path(
-            std::path::Path::new(string_argument(arguments, 0, operation)?),
-            string_argument(arguments, 1, operation)?,
-            boolean_argument(arguments, 2, operation)?,
-        )?)),
+        "package-publish" => Err(crate::package::github_workflow_required()),
         "package-registry-verify" => {
             let request = std::path::Path::new(string_argument(arguments, 0, operation)?);
             let identity = std::path::Path::new(string_argument(arguments, 1, operation)?);

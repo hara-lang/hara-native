@@ -53,7 +53,7 @@ pub(crate) mod declarations {
         availability = "capability-gated",
         capability = "kernel",
         methods = [
-            "catalog", "find", "ensure", "load", "unload", "state", "build", "inspect",
+            "catalog", "find", "read", "ensure", "load", "unload", "state", "build", "inspect",
             "seal", "inspect-seal", "verify-seal"
         ],
         provider = native_package_provider
@@ -255,10 +255,43 @@ pub(crate) mod declarations {
     #[hara_native(
         namespace = "std.native",
         name = "Work",
-        availability = "capability-gated",
-        capability = "native-runtime",
-        methods = ["default-host", "current-run", "cancelled?", "check-cancelled", "deadline-nanos", "emit", "submit-child", "on-close"],
+        methods = [
+            "default-host", "reset-host", "current-run", "cancelled?", "check-cancelled", "deadline-nanos", "emit", "submit-child", "on-close",
+            "plan?", "configured", "pure", "step", "chain", "all", "each", "filter", "fold", "choose", "graph", "batch", "bind", "ensure", "await", "encode-hta", "decode-hta",
+            "new-registry", "bind-target", "unbind-target", "target", "target-names", "reset-registry",
+            "new-runtime", "runtime-registry", "evaluate", "reset-runtime", "submit-plan"
+        ],
         provider = native_work_provider
     )]
     struct Work;
+
+    #[hara_native(namespace = "std.lang", name = "BookMeta", methods = ["create", "data"], provider = native_lang_provider)]
+    struct BookMeta;
+
+    #[hara_native(namespace = "std.lang", name = "BookEntry", methods = ["create", "data"], provider = native_lang_provider)]
+    struct BookEntry;
+
+    #[hara_native(namespace = "std.lang", name = "BookModule", methods = ["create", "data"], provider = native_lang_provider)]
+    struct BookModule;
+
+    #[hara_native(namespace = "std.lang", name = "Book", methods = ["create", "data"], provider = native_lang_provider)]
+    struct Book;
+
+    #[hara_native(namespace = "std.lang", name = "Library", methods = ["create", "config", "install", "remove", "resolve", "books", "snapshot", "restore", "reset", "state"], provider = native_lang_provider)]
+    struct Library;
+
+    #[hara_native(namespace = "std.lang", name = "Snapshot", methods = ["data"], provider = native_lang_provider)]
+    struct Snapshot;
+
+    #[hara_native(namespace = "std.lang", name = "Compiler", methods = ["create", "config"], provider = native_lang_provider)]
+    struct Compiler;
+
+    #[hara_native(namespace = "std.lang", name = "Compilation", methods = ["create", "data"], provider = native_lang_provider)]
+    struct Compilation;
+
+    #[hara_native(namespace = "std.lang", name = "Runtime", methods = ["create", "config", "state", "reset", "close", "closed?"], provider = native_lang_provider)]
+    struct Runtime;
+
+    #[hara_native(namespace = "std.lang", name = "Harness", methods = ["create", "config", "library", "runtime", "snapshot", "restore", "reset", "close", "closed?", "state"], provider = native_lang_provider)]
+    struct Harness;
 }

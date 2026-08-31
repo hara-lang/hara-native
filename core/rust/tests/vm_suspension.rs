@@ -61,7 +61,7 @@ fn rejected_await_runs_finally_before_the_outer_catch() {
                (finally (set! marker 1))))
            (try
              (inner source)
-             (catch Exception error [error marker])))",
+             (catch error [error marker])))",
         source.clone(),
     );
 

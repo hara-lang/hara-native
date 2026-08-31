@@ -48,6 +48,29 @@ fn stop_drains_admitted_work_while_kill_cancels_it() {
     host.kill();
     assert_eq!(cancelled.work_status().state, WorkRunState::Cancelled);
 }
+
+#[test]
+fn reset_cancels_admitted_work_and_restores_a_fresh_accepting_host() {
+    let host = WorkHost::new();
+    let queued = host.submit(None, || Ok(Value::Number(7))).unwrap();
+    let queued_id = queued.work_id();
+
+    host.reset();
+    host.reset();
+
+    assert!(host.started());
+    assert_eq!(host.status().run_count, 0);
+    assert_eq!(host.status().queued_count, 0);
+    assert_eq!(queued.work_status().state, WorkRunState::Cancelled);
+    assert!(host.resolve_id(&queued_id).is_err());
+
+    let replacement = host.submit(None, || Ok(Value::Number(8))).unwrap();
+    assert_eq!(replacement.work_id().as_str(), "run-1");
+    assert_eq!(
+        replacement.work_result().state(),
+        PromiseState::Fulfilled(Value::Number(8))
+    );
+}
 use std::cell::Cell;
 
 #[test]

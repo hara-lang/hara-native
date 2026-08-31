@@ -96,7 +96,7 @@ fn locked_imports(
         .map_err(|error| format!("npm/lock-unavailable: {} ({error})", lock.display()))?;
     let document = parse(&source).map_err(|error| format!("npm/lock-invalid: {error}"))?;
     let root = map(&document, "npm/lock-invalid: root must be a map")?;
-    if !matches!(lookup(root, "lock/format"), Some(Form::String(value)) if value == "0.0.0-alpha") {
+    if !matches!(lookup(root, "lock/format"), Some(Form::String(value)) if value == "0.0.1") {
         return Err("npm/lock-invalid: unsupported :lock/format".into());
     }
     let runtime = map(
@@ -395,7 +395,7 @@ fn render_lock(
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "{{:lock/format \"0.0.0-alpha\" :packages {{}} :runtime {{:rust {{:npm {{{packages}}} :imports {{{imports}}}}}}}}}\n"
+        "{{:lock/format \"0.0.1\" :packages {{}} :runtime {{:rust {{:npm {{{packages}}} :imports {{{imports}}}}}}}}}\n"
     )
 }
 

@@ -128,7 +128,7 @@ impl Runtime {
     pub(crate) fn sandbox() -> Runtime {
         const FORBIDDEN: &[&str] = &[
             "Runtime", "Kernel", "Sandbox", "Package", "Crypto", "OS", "Process", "File", "Socket",
-            "Host", "Work",
+            "Host",
         ];
         let runtime = Runtime::new();
         for name in FORBIDDEN {
@@ -1106,12 +1106,12 @@ impl Runtime {
                     core::Value::String(package.tap),
                 ),
                 (
-                    core::Value::Keyword("package/registry-commit".into()),
-                    core::Value::String(package.registry_commit),
+                    core::Value::Keyword("package/oci-repository".into()),
+                    core::Value::String(package.oci_repository),
                 ),
                 (
-                    core::Value::Keyword("package/identity-revision".into()),
-                    core::Value::String(package.identity_revision),
+                    core::Value::Keyword("package/oci-manifest".into()),
+                    core::Value::String(package.oci_manifest),
                 ),
                 (
                     core::Value::Keyword("package/archive-sha256".into()),
@@ -1148,6 +1148,7 @@ impl Runtime {
                 package.name,
                 core::Value::OrderedMap(Box::new(POrderedMap::from_iter(descriptor))),
                 namespaces.clone(),
+                None,
             );
             for namespace in namespaces {
                 if self.namespace_registry.load_state(&namespace).is_none() {
@@ -1513,6 +1514,45 @@ impl Runtime {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Runtime {
+    /// Registers an already verified installed HARP root as a read-only
+    /// package-content source without exposing its host path to Hara code.
+    pub fn register_installed_package(&mut self, root: &std::path::Path) -> Result<(), String> {
+        let project = crate::project::read(root)?;
+        let coordinate = crate::project::normalize_coordinate(&project.id)?;
+        let namespaces = crate::project::source_catalog(&project)?
+            .entries()
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let descriptor = core::Value::OrderedMap(Box::new(POrderedMap::from_iter([
+            (
+                core::Value::Keyword("package/coordinate".into()),
+                core::Value::String(coordinate.clone()),
+            ),
+            (
+                core::Value::Keyword("package/version".into()),
+                core::Value::String(project.version.to_string()),
+            ),
+            (
+                core::Value::Keyword("package/namespaces".into()),
+                core::Value::Vector(PVector::from_iter(
+                    namespaces
+                        .iter()
+                        .map(|name| core::Value::Symbol(crate::lang::data::Symbol::parse(name))),
+                )),
+            ),
+        ])));
+        self.package_catalog.register(
+            coordinate.clone(),
+            project.package_name,
+            descriptor,
+            namespaces,
+            Some(root.to_path_buf()),
+        );
+        self.package_catalog.set_state(&coordinate, "ready");
+        Ok(())
+    }
+
     /// Evaluates native source while retaining the typed exception and callable
     /// frames needed by embedding protocols. The ordinary `eval_native` and
     /// `eval_native_traced` string contracts remain unchanged.
@@ -1586,9 +1626,8 @@ impl Runtime {
         self.load_namespace_from_provider("std.foundation")?;
         self.loaded_resources.insert("std.foundation".into());
         for &name in EAGER_HAL_RESOURCES {
-            let has_resource = self.resources.contains_key(name)
-                || self.has_bytecode_resource(name)
-                || {
+            let has_resource =
+                self.resources.contains_key(name) || self.has_bytecode_resource(name) || {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         self.source_paths.contains_key(name)
@@ -1780,4 +1819,27 @@ fn foundation_namespace_for_request(name: &str) -> Option<String> {
         let namespace = name.strip_prefix("classpath:").unwrap_or(name);
         (namespace.starts_with("std.foundation.")).then(|| namespace.to_owned())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_keeps_the_portable_work_surface() {
+        let mut runtime = Runtime::sandbox();
+
+        assert_eq!(
+            runtime
+                .eval("(Work/plan? (Work/pure \"fixture/value\"))")
+                .expect("sandbox must retain portable Work plan methods"),
+            "true"
+        );
+        assert_eq!(
+            runtime
+                .eval("(= (Work/default-host) (Work/reset-host (Work/default-host)))")
+                .expect("sandbox must retain portable Work host methods"),
+            "true"
+        );
+    }
 }

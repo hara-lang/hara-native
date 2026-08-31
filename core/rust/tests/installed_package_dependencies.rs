@@ -72,7 +72,7 @@ fn write_package(
     if !dependencies.is_empty() {
         fs::write(
             root.join("project.lock.edn"),
-            "{:lock/format \"0.0.0-alpha\" :packages {}}\n",
+            "{:lock/format \"0.0.1\" :packages {}}\n",
         )
         .unwrap();
     }

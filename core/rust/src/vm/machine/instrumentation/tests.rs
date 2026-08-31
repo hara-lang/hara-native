@@ -66,7 +66,7 @@ fn synchronous_calls_and_returns_are_counted() {
 
 #[test]
 fn caught_failures_emit_unwind_without_terminal_failure() {
-    let mut machine = machine("(try (/ 1 0) (catch Exception error 42))");
+    let mut machine = machine("(try (/ 1 0) (catch error 42))");
     let mut probe = CounterProbe::default();
     assert_eq!(
         returned(machine.run_instrumented(&mut probe)),

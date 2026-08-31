@@ -32,15 +32,15 @@ async function fixture() {
     "src/demo/world.hal": source
   });
   const archiveDigest = await digest(archive);
-  const registryCommit = "a".repeat(40);
-  const identityRevision = "b".repeat(40);
-  const lock = `{:lock/format \"0.0.0-alpha\" :packages {"demo:world" `
-    + `{:version "1.0.0" :tap "hara" :registry-commit "${registryCommit}" `
-    + `:identity-revision "${identityRevision}" :archive-sha256 "${archiveDigest}" `
+  const ociRepository = "ghcr.io/hara-packages/demo.world";
+  const ociManifest = `sha256:${"a".repeat(64)}`;
+  const lock = `{:lock/format \"0.0.1\" :packages {"demo:world" `
+    + `{:version "1.0.0" :tap "hara" :oci/repository "${ociRepository}" `
+    + `:oci/manifest "${ociManifest}" :archive-sha256 "${archiveDigest}" `
     + `:namespaces [demo.world]}}}`;
   const registry = `{:registry/packages {"demo:world" {"1.0.0" `
-    + `{:archive-sha256 "${archiveDigest}" :identity-revision "${identityRevision}"}}}}`;
-  return { archive, lock, registry, registryCommit, archiveDigest };
+    + `{:archive-sha256 "${archiveDigest}" :oci/repository "${ociRepository}" :oci/manifest "${ociManifest}"}}}}`;
+  return { archive, lock, registry, archiveDigest };
 }
 
 async function bytecodeFixture() {
@@ -62,15 +62,15 @@ async function bytecodeFixture() {
     "bytecode/package.hbx": bundle
   });
   const archiveDigest = await digest(archive);
-  const registryCommit = "1".repeat(40);
-  const identityRevision = "2".repeat(40);
-  const lock = `{:lock/format "0.0.0-alpha" :packages {"hara:lang/model.v1.postgres" `
+  const ociRepository = "ghcr.io/hara-packages/hara-lang.hara";
+  const ociManifest = `sha256:${"1".repeat(64)}`;
+  const lock = `{:lock/format "0.0.1" :packages {"hara:lang/model.v1.postgres" `
     + `{:name "lang.model.v1.postgres" :version "1.0.0" :tap "hara" `
-    + `:registry-commit "${registryCommit}" :identity-revision "${identityRevision}" `
+    + `:oci/repository "${ociRepository}" :oci/manifest "${ociManifest}" `
     + `:archive-sha256 "${archiveDigest}" :namespaces [postgres.core]}}}`;
   const registry = `{:registry/packages {"hara:lang/model.v1.postgres" {"1.0.0" `
-    + `{:archive-sha256 "${archiveDigest}" :identity-revision "${identityRevision}"}}}}`;
-  return { archive, bundle, lock, registry, registryCommit, archiveDigest };
+    + `{:archive-sha256 "${archiveDigest}" :oci/repository "${ociRepository}" :oci/manifest "${ociManifest}"}}}}`;
+  return { archive, bundle, lock, registry, archiveDigest };
 }
 
 async function htaFixture(capabilities = "[]", namespace = "db.sqlite.wasm.hta") {
@@ -98,15 +98,15 @@ async function htaFixture(capabilities = "[]", namespace = "db.sqlite.wasm.hta")
     "provider/browser/assets/chunk.js": asset
   });
   const archiveDigest = await digest(archive);
-  const registryCommit = "c".repeat(40);
-  const identityRevision = "d".repeat(40);
-  const lock = `{:lock/format "0.0.0-alpha" :packages {"demo:world" `
-    + `{:version "1.0.0" :tap "hara" :registry-commit "${registryCommit}" `
-    + `:identity-revision "${identityRevision}" :archive-sha256 "${archiveDigest}" `
+  const ociRepository = "ghcr.io/hara-packages/demo.world";
+  const ociManifest = `sha256:${"c".repeat(64)}`;
+  const lock = `{:lock/format "0.0.1" :packages {"demo:world" `
+    + `{:version "1.0.0" :tap "hara" :oci/repository "${ociRepository}" `
+    + `:oci/manifest "${ociManifest}" :archive-sha256 "${archiveDigest}" `
     + `:namespaces [demo.world]}}}`;
   const registry = `{:registry/packages {"demo:world" {"1.0.0" `
-    + `{:archive-sha256 "${archiveDigest}" :identity-revision "${identityRevision}"}}}}`;
-  return { archive, lock, registry, registryCommit, worker, asset };
+    + `{:archive-sha256 "${archiveDigest}" :oci/repository "${ociRepository}" :oci/manifest "${ociManifest}"}}}}`;
+  return { archive, lock, registry, worker, asset };
 }
 
 async function wasmHtaFixture(namespace = "fs.github.wasm") {
@@ -137,19 +137,19 @@ async function wasmHtaFixture(namespace = "fs.github.wasm") {
     "provider/library.wasm": library
   });
   const archiveDigest = await digest(archive);
-  const registryCommit = "e".repeat(40);
-  const identityRevision = "f".repeat(40);
-  const lock = `{:lock/format "0.0.0-alpha" :packages {"demo:github" `
-    + `{:version "1.0.0" :tap "hara" :registry-commit "${registryCommit}" `
-    + `:identity-revision "${identityRevision}" :archive-sha256 "${archiveDigest}" `
+  const ociRepository = "ghcr.io/hara-packages/demo.github";
+  const ociManifest = `sha256:${"e".repeat(64)}`;
+  const lock = `{:lock/format "0.0.1" :packages {"demo:github" `
+    + `{:version "1.0.0" :tap "hara" :oci/repository "${ociRepository}" `
+    + `:oci/manifest "${ociManifest}" :archive-sha256 "${archiveDigest}" `
     + `:namespaces [demo.world]}}}`;
   const registry = `{:registry/packages {"demo:github" {"1.0.0" `
-    + `{:archive-sha256 "${archiveDigest}" :identity-revision "${identityRevision}"}}}}`;
+    + `{:archive-sha256 "${archiveDigest}" :oci/repository "${ociRepository}" :oci/manifest "${ociManifest}"}}}}`;
   return { archive, lock, registry, module, library };
 }
 
-test("exact locks use the pinned registry and digest object endpoint", async () => {
-  const { archive, lock, registry, registryCommit, archiveDigest } = await fixture();
+test("exact locks use the GitHub Packages registry and digest object endpoint", async () => {
+  const { archive, lock, registry, archiveDigest } = await fixture();
   const requested = [];
   const resources = await loadLockedPackageResources(lock, async (url) => {
     requested.push(url);
@@ -157,14 +157,14 @@ test("exact locks use the pinned registry and digest object endpoint", async () 
   }, "https://packages.example");
 
   assert.deepEqual(requested, [
-    `https://packages.example/v1/registry?ref=${registryCommit}`,
+    "https://packages.example/v1/registry?ref=main",
     `https://packages.example/objects/sha256/${archiveDigest.slice(7)}`
   ]);
   assert.equal(resources["demo.world"], "(ns demo.world) (def world {:title \"Demo\"})");
 });
 
 test("semantic targets reject ambiguous lock names", async () => {
-  const lock = `{:lock/format "0.0.0-alpha" :packages {"demo:one" `
+  const lock = `{:lock/format "0.0.1" :packages {"demo:one" `
     + `{:name "shared"} "demo:two" {:name "shared"}}}`;
   await assert.rejects(
     loadLockedPackageResources(lock, async () => new Response(""), "https://packages.example", ["shared"]),

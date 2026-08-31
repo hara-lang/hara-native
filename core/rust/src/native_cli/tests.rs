@@ -48,7 +48,7 @@ fn native_sandbox_surface_uses_the_broker_kernel() {
     assert_eq!(
         runtime
             .eval_native(
-                "(try (deref (Sandbox/open {:unknown true})) (catch Throwable error (:ex/code (ex-data error))))",
+                "(try (deref (Sandbox/open {:unknown true})) (catch error (:ex/code (ex-data error))))",
             )
             .unwrap(),
         ":sandbox/invalid-spec"
