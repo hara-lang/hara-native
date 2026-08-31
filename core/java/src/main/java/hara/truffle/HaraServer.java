@@ -26,6 +26,7 @@ import org.graalvm.polyglot.Value;
 public final class HaraServer implements AutoCloseable {
   public static final String DEFAULT_HOST = "127.0.0.1";
   public static final int DEFAULT_PORT = 1311;
+  private static final int MAX_DIAGNOSTIC_TEXT_BYTES = 16 * 1024;
 
   private static final List<String> LEGACY_COMMANDS =
       List.of(
@@ -694,8 +695,119 @@ public final class HaraServer implements AutoCloseable {
       throws IOException {
     String id = request.size() > 1 ? text(request.get(1)) : "";
     String message = error.getMessage() == null ? error.toString() : error.getMessage();
-    conn.write(Arrays.asList("ERROR", id, errorCode(error, message), message));
+    String code = errorCode(error, message);
+    ArrayList<Object> frame = new ArrayList<>(List.of("ERROR", id, code, message));
+    if ("EVAL_ERROR".equals(code) && evaluationRequest(request)) {
+      frame.add(evaluationDiagnostic(error, request));
+    }
+    conn.write(frame);
     conn.write(Arrays.asList("DONE", id, "ERROR"));
+  }
+
+  /**
+   * Protocol-4 diagnostics are additive: legacy clients retain their four-field ERROR frame,
+   * while a modern client can render a source link even when evaluation fails before Hara creates
+   * an {@code ex} value (for example, when {@code ex} rejects an invalid code).
+   */
+  private static List<Object> evaluationDiagnostic(Throwable error, List<Object> request) {
+    DiagnosticOrigin origin = evaluationOrigin(request);
+    ArrayList<Object> payload = new ArrayList<>();
+    Collections.addAll(
+        payload,
+        "VERSION",
+        1L,
+        "MESSAGE",
+        diagnosticText(error.getMessage() == null ? error.toString() : error.getMessage()),
+        "EXCEPTION",
+        exceptionDiagnostic(error, 4),
+        "PRIMARY",
+        origin == null ? null : origin.payload(),
+        "EXCERPT",
+        sourceExcerpt(request, origin),
+        "FRAMES",
+        diagnosticFrames(origin));
+    return payload;
+  }
+
+  private static boolean evaluationRequest(List<Object> request) {
+    if (request.isEmpty()) return false;
+    String operation = text(request.get(0)).toUpperCase(Locale.ROOT);
+    return "EVAL".equals(operation) || "LOAD".equals(operation);
+  }
+
+  private static DiagnosticOrigin evaluationOrigin(List<Object> request) {
+    if (request.size() < 3) return null;
+    String file = null;
+    int line = 1;
+    int column = 1;
+    for (int index = 3; index + 1 < request.size(); index += 2) {
+      String key = text(request.get(index)).toUpperCase(Locale.ROOT);
+      String value = text(request.get(index + 1));
+      switch (key) {
+        case "FILE":
+          file = value;
+          break;
+        case "LINE":
+          line = diagnosticInteger(value, line);
+          break;
+        case "COLUMN":
+          column = diagnosticInteger(value, column);
+          break;
+        default:
+          break;
+      }
+    }
+    return file == null || file.isBlank() ? null : new DiagnosticOrigin(file, line, column);
+  }
+
+  private static int diagnosticInteger(String value, int fallback) {
+    try {
+      int parsed = Integer.parseInt(value);
+      return parsed > 0 ? parsed : fallback;
+    } catch (NumberFormatException ignored) {
+      return fallback;
+    }
+  }
+
+  private static List<Object> sourceExcerpt(List<Object> request, DiagnosticOrigin origin) {
+    if (origin == null || request.size() < 3) return null;
+    return Arrays.asList("START-LINE", (long) origin.line, "TEXT", diagnosticText(text(request.get(2))));
+  }
+
+  private static List<Object> diagnosticFrames(DiagnosticOrigin origin) {
+    if (origin == null) return List.of();
+    return List.of(
+        Arrays.asList(
+            "FUNCTION", "<eval>",
+            "NAMESPACE", null,
+            "FILE", origin.file,
+            "LINE", (long) origin.line,
+            "COLUMN", (long) origin.column));
+  }
+
+  private static List<Object> exceptionDiagnostic(Throwable error, int causeDepth) {
+    if (error == null) return null;
+    Throwable cause = error.getCause();
+    return Arrays.asList(
+        "MESSAGE", diagnosticText(error.getMessage() == null ? error.toString() : error.getMessage()),
+        "CLASS", error.getClass().getName(),
+        "CODE", null,
+        "DATA", null,
+        "CAUSE", causeDepth > 0 && cause != error ? exceptionDiagnostic(cause, causeDepth - 1) : null,
+        "THROWS", List.of());
+  }
+
+  private static String diagnosticText(String value) {
+    if (value == null) return "";
+    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length <= MAX_DIAGNOSTIC_TEXT_BYTES) return value;
+    return new String(bytes, 0, MAX_DIAGNOSTIC_TEXT_BYTES, StandardCharsets.UTF_8) + "…";
+  }
+
+  private record DiagnosticOrigin(String file, int line, int column) {
+    private List<Object> payload() {
+      return Arrays.asList("FILE", file, "LINE", (long) line, "COLUMN", (long) column);
+    }
   }
 
   private static String errorCode(Throwable error, String message) {

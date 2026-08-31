@@ -179,6 +179,7 @@
 						<testInclude>hara/truffle/HaraNativeCommandTest.java</testInclude>
 						<testInclude>hara/truffle/HaraMutableCollectionTest.java</testInclude>
 						<testInclude>hara/truffle/HtaValueCodecTest.java</testInclude>
+						<testInclude>hara/truffle/HaraServerTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
 					</testIncludes>
 					<annotationProcessorPaths>
