@@ -12,7 +12,7 @@ use hara_native::{
     },
     core::Value,
     distribution, identity_tool,
-    native_cli::RuntimeBroker,
+    native_cli::{install_native_kernel, RuntimeBroker},
     package,
     package_manifest::PackageManifest,
     project,
@@ -628,6 +628,17 @@ fn execute_installed_bundle(
     let catalog = project::source_catalog(&project)?;
     let mut runtime = Runtime::core();
     runtime.install_native_file_provider(root.to_string_lossy().as_ref());
+    install_native_kernel(
+        &mut runtime,
+        RuntimeBroker::start_with_source_catalog(
+            Some(root.to_path_buf()),
+            false,
+            false,
+            false,
+            "interpreter",
+            catalog.clone(),
+        )?,
+    );
     runtime.register_source_catalog(&catalog);
     if catalog.path("std.foundation").is_some() {
         runtime.bootstrap_source_foundation()?;
@@ -1053,6 +1064,17 @@ fn run_project_tests(
             reject_top_level_test_run(&source)?;
             let mut runtime = Runtime::core();
             runtime.install_native_file_provider(project.root.to_string_lossy().as_ref());
+            install_native_kernel(
+                &mut runtime,
+                RuntimeBroker::start_with_source_catalog(
+                    Some(project.root.clone()),
+                    false,
+                    false,
+                    false,
+                    "interpreter",
+                    catalog.clone(),
+                )?,
+            );
             runtime.register_source_catalog(&catalog);
             if source_foundation {
                 runtime.bootstrap_source_foundation()?;
