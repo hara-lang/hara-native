@@ -6,7 +6,7 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@hara-lang/hta": "0.1.11"
+    "@hara-lang/hta": "0.1.12"
   },
   "exports": {
     ".": "./index.mjs"
