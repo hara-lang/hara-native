@@ -153,18 +153,116 @@ fn source_catalog_does_not_mutate_an_installed_package_root() {
         "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
     )
     .unwrap();
-    fs::write(root.join("src/demo/main.hal"), "(ns demo.main)").unwrap();
+    fs::write(
+        root.join("src/demo/main.hal"),
+        "(ns demo.main) (def answer 42)",
+    )
+    .unwrap();
 
     let project = read(&root).unwrap();
     assert_eq!(
-        source_catalog(&project)
-            .unwrap()
-            .namespaces()
-            .collect::<Vec<_>>(),
+        source_catalog(&project).unwrap().namespaces(),
         vec!["demo.main"]
     );
-    assert!(!root.join("target/hara/source-catalog-v1.index").exists());
+    assert!(!root
+        .join("target/hara-cache/source-catalog-v1.index")
+        .exists());
     fs::remove_dir_all(root.ancestors().nth(3).unwrap()).unwrap();
+}
+
+#[test]
+fn source_catalog_defers_unrelated_legacy_source_discovery() {
+    let root = temp("lazy-source-catalog");
+    fs::create_dir_all(root.join("src/demo")).unwrap();
+    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/demo/main.hal"),
+        "(ns demo.main) (def answer 42)",
+    )
+    .unwrap();
+    // A migration-incomplete source must not block a conventional require
+    // from another source family during project startup.
+    fs::write(root.join("src/lang/unmigrated.hal"), "not a namespace").unwrap();
+
+    let catalog = source_catalog(&read(&root).unwrap()).unwrap();
+    assert_eq!(
+        catalog.path("demo.main"),
+        Some(root.join("src/demo/main.hal").canonicalize().unwrap())
+    );
+    let mut runtime = Runtime::core();
+    runtime.register_source_catalog(&catalog);
+    assert_eq!(
+        runtime
+            .eval_native("(ns demo.check (:require [demo.main :as main])) main/answer")
+            .unwrap(),
+        "42"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn source_catalog_falls_back_to_legacy_path_discovery_on_demand() {
+    let root = temp("legacy-source-catalog");
+    fs::create_dir_all(root.join("src/demo")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/demo/legacy_file.hal"),
+        "(ns demo.legacy-file)",
+    )
+    .unwrap();
+
+    let catalog = source_catalog(&read(&root).unwrap()).unwrap();
+    assert_eq!(
+        catalog.path("demo.legacy-file"),
+        Some(
+            root.join("src/demo/legacy_file.hal")
+                .canonicalize()
+                .unwrap()
+        )
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn source_catalog_bootstraps_the_fixed_foundation_family_without_a_full_index() {
+    let root = temp("lazy-foundation-bootstrap");
+    fs::create_dir_all(root.join("src/std/foundation")).unwrap();
+    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/std/foundation.hal"),
+        "(ns std.foundation) (defn set [value] value)",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/std/foundation/string.hal"),
+        "(ns std.foundation.string (:config {:set-global-alias str})) (def answer (set 42))",
+    )
+    .unwrap();
+    fs::write(root.join("src/lang/unmigrated.hal"), "not a namespace").unwrap();
+
+    let catalog = source_catalog(&read(&root).unwrap()).unwrap();
+    let mut runtime = Runtime::core();
+    runtime.register_source_catalog(&catalog);
+    runtime.bootstrap_source_foundation().unwrap();
+    assert_eq!(runtime.eval_native("str/answer").unwrap(), "42");
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

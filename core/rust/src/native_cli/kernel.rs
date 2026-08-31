@@ -115,16 +115,20 @@ pub(super) fn kernel_call(
             let output = optional_string_argument(arguments, 1, operation)?.map(str::to_owned);
             let package = optional_string_argument(arguments, 2, operation)?.map(str::to_owned);
             let profile = optional_string_argument(arguments, 3, operation)?.map(str::to_owned);
-            let built = std::thread::spawn(move || {
-                crate::package::build_path_with_package(
-                    std::path::Path::new(&input),
-                    output.as_deref().map(std::path::Path::new),
-                    package.as_deref(),
-                    profile.as_deref().map(std::path::Path::new),
-                )
-            })
-            .join()
-            .map_err(|_| format!("{operation}: package build thread panicked"))??;
+            let built = std::thread::Builder::new()
+                .name("hara-package-build".into())
+                .stack_size(crate::package::BUILD_THREAD_STACK_SIZE)
+                .spawn(move || {
+                    crate::package::build_path_with_package(
+                        std::path::Path::new(&input),
+                        output.as_deref().map(std::path::Path::new),
+                        package.as_deref(),
+                        profile.as_deref().map(std::path::Path::new),
+                    )
+                })
+                .map_err(|error| format!("{operation}: package build thread failed: {error}"))?
+                .join()
+                .map_err(|_| format!("{operation}: package build thread panicked"))??;
             Ok(Value::String(built.to_string_lossy().into_owned()))
         }
         "package-inspect" => Ok(Value::String(crate::package::inspect_path(

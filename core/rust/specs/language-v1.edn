@@ -106,6 +106,12 @@
    :program (/ 1 0)
    :expect {:error :division-by-zero}
    :browser-safe true}
+  {:id :evaluator/catch-portable-binding
+   :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :error/catch-portable-binding}
+   :layer :evaluator
+   :program (try (/ 1 0) (catch error :caught))
+   :expect {:display ":caught"}
+   :browser-safe true}
   {:id :evaluator/string-arithmetic
    :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :error/string-arithmetic}
    :layer :evaluator

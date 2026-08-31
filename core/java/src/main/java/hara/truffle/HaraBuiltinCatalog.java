@@ -26,6 +26,7 @@ import java.util.Set;
     capability = "kernel", methods = {"catalog", "find", "ensure", "load", "unload", "state"})
 @HaraNativeBinding(namespace = "std.native", name = "String", methods = {"length", "blank?", "includes?", "starts-with?", "ends-with?", "char-at", "slice", "index-of", "last-index-of", "join", "split", "split-lines", "repeat", "replace", "replace-first", "trim", "trim-left", "trim-right", "upper", "lower", "capitalize", "decapitalize", "pad-left", "pad-right", "reverse", "encode-utf8", "decode-utf8", "to-fixed"})
 @HaraNativeBinding(namespace = "std.native", name = "Bytes", methods = {"new", "count", "get", "set", "copy", "slice", "u8", "s8"})
+@HaraNativeBinding(namespace = "std.native", name = "HBX", methods = {"provider", "validate", "inspect", "pack", "unpack"})
 @HaraNativeBinding(namespace = "std.native", name = "Crypto", methods = {"sha256", "sha512", "hmac-sha256", "hmac-sha512", "random-bytes", "secure-equal?", "ed25519-keypair", "ed25519-public", "ed25519-sign", "ed25519-verify", "x25519-keypair", "x25519-public", "x25519-shared", "p256-keypair", "p256-public", "p256-sign", "p256-verify", "p256-shared"})
 @HaraNativeBinding(
     namespace = "std.native", name = "OS", availability = HaraAvailability.CAPABILITY_GATED,

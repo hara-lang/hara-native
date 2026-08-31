@@ -594,7 +594,9 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
                     let (name, metadata) = binding_symbol(&fs[1], "defmacro name")?;
                     let (metadata, rest) = definition_metadata(metadata, &fs[2..], false, true)?;
                     if let Some(Value::Var(var)) = env.get(&name) {
-                        if var.symbol().get_namespace() == Some("std.foundation") {
+                        if var.symbol().get_namespace() == Some("std.foundation")
+                            && namespace_registry()?.current().name().as_str() != "std.foundation"
+                        {
                             namespace_registry()?
                                 .current()
                                 .unmap(&crate::lang::data::Symbol::parse(&name));

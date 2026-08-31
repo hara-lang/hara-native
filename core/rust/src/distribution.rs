@@ -11,7 +11,7 @@ use crate::project;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const FORMAT: &str = "hara-distribution/v1";
@@ -193,6 +193,9 @@ pub fn seal(spec: &SealSpec) -> Result<SealedManifest, String> {
 /// Returns `None` for an ordinary native executable. A footer with the Hara
 /// magic is never ignored: malformed or tampered sealed binaries fail closed.
 pub fn inspect_sealed(path: &Path) -> Result<Option<SealedManifest>, String> {
+    if !has_sealed_footer(path)? {
+        return Ok(None);
+    }
     let bytes = fs::read(path)
         .map_err(|error| format!("cannot read sealed executable {}: {error}", path.display()))?;
     parse_sealed_bytes(&bytes).map(|found| found.map(|(manifest, _)| manifest))
@@ -228,6 +231,18 @@ pub fn verify_sealed(path: &Path) -> Result<Option<SealedManifest>, String> {
 /// package cache. The only temporary HARP copies are deleted on every path;
 /// the executable itself has no adjacent package files.
 pub fn install_sealed(path: &Path) -> Result<Option<SealedInstallation>, String> {
+    install_sealed_at(path, &package::install_root())
+}
+
+/// Installs a sealed executable into an explicit package-cache root.
+///
+/// A launcher uses a payload-specific root to preserve the immutability of
+/// installed semantic-version registrations across independently rebuilt
+/// executable payloads.
+pub fn install_sealed_at(
+    path: &Path,
+    distribution_root: &Path,
+) -> Result<Option<SealedInstallation>, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("cannot read sealed executable {}: {error}", path.display()))?;
     let Some((manifest, footer)) = parse_sealed_bytes(&bytes)? else {
@@ -246,7 +261,7 @@ pub fn install_sealed(path: &Path) -> Result<Option<SealedInstallation>, String>
         let installed = (|| {
             let package = PackageManifest::read_archive(&temporary).map_err(|error| error.to_string())?;
             verify_embedded_package(archive, &package)?;
-            package::install_path(&temporary)
+            package::install_path_at(&temporary, distribution_root)
         })();
         let _ = fs::remove_file(&temporary);
         let installed = installed?;
@@ -685,11 +700,33 @@ pub struct Manifest {
 /// the native executable that is copied as the launcher; the package is built
 /// from the declared project and verified again before this function succeeds.
 pub fn build(project_path: &Path, native_binary: &Path, output: &Path) -> Result<Manifest, String> {
+    build_with_options(project_path, native_binary, output, false)
+}
+
+/// Rebuilds a known, integrity-checked Hara distribution in place.
+///
+/// An unrelated non-empty directory is never removed. This lets a project
+/// refresh its generated companion launcher without making the output path a
+/// broad deletion capability.
+pub fn build_replace(
+    project_path: &Path,
+    native_binary: &Path,
+    output: &Path,
+) -> Result<Manifest, String> {
+    build_with_options(project_path, native_binary, output, true)
+}
+
+fn build_with_options(
+    project_path: &Path,
+    native_binary: &Path,
+    output: &Path,
+    replace: bool,
+) -> Result<Manifest, String> {
     let project = project::read(project_path)?;
     let declaration = project.distribution.as_ref().ok_or_else(|| {
         "project.edn :project/distribution is required for distribution build".to_owned()
     })?;
-    ensure_empty_output(output)?;
+    validate_output(output, replace)?;
     if !native_binary.is_file() {
         return Err(format!(
             "distribution native binary is not a regular file: {}",
@@ -697,34 +734,48 @@ pub fn build(project_path: &Path, native_binary: &Path, output: &Path) -> Result
         ));
     }
 
-    let archive = output.join(ARCHIVE_PATH);
-    let launcher = launcher_path(output, &declaration.launcher);
+    let staging = create_staging_output(output)?;
+    let archive = staging.join(ARCHIVE_PATH);
+    let launcher = launcher_path(&staging, &declaration.launcher);
     let archive_parent = archive
         .parent()
         .ok_or_else(|| "distribution archive path has no parent".to_owned())?;
     let launcher_parent = launcher
         .parent()
         .ok_or_else(|| "distribution launcher path has no parent".to_owned())?;
-    fs::create_dir_all(archive_parent).map_err(io_error)?;
-    fs::create_dir_all(launcher_parent).map_err(io_error)?;
-    package::build_path(&project.root, Some(&archive))?;
-    fs::copy(native_binary, &launcher).map_err(io_error)?;
+    let build = (|| {
+        fs::create_dir_all(archive_parent).map_err(io_error)?;
+        fs::create_dir_all(launcher_parent).map_err(io_error)?;
+        package::build_path(&project.root, Some(&archive))?;
+        fs::copy(native_binary, &launcher).map_err(io_error)?;
 
-    let package = PackageManifest::read_archive(&archive).map_err(|error| error.to_string())?;
-    let manifest = Manifest {
-        launcher: declaration.launcher.clone(),
-        entry: declaration.entry.clone(),
-        archive: PathBuf::from(ARCHIVE_PATH),
-        archive_sha256: checksum(&archive)?,
-        source_identity: package.identity,
-        source_version: package.version.to_string(),
-        native_version: env!("CARGO_PKG_VERSION").into(),
-        native_sha256: checksum(&launcher)?,
-    };
-    let manifest_path = output.join(MANIFEST_PATH);
-    fs::write(&manifest_path, format!("{}\n", manifest.to_edn())).map_err(io_error)?;
-    verify(output, &launcher)?;
-    Ok(manifest)
+        let package = PackageManifest::read_archive(&archive).map_err(|error| error.to_string())?;
+        let manifest = Manifest {
+            launcher: declaration.launcher.clone(),
+            entry: declaration.entry.clone(),
+            archive: PathBuf::from(ARCHIVE_PATH),
+            archive_sha256: checksum(&archive)?,
+            source_identity: package.identity,
+            source_version: package.version.to_string(),
+            native_version: env!("CARGO_PKG_VERSION").into(),
+            native_sha256: checksum(&launcher)?,
+        };
+        let manifest_path = staging.join(MANIFEST_PATH);
+        fs::write(&manifest_path, format!("{}\n", manifest.to_edn())).map_err(io_error)?;
+        verify(&staging, &launcher)?;
+        Ok(manifest)
+    })();
+    match build {
+        Ok(manifest) => {
+            publish_output(&staging, output, replace)?;
+            verify(output, &launcher_path(output, &manifest.launcher))?;
+            Ok(manifest)
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(error)
+        }
+    }
 }
 
 /// Reads and verifies the local companion contract before a host loads any
@@ -740,7 +791,7 @@ pub fn verify(root: &Path, native_binary: &Path) -> Result<Manifest, String> {
             native_binary.display()
         ));
     }
-    check_checksum(native_binary, &manifest.native_sha256, "native launcher")?;
+    verify_distribution_contents(root, &manifest)?;
     if manifest.native_version != env!("CARGO_PKG_VERSION") {
         return Err(format!(
             "distribution native version mismatch: manifest {}, launcher {}",
@@ -748,6 +799,12 @@ pub fn verify(root: &Path, native_binary: &Path) -> Result<Manifest, String> {
             env!("CARGO_PKG_VERSION")
         ));
     }
+    Ok(manifest)
+}
+
+fn verify_distribution_contents(root: &Path, manifest: &Manifest) -> Result<(), String> {
+    let launcher = launcher_path(root, &manifest.launcher);
+    check_checksum(&launcher, &manifest.native_sha256, "native launcher")?;
     let archive = root.join(&manifest.archive);
     check_checksum(&archive, &manifest.archive_sha256, "source archive")?;
     let package = PackageManifest::read_archive(&archive).map_err(|error| error.to_string())?;
@@ -759,7 +816,7 @@ pub fn verify(root: &Path, native_binary: &Path) -> Result<Manifest, String> {
             manifest.source_identity, manifest.source_version, package.identity, package.version
         ));
     }
-    Ok(manifest)
+    Ok(())
 }
 
 pub fn read(root: &Path) -> Result<Manifest, String> {
@@ -853,19 +910,87 @@ impl Manifest {
     }
 }
 
-fn ensure_empty_output(output: &Path) -> Result<(), String> {
-    if output.exists() {
-        let mut entries = fs::read_dir(output).map_err(io_error)?;
-        if entries.next().is_some() {
-            return Err(format!(
-                "distribution output already exists and is not empty: {}",
-                output.display()
-            ));
-        }
-    } else {
-        fs::create_dir_all(output).map_err(io_error)?;
+fn validate_output(output: &Path, replace: bool) -> Result<(), String> {
+    if !output.exists() {
+        return Ok(());
     }
-    Ok(())
+    let metadata = fs::symlink_metadata(output).map_err(io_error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "distribution output must be a real directory: {}",
+            output.display()
+        ));
+    }
+    let mut entries = fs::read_dir(output).map_err(io_error)?;
+    if entries.next().is_none() {
+        return Ok(());
+    }
+    if !replace {
+        return Err(format!(
+            "distribution output already exists and is not empty: {}",
+            output.display()
+        ));
+    }
+    let manifest = read(output).map_err(|_| {
+        format!(
+            "distribution replace output is not a verified Hara distribution: {}",
+            output.display()
+        )
+    })?;
+    verify_distribution_contents(output, &manifest).map_err(|_| {
+        format!(
+            "distribution replace output is not a verified Hara distribution: {}",
+            output.display()
+        )
+    })
+}
+
+fn create_staging_output(output: &Path) -> Result<PathBuf, String> {
+    let parent = output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = output
+        .file_name()
+        .ok_or_else(|| format!("distribution output must name a directory: {}", output.display()))?
+        .to_string_lossy();
+    fs::create_dir_all(parent).map_err(io_error)?;
+    for index in 0..1024 {
+        let candidate = parent.join(format!(".{name}.staging-{}-{index}", std::process::id()));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+    Err(format!(
+        "cannot allocate a distribution staging directory beside {}",
+        output.display()
+    ))
+}
+
+fn publish_output(staging: &Path, output: &Path, replace: bool) -> Result<(), String> {
+    if output.exists() {
+        validate_output(output, replace)?;
+        fs::remove_dir_all(output).map_err(io_error)?;
+    }
+    fs::rename(staging, output).map_err(io_error)
+}
+
+fn has_sealed_footer(path: &Path) -> Result<bool, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("cannot inspect sealed executable {}: {error}", path.display()))?;
+    if metadata.len() < SEALED_FOOTER_BYTES as u64 {
+        return Ok(false);
+    }
+    let mut file = File::open(path)
+        .map_err(|error| format!("cannot read sealed executable {}: {error}", path.display()))?;
+    file.seek(SeekFrom::End(-(SEALED_FOOTER_BYTES as i64)))
+        .map_err(|error| format!("cannot seek sealed executable {}: {error}", path.display()))?;
+    let mut footer = [0_u8; SEALED_FOOTER_BYTES];
+    file.read_exact(&mut footer)
+        .map_err(|error| format!("cannot read sealed executable footer {}: {error}", path.display()))?;
+    Ok(footer[..SEALED_MAGIC.len()] == SEALED_MAGIC[..])
 }
 
 fn launcher_path(root: &Path, launcher: &str) -> PathBuf {
@@ -967,8 +1092,8 @@ fn io_error(error: std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build, inspect_sealed, read, seal, verify, verify_sealed, SealArchive, SealSpec,
-        ARCHIVE_PATH, MANIFEST_PATH,
+        build, build_replace, has_sealed_footer, inspect_sealed, install_sealed_at, read, seal,
+        verify, verify_sealed, SealArchive, SealSpec, ARCHIVE_PATH, MANIFEST_PATH,
     };
     use crate::package;
     use std::fs;
@@ -1023,6 +1148,28 @@ mod tests {
     }
 
     #[test]
+    fn replaces_only_an_existing_verified_distribution() {
+        let root = temp("replace");
+        let output = root.join("output");
+        let unrelated = root.join("unrelated");
+        let native = root.join("native-host");
+        fixture(&root);
+        fs::write(&native, "native-host").unwrap();
+
+        build(&root, &native, &output).unwrap();
+        let rebuilt = build_replace(&root, &native, &output).unwrap();
+        assert_eq!(rebuilt.entry, "demo.cli/main");
+
+        fs::create_dir_all(&unrelated).unwrap();
+        fs::write(unrelated.join("notes.txt"), "do not remove").unwrap();
+        assert!(build_replace(&root, &native, &unrelated)
+            .unwrap_err()
+            .contains("not a verified Hara distribution"));
+        assert_eq!(fs::read_to_string(unrelated.join("notes.txt")).unwrap(), "do not remove");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn seals_a_native_host_with_a_verified_harp_payload() {
         let root = temp("sealed");
         let native = root.join("native-host");
@@ -1044,9 +1191,14 @@ mod tests {
         assert_eq!(sealed.entry, "demo.cli/main");
         assert_eq!(sealed.archives.len(), 1);
         assert!(sealed.archives[0].primary);
+        assert!(!has_sealed_footer(&native).unwrap());
         assert_eq!(inspect_sealed(&native).unwrap(), None);
         assert_eq!(inspect_sealed(&output).unwrap(), Some(sealed.clone()));
         assert_eq!(verify_sealed(&output).unwrap(), Some(sealed));
+        let installation = install_sealed_at(&output, &root.join("store"))
+            .unwrap()
+            .unwrap();
+        assert!(installation.primary.starts_with(root.join("store")));
 
         let mut tampered = fs::read(&output).unwrap();
         tampered[0] ^= 1;

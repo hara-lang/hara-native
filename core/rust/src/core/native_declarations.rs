@@ -28,7 +28,7 @@ pub(crate) mod declarations {
             "session-create", "session-close", "session-list", "session-info", "session-eval",
             "session-namespace", "session-complete", "resource-register", "resource-remove",
             "resource-list", "filesystem-create", "filesystem-attach", "filesystem-detach",
-            "filesystem-info", "filesystem-close", "capabilities", "package-build", "package-inspect",
+            "filesystem-info", "filesystem-close", "capabilities", "package-check", "package-build", "package-inspect",
             "package-install", "package-publish", "package-registry-verify", "tap-config-root", "tap-add",
             "tap-bootstrap", "tap-remove", "tap-list", "tap-mirror-add", "tap-initialize", "tap-verify",
             "snapshot-build", "snapshot-verify", "snapshot-inspect", "snapshot-diff"
@@ -54,11 +54,19 @@ pub(crate) mod declarations {
         capability = "kernel",
         methods = [
             "catalog", "find", "read", "ensure", "load", "unload", "state", "build", "inspect",
-            "seal", "inspect-seal", "verify-seal"
+            "seal", "inspect-seal", "verify-seal", "distribute"
         ],
         provider = native_package_provider
     )]
     struct Package;
+
+    #[hara_native(
+        namespace = "std.native",
+        name = "HBX",
+        methods = ["provider", "validate", "inspect", "pack", "unpack"],
+        provider = native_hbx_provider
+    )]
+    struct Hbx;
 
     #[hara_native(
         namespace = "std.native",

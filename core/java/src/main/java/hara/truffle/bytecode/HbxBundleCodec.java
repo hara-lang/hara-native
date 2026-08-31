@@ -1,5 +1,6 @@
 package hara.truffle.bytecode;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -10,6 +11,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.TreeMap;
 
 /** Decoder for Rust's deterministic HBX0 indexed standard-library container. */
 public final class HbxBundleCodec {
@@ -82,12 +85,86 @@ public final class HbxBundleCodec {
     return List.copyOf(modules);
   }
 
+  /** Encodes module descriptors into the deterministic HBX0 interchange container. */
+  public static byte[] encode(List<Module> modules) {
+    List<Module> canonical = canonicalModules(modules);
+    ByteArrayOutputStream payload = new ByteArrayOutputStream();
+    writeSize(payload, canonical.size());
+    for (Module module : canonical) {
+      writeBytes(payload, module.resource().getBytes(StandardCharsets.UTF_8));
+      writeBytes(payload, module.namespaceForm().getBytes(StandardCharsets.UTF_8));
+      payload.writeBytes(module.sourceDigest());
+      writeSize(payload, module.dependencies().size());
+      for (String dependency : module.dependencies()) {
+        writeBytes(payload, dependency.getBytes(StandardCharsets.UTF_8));
+      }
+      payload.write(module.eager() ? 1 : 0);
+      writeBytes(payload, module.artifact());
+    }
+    byte[] encodedPayload = payload.toByteArray();
+    ByteArrayOutputStream output = new ByteArrayOutputStream(MAGIC.length + 32 + encodedPayload.length);
+    output.writeBytes(MAGIC);
+    output.writeBytes(sha256(encodedPayload));
+    output.writeBytes(encodedPayload);
+    return output.toByteArray();
+  }
+
+  private static List<Module> canonicalModules(List<Module> modules) {
+    TreeMap<String, Module> remaining = new TreeMap<>();
+    for (Module module : modules) {
+      ArrayList<String> dependencies = new ArrayList<>(module.dependencies());
+      dependencies.sort(String::compareTo);
+      for (int index = 1; index < dependencies.size(); index++) {
+        if (dependencies.get(index - 1).equals(dependencies.get(index))) {
+          throw new HbcFormatException(module.resource() + ": duplicate HBX0 dependency");
+        }
+      }
+      Module normalized =
+          new Module(
+              module.resource(),
+              module.namespaceForm(),
+              module.sourceDigest(),
+              dependencies,
+              module.eager(),
+              module.artifact());
+      if (remaining.put(normalized.resource(), normalized) != null) {
+        throw new HbcFormatException("duplicate HBX0 module: " + normalized.resource());
+      }
+    }
+    ArrayList<Module> ordered = new ArrayList<>(remaining.size());
+    while (!remaining.isEmpty()) {
+      String available = null;
+      for (Map.Entry<String, Module> entry : remaining.entrySet()) {
+        boolean ready = true;
+        for (String dependency : entry.getValue().dependencies()) {
+          if (remaining.containsKey(dependency)) {
+            ready = false;
+            break;
+          }
+        }
+        if (ready) {
+          available = entry.getKey();
+          break;
+        }
+      }
+      if (available == null) {
+        throw new HbcFormatException("HBX0 module dependencies contain a cycle");
+      }
+      ordered.add(remaining.remove(available));
+    }
+    validate(ordered);
+    return List.copyOf(ordered);
+  }
+
   private static void validate(List<Module> modules) {
     HashMap<String, Integer> positions = new HashMap<>();
     for (int index = 0; index < modules.size(); index++) {
       Module module = modules.get(index);
       if (module.resource().isEmpty()) throw new HbcFormatException("HBX0 module resource must not be empty");
       if (module.namespaceForm().isEmpty()) throw new HbcFormatException(module.resource() + ": HBX0 namespace form must not be empty");
+      if (module.sourceDigest().length != 32) {
+        throw new HbcFormatException(module.resource() + ": HBX0 source digest must be 32 bytes");
+      }
       if (positions.put(module.resource(), index) != null) throw new HbcFormatException("duplicate HBX0 module: " + module.resource());
       HashSet<String> dependencies = new HashSet<>();
       String previous = null;
@@ -138,6 +215,19 @@ public final class HbxBundleCodec {
     int value = input.getInt();
     if (value < 0) throw new HbcFormatException("HBX0 bytecode bundle length overflow");
     return value;
+  }
+
+  private static void writeSize(ByteArrayOutputStream output, int value) {
+    if (value < 0) throw new HbcFormatException("HBX0 bytecode bundle length overflow");
+    output.write(value & 0xff);
+    output.write((value >>> 8) & 0xff);
+    output.write((value >>> 16) & 0xff);
+    output.write((value >>> 24) & 0xff);
+  }
+
+  private static void writeBytes(ByteArrayOutputStream output, byte[] value) {
+    writeSize(output, value.length);
+    output.writeBytes(value);
   }
 
   private static byte[] sha256(byte[] value) {

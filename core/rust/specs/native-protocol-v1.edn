@@ -49,6 +49,8 @@
     :methods ["read" "write" "pretty"]}
    {:type "std.native.Instrument"
     :methods ["provider" "validate" "inspect" "disassemble" "transform" "execute"]}
+   {:type "std.native.HBX"
+    :methods ["provider" "validate" "inspect" "pack" "unpack"]}
    {:type "std.native.Test"
     :methods ["catalog" "config" "context" "events" "compare" "check" "register" "facts" "get"
               "remove" "purge" "reset" "run-fact" "run" "summary" "result" "passed?" "actual"
@@ -756,6 +758,18 @@
                        false (catch error true))
                   (try (std.native.Instrument/execute :hbc (std.native.Base/bytes) {})
                        false (catch error true))])
+     :expect {:display "true"}}
+    {:id :native/hbx-portable-package-codec
+     :program
+     (let [artifact (std.native.HBX/pack [])
+           provider (std.native.HBX/provider)
+           inspection (std.native.HBX/inspect artifact)
+           modules (std.native.HBX/unpack artifact)]
+       (= [:rust true 0 []]
+          [(:provider/id provider)
+           (std.native.HBX/validate artifact)
+           (:modules/count inspection)
+           modules]))
      :expect {:display "true"}}
     {:id :native/command-app-route-lifecycle
      :program (let [app (std.native.Command/create

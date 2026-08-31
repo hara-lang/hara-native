@@ -43,6 +43,10 @@ pub(super) fn parse_manifest(source: &str) -> Result<PackageManifest, PackageMan
         .map(parse_provenance)
         .transpose()?;
     let files = parse_files(required_value(root, "files", "package.edn")?)?;
+    let resources = optional_value(root, "resources", "package.edn")?
+        .map(|value| parse_resources(value, &files))
+        .transpose()?
+        .unwrap_or_default();
 
     let bytecode = optional_value(root, "bytecode", "package.edn")?
         .map(|value| parse_bytecode(value, &files))
@@ -78,12 +82,58 @@ pub(super) fn parse_manifest(source: &str) -> Result<PackageManifest, PackageMan
         version,
         provenance,
         files,
+        resources,
         bytecode,
         schema_catalog,
         wasm_imports,
         flavors,
         canonical_edn: canonical_form(&form).to_string(),
     })
+}
+
+fn parse_resources(
+    value: &Form,
+    files: &BTreeMap<PathBuf, PackageFile>,
+) -> Result<BTreeMap<String, PathBuf>, PackageManifestError> {
+    let entries = expect_map(value, ":resources")?;
+    let mut resources = BTreeMap::new();
+    for (namespace, path) in entries {
+        let Form::String(namespace) = namespace else {
+            return Err(PackageManifestError::new(
+                "package/invalid-manifest",
+                ":resources keys must be non-empty namespace strings",
+            ));
+        };
+        if namespace.is_empty() {
+            return Err(PackageManifestError::new(
+                "package/invalid-manifest",
+                ":resources keys must be non-empty namespace strings",
+            ));
+        }
+        let Form::String(path) = path else {
+            return Err(PackageManifestError::new(
+                "package/invalid-manifest",
+                ":resources values must be archive-relative paths",
+            ));
+        };
+        let path = parse_relative_path(path)?;
+        if !files.contains_key(&path) {
+            return Err(PackageManifestError::new(
+                "package/resource-missing",
+                format!(
+                    ":resources declares a file absent from :files: {}",
+                    path.display()
+                ),
+            ));
+        }
+        if resources.insert(namespace.clone(), path).is_some() {
+            return Err(PackageManifestError::new(
+                "package/invalid-manifest",
+                format!("duplicate :resources namespace: {namespace}"),
+            ));
+        }
+    }
+    Ok(resources)
 }
 
 fn parse_bytecode(

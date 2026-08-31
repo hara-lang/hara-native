@@ -129,6 +129,34 @@ fn portable_packages_remain_portable_and_missing_flavors_are_not_fallbacks() {
 }
 
 #[test]
+fn exposes_declared_source_resources_without_reading_source_files() {
+    let manifest = PackageManifest::parse(
+        r#"{:harp/format "0.0.0-alpha"
+             :package {:identity "hara:example/portable" :version "1.0.0"}
+             :files {"src/example/core.hal"
+                     {:sha256 "sha256:b8ba2ec7e90713c1043778164af3250820943c2165c9f19fa29987e016aae5dd"
+                      :size 4}}
+             :resources {"example.core" "src/example/core.hal"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        manifest.resources,
+        BTreeMap::from([("example.core".into(), PathBuf::from("src/example/core.hal"))])
+    );
+
+    let error = PackageManifest::parse(
+        r#"{:harp/format "0.0.0-alpha"
+             :package {:identity "hara:example/portable" :version "1.0.0"}
+             :files {"src/example/core.hal"
+                     {:sha256 "sha256:b8ba2ec7e90713c1043778164af3250820943c2165c9f19fa29987e016aae5dd"
+                      :size 4}}
+             :resources {"example.core" "src/example/missing.hal"}}"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "package/resource-missing");
+}
+
+#[test]
 fn preflight_rejects_target_abi_and_capability_mismatches() {
     let manifest = PackageManifest::parse(&package_manifest()).unwrap();
     assert_eq!(

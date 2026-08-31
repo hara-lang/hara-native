@@ -106,8 +106,7 @@ fn foundation_root_first<'a>(sources: &[ModuleSource<'a>]) -> Vec<ModuleSource<'
         return sources.to_vec();
     }
     let mut ordered = Vec::with_capacity(sources.len());
-    for resource in std::iter::once("std.foundation").chain(EAGER_HAL_RESOURCES.iter().copied())
-    {
+    for resource in std::iter::once("std.foundation").chain(EAGER_HAL_RESOURCES.iter().copied()) {
         if let Some(source) = sources.iter().find(|source| source.resource == resource) {
             ordered.push(*source);
         }
@@ -221,8 +220,10 @@ pub fn eval_bytecode_bundle(runtime: &mut Runtime, bytes: &[u8]) -> Result<(), S
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     runtime
-                        .source_paths
-                        .get(&module.resource)
+                        .source_catalog
+                        .as_ref()
+                        .and_then(|catalog| catalog.path(&module.resource))
+                        .as_ref()
                         .map(|path| {
                             std::fs::read_to_string(path).map_err(|error| {
                                 format!("cannot read bundled source {}: {error}", path.display())

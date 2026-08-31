@@ -2,6 +2,27 @@ use crate::{core, Runtime};
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
+fn foundation_runtime() -> Runtime {
+    let registry = crate::spec_registry::root()
+        .expect("native behavioral conformance requires hara-specs-registry");
+    let source_root = registry
+        .parent()
+        .map(|root| root.join("hara"))
+        .filter(|root| root.join("project.edn").is_file())
+        .expect("native behavioral conformance requires sibling technology/hara source");
+    let project = crate::project::read(&source_root)
+        .expect("native behavioral conformance Hara project must be valid");
+    let catalog = crate::project::source_catalog(&project)
+        .expect("native behavioral conformance source catalog must be valid");
+    let mut runtime = Runtime::new();
+    runtime.install_native_file_provider(source_root.to_string_lossy().as_ref());
+    runtime.register_source_catalog(&catalog);
+    runtime
+        .bootstrap_source_foundation()
+        .expect("native behavioral conformance must bootstrap source Foundation");
+    runtime
+}
+
 fn corpus() -> &'static str {
     static SOURCE: OnceLock<String> = OnceLock::new();
     SOURCE
@@ -16,7 +37,7 @@ fn corpus() -> &'static str {
 
 fn corpus_methods() -> BTreeSet<String> {
     let corpus = corpus();
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     let value = runtime
         .eval_native_value(&format!("{corpus}\n(native-method-keys)"))
         .expect("native corpus keys must evaluate");
@@ -55,7 +76,7 @@ fn closure_pass(methods: &BTreeSet<String>) -> bool {
         .map(|method| format!("'{method}"))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     runtime
         .eval_text(&format!(
             "{corpus}\n(get (native-closure-report [{literal}]) :pass)"
@@ -66,7 +87,7 @@ fn closure_pass(methods: &BTreeSet<String>) -> bool {
 
 fn calibration_value(name: &str, field: &str) -> core::Value {
     let corpus = corpus();
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     runtime
         .eval_native_value(&format!(
             "{corpus}\n(get (get native-calibration-snippets :{name}) :{field})"
@@ -91,7 +112,7 @@ fn calibration_expected(name: &str) -> String {
 #[test]
 fn specs_owned_native_corpus_closes_over_live_inventory_and_rejects_drift() {
     let corpus = corpus();
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     assert_eq!(
         "true",
         runtime
@@ -107,7 +128,12 @@ fn specs_owned_native_corpus_closes_over_live_inventory_and_rejects_drift() {
 
     let classified = corpus_methods();
     let live = live_methods();
-    assert_eq!(live, classified);
+    let missing = live.difference(&classified).cloned().collect::<Vec<_>>();
+    let stale = classified.difference(&live).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "native corpus drift: missing={missing:?}; stale={stale:?}"
+    );
     assert!(closure_pass(&live));
 
     let first = classified
@@ -133,21 +159,25 @@ fn specs_owned_native_corpus_closes_over_live_inventory_and_rejects_drift() {
 fn evaluator_runs_every_specs_owned_classification_boundary_and_profile() {
     let corpus = corpus();
     let methods = corpus_methods();
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     let results = runtime
         .eval_text(&format!("{corpus}\n(native-method-results)"))
         .expect("shared native behavioral corpus must evaluate");
     assert!(!results.contains(":pass false"), "{results}");
     assert_eq!(methods.len(), results.matches(":pass true").count());
 
-    let mut runtime = Runtime::new();
+    let mut boundary_runtime = foundation_runtime();
+    let boundaries = boundary_runtime
+        .eval_text(&format!("{corpus}\n(native-boundary-results)"))
+        .expect("portable native boundary results must evaluate");
     assert_eq!(
         "true",
         runtime
             .eval_text(&format!(
                 "{corpus}\n(every? (fn [case] (= true (get case :pass))) (native-boundary-results))"
             ))
-            .expect("portable native boundary results must evaluate")
+            .expect("portable native boundary pass report must evaluate"),
+        "{boundaries}"
     );
     assert_eq!(
         "true",
@@ -163,7 +193,7 @@ fn evaluator_runs_every_specs_owned_classification_boundary_and_profile() {
 fn evaluator_and_bytecode_use_the_specs_owned_calibration_probe() {
     let probe = calibration_source("evaluator-compiler");
     let expected = calibration_expected("evaluator-compiler");
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     let interpreted = runtime
         .eval_text(&probe)
         .expect("evaluator native probe must run");
@@ -178,7 +208,7 @@ fn evaluator_and_bytecode_use_the_specs_owned_calibration_probe() {
 fn rust_runs_the_specs_owned_identity_fast_path_calibration() {
     let source = calibration_source("base-identity-fast-paths");
     let expected = calibration_expected("base-identity-fast-paths");
-    let mut runtime = Runtime::new();
+    let mut runtime = foundation_runtime();
     assert_eq!(
         expected,
         runtime

@@ -30,7 +30,7 @@ inside the browser's WebAssembly engine.
 The release also provides an IIFE bundle for a plain script tag:
 
 ```html
-<script src="https://unpkg.com/@hara-lang/native-browser@0.1.14/dist/native-vm/hara.js"></script>
+<script src="https://unpkg.com/@hara-lang/native-browser@0.1.16/dist/native-vm/hara.js"></script>
 <script>
   Hara.start().then((hara) => console.log(hara.eval("(+ 19 23)")));
 </script>

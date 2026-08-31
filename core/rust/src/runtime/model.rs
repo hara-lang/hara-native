@@ -172,7 +172,7 @@ pub struct Runtime {
     package_catalog: core::PackageCatalog,
     resources: HashMap<String, String>,
     #[cfg(not(target_arch = "wasm32"))]
-    source_paths: HashMap<String, std::path::PathBuf>,
+    source_catalog: Option<crate::project::SourceCatalog>,
     resource_overrides: HashSet<String>,
     #[cfg(feature = "bytecode-vm")]
     bytecode_resources: HashMap<String, (String, Vec<u8>)>,

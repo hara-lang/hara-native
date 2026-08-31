@@ -56,6 +56,7 @@ fn field(value: &Value, name: &str) -> Option<Value> {
 fn vector(value: Value, name: &str) -> Result<Vec<Value>, String> {
     match value {
         Value::Vector(values) => Ok(values.into_iter().collect()),
+        Value::Tuple(values) => Ok(values.into_iter().collect()),
         _ => Err(format!("work/plan-invalid: {name} must be a vector")),
     }
 }

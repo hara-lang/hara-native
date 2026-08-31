@@ -1217,6 +1217,14 @@ fn native_package_provider(native_type: &str, method: &str) -> Result<Value, Str
     }))
 }
 
+fn native_hbx_provider(native_type: &str, method: &str) -> Result<Value, String> {
+    let display_name = native_display_name(native_type, method);
+    let method = method.to_owned();
+    Ok(native_variadic_function(&display_name, move |arguments| {
+        hbx_operation(&method, arguments)
+    }))
+}
+
 fn native_instrument_provider(native_type: &str, method: &str) -> Result<Value, String> {
     let display_name = native_display_name(native_type, method);
     let method = method.to_owned();

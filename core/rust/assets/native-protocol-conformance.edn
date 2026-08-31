@@ -3,9 +3,9 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "a12e71e62d9de45b2c4b14f521ccb27239d052dc38a9d1e34e731383f8814655"
- :binary-sha256 "d27a391270eeef9b690795bf01336f450cbbb19aaf1355c66799918d51e7988a"
- :case-count 388
+ :source-sha256 "7ce4d6cccaa258ed0f4234981d04db59766c52db8e4e55c5e669733e92383baa"
+ :binary-sha256 "c22cfbc07fdcc49096769ab56fb8082d512cdff4e0b8b2854f77f724aacfd7b0"
+ :case-count 389
  :suites
  [{:id :native
   :setup nil
@@ -138,6 +138,9 @@
     :expect {:display "true"}}
    {:id :native/instrument-invalid-artifact-boundaries
     :program (= [:std.native.Keyword true true true true true] [(std.native.Base/type (std.protocol.ilookup.ILookup/lookup (std.native.Instrument/provider) :provider/id)) (try (std.native.Instrument/validate :hbc (std.native.Base/bytes)) false (catch error true)) (try (std.native.Instrument/inspect :hbc (std.native.Base/bytes)) false (catch error true)) (try (std.native.Instrument/disassemble (std.native.Base/bytes)) false (catch error true)) (try (std.native.Instrument/transform :unknown :unknown "" {}) false (catch error true)) (try (std.native.Instrument/execute :hbc (std.native.Base/bytes) {}) false (catch error true))])
+    :expect {:display "true"}}
+   {:id :native/hbx-portable-package-codec
+    :program (let [artifact (std.native.HBX/pack []) provider (std.native.HBX/provider) inspection (std.native.HBX/inspect artifact) modules (std.native.HBX/unpack artifact)] (= [:rust true 0 []] [(:provider/id provider) (std.native.HBX/validate artifact) (:modules/count inspection) modules]))
     :expect {:display "true"}}
    {:id :native/command-app-route-lifecycle
     :program (let [app (std.native.Command/create {:id (quote demo/cli) :desc "Demo CLI"}) config (std.native.Command/config app) route (std.native.Command/install app {:id :test :path ["test"] :aliases [["t"]] :desc "Run tests" :options [{:id :watch :short "w" :type :boolean} {:id :namespace :type :string :many? true}] :arguments [{:id :files :required? false :many? true}] :handler (fn [_] {:stdout "ok" :stderr "" :exit 0})}) snapshot (std.native.Command/snapshot app) parsed (std.native.Command/parse app {:argv ["t" "-w" "--namespace" "demo.core" "a_test.hal"] :context {:origin :test}}) dispatched (std.native.Command/dispatch app parsed) response (std.native.Command/run app {:argv ["test"]}) removed (std.native.Command/uninstall app route) absent (std.native.Command/uninstall app route) _ (std.native.Command/restore app snapshot) restored (std.native.Command/routes app) _ (std.native.Command/reset app) reset-routes (std.native.Command/routes app) closed-before (std.native.Command/closed? app) _ (std.native.Command/close app) closed-after (std.native.Command/closed? app) _ (std.native.Command/close app)] (= [(= (:id config) (quote demo/cli)) (:desc config) (:route/id parsed) (:options parsed) (:arguments parsed) dispatched response removed absent (std.protocol.icount.ICount/count restored) (std.protocol.icount.ICount/count reset-routes) closed-before closed-after] [true "Demo CLI" :test {:watch true :namespace ["demo.core"]} {:files ["a_test.hal"]} {:stdout "ok" :stderr "" :exit 0} {:stdout "ok" :stderr "" :exit 0} true false 1 0 false true]))

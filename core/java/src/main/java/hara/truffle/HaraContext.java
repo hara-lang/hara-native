@@ -93,6 +93,11 @@ public final class HaraContext {
               new NativeLibraryInstaller(
                   HaraVar.Origin.RUNTIME_PRIMITIVE, HaraContext::defineBytesLibrary)),
           Map.entry(
+              "std.native.HBX",
+              new NativeLibraryInstaller(
+                  HaraVar.Origin.RUNTIME_PRIMITIVE,
+                  context -> ToolPackageLibrary.install(context, "std.native.HBX"))),
+          Map.entry(
               "std.native.Promise",
               new NativeLibraryInstaller(
                   HaraVar.Origin.RUNTIME_PRIMITIVE, HaraContext::definePromiseLibrary)),
