@@ -3708,6 +3708,9 @@ public final class HaraContext {
     if (unwrapped instanceof Number) {
       return G.display(unwrapped);
     }
+    if (unwrapped instanceof java.util.UUID) {
+      return G.display(unwrapped);
+    }
     if (unwrapped instanceof IDisplay) {
       return ((IDisplay) unwrapped).display();
     }

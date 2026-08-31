@@ -1053,6 +1053,19 @@ impl Compiler {
                 self.constant(crate::numeric::compact_integer(value.clone()), span)
             }
             Form::Regex(value) => self.constant(Value::Regex(value.clone()), span),
+            Form::Tagged(tag, value) if tag == "uuid" => {
+                let Form::String(text) = value.as_ref() else {
+                    return Err(CompileError::new(
+                        CompileErrorKind::UnsupportedForm,
+                        "#uuid expects a UUID string literal",
+                        Some(span.start),
+                    ));
+                };
+                let value = crate::core::uuid_tag_value(Value::String(text.clone())).map_err(
+                    |message| CompileError::new(CompileErrorKind::Parse, message, Some(span.start)),
+                )?;
+                self.constant(value, span)
+            }
             Form::Tagged(tag, value) if tag == "arr" => {
                 let Form::Vector(values) = value.as_ref() else {
                     return Err(CompileError::new(

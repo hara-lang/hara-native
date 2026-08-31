@@ -252,6 +252,15 @@ pub(crate) fn uuid_value(values: &[Value]) -> Result<Value, String> {
     Ok(uuid_value_from_uuid(value))
 }
 
+pub(crate) fn uuid_tag_value(value: Value) -> Result<Value, String> {
+    let Value::String(text) = value else {
+        return Err("#uuid expects a UUID string literal".into());
+    };
+    let uuid =
+        uuid::Uuid::parse_str(&text).map_err(|_| "#uuid expects a valid UUID string literal")?;
+    Ok(uuid_value_from_uuid(uuid))
+}
+
 pub(crate) fn uuid_text_from_tagged(value: &PTaggedLiteral<Value>) -> Option<&str> {
     if value.tag().as_str() != UUID_TAG {
         return None;
@@ -3415,7 +3424,7 @@ impl Value {
             Self::Regex(v) => crate::kernel::form::display_regex(v),
             Self::Tagged(value) => uuid_text_from_tagged(value).map_or_else(
                 || format!("#{}{}", value.tag().as_str(), value.form().display()),
-                str::to_owned,
+                |text| format!("#{UUID_TAG} {}", Self::String(text.to_owned()).display()),
             ),
             Self::Bool(v) => v.to_string(),
             Self::String(v) => crate::kernel::form::display_string(v),

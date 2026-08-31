@@ -41,4 +41,28 @@ public final class HaraMutableCollectionTest {
               .toString());
     }
   }
+
+  @Test
+  public void uuidReaderTagCreatesAndPrintsUuidValues() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).allowAllAccess(true).build()) {
+      assertEquals(
+          "[true :std.native.UUID #uuid \"00000000-0000-0000-0000-000000000000\"]",
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "[(= #uuid \"00000000-0000-0000-0000-000000000000\"\n"
+                      + "    (std.native.Base/uuid \"00000000-0000-0000-0000-000000000000\"))\n"
+                      + " (std.native.Base/type #uuid \"00000000-0000-0000-0000-000000000000\")\n"
+                      + " #uuid \"00000000-0000-0000-0000-000000000000\"]")
+              .toString());
+      assertEquals(
+          "#uuid \"00000000-0000-0000-0000-000000000000\"",
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(std.native.Printer/capture\n"
+                      + "  (fn [] (std.native.Printer/p #uuid \"00000000-0000-0000-0000-000000000000\")))")
+              .toString());
+    }
+  }
 }

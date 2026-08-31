@@ -3,9 +3,9 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "51624e400a25169400b0e4013a936066fcf0819a2b0780c8235385bcff7a1c18"
- :binary-sha256 "4b3d09affce774aa553466aa077213de62bc3e06294d10332d372156003dc85b"
- :case-count 386
+ :source-sha256 "f75484dd9055b1f5c4e89a4013d59c88431a7f7e825aabeeb1777f9f4ef34c39"
+ :binary-sha256 "df105cac83c17fb6dbc24d5aa9d0de89ac637d75274a59d796171bbe2a4b5986"
+ :case-count 387
  :suites
  [{:id :native
   :setup nil
@@ -45,6 +45,9 @@
     :expect {:display "true"}}
    {:id :native/mutable-reader-tag-display
     :program (= "[#arr[1 2] #obj{\"answer\" 42} #obj{}]" (std.native.Printer/capture (fn [] (std.native.Printer/p [#arr[1 (+ 1 1)] #obj{"answer" (+ 40 2)} #obj{}]))))
+    :expect {:display "true"}}
+   {:id :native/uuid-reader-tag
+    :program (let [value #uuid"00000000-0000-0000-0000-000000000000"] (= [true :std.native.UUID "#uuid \"00000000-0000-0000-0000-000000000000\""] [(= value (std.native.Base/uuid "00000000-0000-0000-0000-000000000000")) (std.native.Base/type value) (std.native.Printer/capture (fn [] (std.native.Printer/p value)))]))
     :expect {:display "true"}}
    {:id :native/runtime-and-codecs
     :program (= [42 {:a 1} "{:a 1}" {"a" 1} "{\"a\":1}"] [(std.native.Runtime/load-string "(+ 19 23)") (std.native.Edn/read "{:a 1}") (std.native.Edn/write {:a 1}) (std.native.Json/read "{\"a\":1}") (std.native.Json/write {"a" 1})])

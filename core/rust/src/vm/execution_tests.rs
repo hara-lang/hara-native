@@ -132,6 +132,20 @@ fn mutable_reader_tags_round_trip_through_display() {
 }
 
 #[test]
+fn uuid_reader_tag_constructs_and_displays_uuid_values() {
+    assert_eq!(
+        eval(
+            "[(= #uuid \"00000000-0000-0000-0000-000000000000\" \
+                 (std.native.Base/uuid \"00000000-0000-0000-0000-000000000000\")) \
+              (std.native.Base/type #uuid \"00000000-0000-0000-0000-000000000000\") \
+              #uuid \"00000000-0000-0000-0000-000000000000\"]"
+        ),
+        "[true :std.native.UUID #uuid \"00000000-0000-0000-0000-000000000000\"]"
+    );
+    assert!(compile_source("#uuid :not-a-string").is_err());
+}
+
+#[test]
 fn dynamic_collections_and_short_circuit_forms() {
     assert_eq!(
         eval_embedded_foundation("(let [x 19 y 23] [x y])"),

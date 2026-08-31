@@ -232,6 +232,14 @@
                      (std.native.Printer/p
                        [#arr[1 (+ 1 1)] #obj {"answer" (+ 40 2)} #obj {}]))))
      :expect {:display "true"}}
+    {:id :native/uuid-reader-tag
+     :program (let [value #uuid "00000000-0000-0000-0000-000000000000"]
+                (= [true :std.native.UUID "#uuid \"00000000-0000-0000-0000-000000000000\""]
+                   [(= value (std.native.Base/uuid "00000000-0000-0000-0000-000000000000"))
+                    (std.native.Base/type value)
+                    (std.native.Printer/capture
+                      (fn [] (std.native.Printer/p value)))]))
+     :expect {:display "true"}}
     {:id :native/runtime-and-codecs
      :program (= [42 {:a 1} "{:a 1}" {"a" 1} "{\"a\":1}"]
                  [(std.native.Runtime/load-string "(+ 19 23)")

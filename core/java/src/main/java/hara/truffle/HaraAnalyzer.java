@@ -370,6 +370,16 @@ final class HaraAnalyzer {
             HaraNodes.CollectionLiteral.Kind.MUTABLE_OBJECT,
             elements.toArray(new HaraExpressionNode[0]));
       }
+      if (namespace == null && "uuid".equals(name)) {
+        if (!(tagged.form() instanceof String value)) {
+          throw error("#uuid expects a UUID string literal");
+        }
+        try {
+          return new HaraNodes.Literal(java.util.UUID.fromString(value));
+        } catch (IllegalArgumentException error) {
+          throw error("#uuid expects a valid UUID string literal");
+        }
+      }
     }
     if (form instanceof IMapType<?, ?>) {
       IMapType<?, ?> map = (IMapType<?, ?>) form;

@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import org.junit.Test;
 
@@ -67,6 +68,15 @@ public class HtaValueCodecTest {
         },
         encoded);
     assertEquals(List.of("x", 42L, true), HtaValueCodec.decode(encoded));
+  }
+
+  @Test
+  public void uuidRoundTripsAsAStandardTaggedValue() {
+    UUID uuid = UUID.fromString("00000000-0000-0000-0000-000000000000");
+    byte[] encoded = HtaValueCodec.encode(uuid);
+
+    assertEquals(31, Byte.toUnsignedInt(encoded[4]));
+    assertEquals(uuid, HtaValueCodec.decodeCanonical(encoded));
   }
 
   @Test
