@@ -2988,21 +2988,12 @@ mod tests {
         assert!(runtime.env.contains_key("std.native.Edn/write"));
         assert!(runtime.env.contains_key("std.protocol.icount.ICount"));
         for declaration in declarations {
-            assert!(
-                runtime
-                    .env
-                    .contains_key(&format!("std.native.{}", declaration.name)),
-                "std.native.{}",
-                declaration.name
-            );
+            let qualified = declaration.qualified_name();
+            assert!(runtime.env.contains_key(&qualified), "{qualified}");
             for method in declaration.methods {
                 assert!(
-                    runtime
-                        .env
-                        .contains_key(&format!("std.native.{}/{}", declaration.name, method)),
-                    "std.native.{}/{}",
-                    declaration.name,
-                    method
+                    runtime.env.contains_key(&format!("{qualified}/{method}")),
+                    "{qualified}/{method}"
                 );
             }
         }
