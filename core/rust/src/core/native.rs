@@ -3497,6 +3497,9 @@ fn native_package_values(
     let method = operation
         .strip_prefix("std.native.Package/")
         .unwrap_or(operation);
+    if matches!(method, "build" | "inspect" | "seal" | "inspect-seal" | "verify-seal") {
+        return native_package_artifact_values(method, arguments);
+    }
     let expected = match method {
         "catalog" => 0..=0,
         "find" | "ensure" | "load" | "state" => 1..=1,
@@ -3656,6 +3659,213 @@ fn native_package_values(
         }
         result
     })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result<Value, String> {
+    match method {
+        "build" => {
+            if !(1..=4).contains(&arguments.len()) {
+                return Err("std.native.Package/build expects input and up to three options".into());
+            }
+            let input = package_string_argument(&arguments, 0, "std.native.Package/build")?.to_owned();
+            let output = package_optional_string_argument(&arguments, 1, "std.native.Package/build")?
+                .map(str::to_owned);
+            let package = package_optional_string_argument(&arguments, 2, "std.native.Package/build")?
+                .map(str::to_owned);
+            let profile = package_optional_string_argument(&arguments, 3, "std.native.Package/build")?
+                .map(str::to_owned);
+            let built = std::thread::spawn(move || {
+                crate::package::build_path_with_package(
+                    std::path::Path::new(&input),
+                    output.as_deref().map(std::path::Path::new),
+                    package.as_deref(),
+                    profile.as_deref().map(std::path::Path::new),
+                )
+            })
+            .join()
+            .map_err(|_| "std.native.Package/build thread panicked".to_owned())??;
+            Ok(Value::String(built.to_string_lossy().into_owned()))
+        }
+        "inspect" => {
+            if arguments.len() != 1 {
+                return Err("std.native.Package/inspect expects one archive path".into());
+            }
+            Ok(Value::String(crate::package::inspect_path(
+                std::path::Path::new(package_string_argument(
+                    &arguments,
+                    0,
+                    "std.native.Package/inspect",
+                )?),
+            )?))
+        }
+        "seal" => {
+            if arguments.len() != 1 {
+                return Err("std.native.Package/seal expects one descriptor map".into());
+            }
+            let manifest = crate::distribution::seal(&sealed_package_spec(&arguments[0])?)?;
+            Ok(sealed_manifest_value(&manifest))
+        }
+        "inspect-seal" | "verify-seal" => {
+            if arguments.len() != 1 {
+                return Err(format!("std.native.Package/{method} expects one executable path"));
+            }
+            let path = std::path::Path::new(package_string_argument(
+                &arguments,
+                0,
+                &format!("std.native.Package/{method}"),
+            )?);
+            let found = if method == "inspect-seal" {
+                crate::distribution::inspect_sealed(path)?
+            } else {
+                crate::distribution::verify_sealed(path)?
+            };
+            Ok(found
+                .as_ref()
+                .map(sealed_manifest_value)
+                .unwrap_or(Value::Nil))
+        }
+        _ => unreachable!("caller restricts native package artifact methods"),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn native_package_artifact_values(method: &str, _arguments: Vec<Value>) -> Result<Value, String> {
+    Err(format!("package/unsupported: Package/{method} is unavailable on wasm"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sealed_package_spec(value: &Value) -> Result<crate::distribution::SealSpec, String> {
+    let entries = map_entries(value)
+        .ok_or_else(|| "std.native.Package/seal expects one descriptor map".to_owned())?;
+    let descriptor = Value::OrderedMap(Box::new(POrderedMap::from_iter(entries)));
+    let required_string = |key: &str| {
+        match map_value(&descriptor, &Value::Keyword(key.into())) {
+            Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
+            Some(_) => Err(format!("std.native.Package/seal :{key} must be a non-empty string")),
+            None => Err(format!("std.native.Package/seal is missing :{key}")),
+        }
+    };
+    let entry = match map_value(&descriptor, &Value::Keyword("entry".into())) {
+        Some(Value::Symbol(value)) => value.as_str().to_owned(),
+        Some(_) => return Err("std.native.Package/seal :entry must be a symbol".into()),
+        None => return Err("std.native.Package/seal is missing :entry".into()),
+    };
+    let host = match map_value(&descriptor, &Value::Keyword("host".into())) {
+        Some(Value::String(value)) if !value.is_empty() => std::path::PathBuf::from(value),
+        Some(_) => return Err("std.native.Package/seal :host must be a non-empty string".into()),
+        None => std::env::current_exe()
+            .map_err(|error| format!("cannot determine current native executable: {error}"))?,
+    };
+    let archives = match map_value(&descriptor, &Value::Keyword("archives".into())) {
+        Some(value) => iterator_values(value.clone())?,
+        None => return Err("std.native.Package/seal is missing :archives".into()),
+    }
+    .into_iter()
+    .map(|archive| {
+        let archive_entries = map_entries(&archive)
+            .ok_or_else(|| "std.native.Package/seal archives must be maps".to_owned())?;
+        let archive = Value::OrderedMap(Box::new(POrderedMap::from_iter(archive_entries)));
+        let path = match map_value(&archive, &Value::Keyword("path".into())) {
+            Some(Value::String(value)) if !value.is_empty() => std::path::PathBuf::from(value),
+            Some(_) => {
+                return Err(
+                    "std.native.Package/seal archive :path must be a non-empty string".into(),
+                )
+            }
+            None => return Err("std.native.Package/seal archive is missing :path".into()),
+        };
+        let primary = match map_value(&archive, &Value::Keyword("primary".into())) {
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err("std.native.Package/seal archive :primary must be boolean".into()),
+            None => false,
+        };
+        Ok(crate::distribution::SealArchive { path, primary })
+    })
+    .collect::<Result<Vec<_>, String>>()?;
+    Ok(crate::distribution::SealSpec {
+        host,
+        output: std::path::PathBuf::from(required_string("output")?),
+        entry,
+        archives,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sealed_manifest_value(manifest: &crate::distribution::SealedManifest) -> Value {
+    let archives: Vec<Value> = manifest
+        .archives
+        .iter()
+        .map(|archive| {
+            Value::OrderedMap(Box::new(POrderedMap::from_iter([
+                (
+                    Value::Keyword("identity".into()),
+                    Value::String(archive.identity.clone()),
+                ),
+                (
+                    Value::Keyword("version".into()),
+                    Value::String(archive.version.clone()),
+                ),
+                (
+                    Value::Keyword("sha256".into()),
+                    Value::String(archive.sha256.clone()),
+                ),
+                (
+                    Value::Keyword("offset".into()),
+                    Value::Number(i64::try_from(archive.offset).unwrap_or(i64::MAX)),
+                ),
+                (
+                    Value::Keyword("length".into()),
+                    Value::Number(i64::try_from(archive.length).unwrap_or(i64::MAX)),
+                ),
+                (Value::Keyword("primary".into()), Value::Bool(archive.primary)),
+            ])))
+        })
+        .collect();
+    Value::OrderedMap(Box::new(POrderedMap::from_iter([
+        (
+            Value::Keyword("executable/format".into()),
+            Value::String(crate::distribution::SEALED_FORMAT.into()),
+        ),
+        (
+            Value::Keyword("entry".into()),
+            Value::Symbol(Symbol::parse(&manifest.entry)),
+        ),
+        (Value::Keyword("archives".into()), Value::Vector(PVector::from(archives))),
+        (
+            Value::Keyword("host/sha256".into()),
+            Value::String(manifest.host_sha256.clone()),
+        ),
+        (
+            Value::Keyword("payload/sha256".into()),
+            Value::String(manifest.payload_sha256.clone()),
+        ),
+    ])))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn package_string_argument<'a>(
+    arguments: &'a [Value],
+    index: usize,
+    operation: &str,
+) -> Result<&'a str, String> {
+    match arguments.get(index) {
+        Some(Value::String(value)) => Ok(value),
+        _ => Err(format!("{operation} expects a string argument at position {index}")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn package_optional_string_argument<'a>(
+    arguments: &'a [Value],
+    index: usize,
+    operation: &str,
+) -> Result<Option<&'a str>, String> {
+    match arguments.get(index) {
+        None | Some(Value::Nil) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(format!("{operation} expects an optional string at position {index}")),
+    }
 }
 
 /// Invokes the active host capability provider with already-evaluated VM

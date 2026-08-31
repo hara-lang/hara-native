@@ -627,6 +627,7 @@ fn execute_installed_bundle(
         .map_err(|error| format!("cannot read {}: {error}", main.display()))?;
     let catalog = project::source_catalog(&project)?;
     let mut runtime = Runtime::core();
+    runtime.install_native_file_provider(root.to_string_lossy().as_ref());
     runtime.register_source_catalog(&catalog);
     if catalog.path("std.foundation").is_some() {
         runtime.bootstrap_source_foundation()?;
@@ -1051,6 +1052,7 @@ fn run_project_tests(
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
             reject_top_level_test_run(&source)?;
             let mut runtime = Runtime::core();
+            runtime.install_native_file_provider(project.root.to_string_lossy().as_ref());
             runtime.register_source_catalog(&catalog);
             if source_foundation {
                 runtime.bootstrap_source_foundation()?;
@@ -1290,6 +1292,19 @@ fn suite_case_count(
 
 fn main() {
     let arguments: Vec<_> = env::args().skip(1).collect();
+    match run_sealed_distribution(&arguments) {
+        Ok(Some(exit)) => {
+            if exit != 0 {
+                std::process::exit(exit);
+            }
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("hara: {error}");
+            std::process::exit(1);
+        }
+    }
     match run_companion_distribution(&arguments) {
         Ok(Some(exit)) => {
             if exit != 0 {
@@ -1318,6 +1333,15 @@ fn main() {
     }
 }
 
+fn run_sealed_distribution(arguments: &[String]) -> Result<Option<i32>, String> {
+    let native = env::current_exe()
+        .map_err(|error| format!("cannot determine native launcher path: {error}"))?;
+    let Some(installed) = distribution::install_sealed(&native)? else {
+        return Ok(None);
+    };
+    run_installed_distribution(&installed.primary, &installed.manifest.entry, arguments).map(Some)
+}
+
 fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, String> {
     let native = env::current_exe()
         .map_err(|error| format!("cannot determine native launcher path: {error}"))?;
@@ -1330,21 +1354,29 @@ fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, Strin
     let manifest = distribution::verify(&root, &native)?;
     let archive = root.join(&manifest.archive);
     let installed = install_bundle_silent(&archive)?;
-    let result = execute_installed_bundle(&installed, Some(&manifest.entry), Some(arguments))?;
+    run_installed_distribution(&installed, &manifest.entry, arguments).map(Some)
+}
+
+fn run_installed_distribution(
+    installed: &Path,
+    entry: &str,
+    arguments: &[String],
+) -> Result<i32, String> {
+    let result = execute_installed_bundle(installed, Some(entry), Some(arguments))?;
     match companion_host_action(&result)? {
         Some(CompanionHostAction::Resp) => {
-            run_companion_resp(&installed, arguments)?;
-            Ok(Some(0))
+            run_companion_resp(installed, arguments)?;
+            Ok(0)
         }
         None => match companion_command_response(&result)? {
             Some(response) => {
                 let exit = response.exit;
                 write_companion_command_response(&response)?;
-                Ok(Some(exit))
+                Ok(exit)
             }
             None => {
                 println!("{result}");
-                Ok(Some(0))
+                Ok(0)
             }
         },
     }

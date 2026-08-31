@@ -52,7 +52,10 @@ pub(crate) mod declarations {
         name = "Package",
         availability = "capability-gated",
         capability = "kernel",
-        methods = ["catalog", "find", "ensure", "load", "unload", "state"],
+        methods = [
+            "catalog", "find", "ensure", "load", "unload", "state", "build", "inspect",
+            "seal", "inspect-seal", "verify-seal"
+        ],
         provider = native_package_provider
     )]
     struct Package;
