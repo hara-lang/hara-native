@@ -163,7 +163,7 @@ export PUBLISH_OWNER="YOUR_GITHUB_OWNER"
 install -d -m 700 "$HOME/.local/state/hara"
 export HARA_SIGNER_KEY_FILE="$HOME/.local/state/hara/publisher.ed25519"
 export HARA_SIGNER_KEY_ID="$PUBLISH_OWNER-2026-01"
-export HARA_OFFICIAL_ROOT_SHA256="sha256:8861d398c14a53b2fe13f7736310bb2c55624260c84e131452457e8aa69ac3dc"
+export HARA_OFFICIAL_ROOT_SHA256="sha256:b8733a0627b8d0063974b6b2a01721da76ee24e1f069a32e5e2cecb522f5ec40"
 "$HARA_NATIVE" signer generate --key-file "$HARA_SIGNER_KEY_FILE"
 "$HARA_NATIVE" signer public-key --key-file "$HARA_SIGNER_KEY_FILE"
 ```
@@ -197,11 +197,10 @@ local key, prints a browser URL, and polls until GitHub confirmation finishes:
 
 For `hara:YOUR_GITHUB_OWNER/*`, the request is automatically approved for root
 signing. Protected namespaces, including `hara:hara-native/*`, create a GitHub
-review issue. The CLI prints its URL and exits safely; after the offline root
-signer merges the signed policy PR, rerun the exact same command. The policy
-maintainer uses `hara-native id policy grant` with an explicit offline root key
-to write and sign the reviewed exact-coordinate grant; see
-[PUBLISHING.md](../PUBLISHING.md#finalize-a-reviewed-grant-offline).
+review issue. Identity turns the verified broker issue into the signed,
+exact-coordinate policy PR automatically. After its one policy-owner approval
+merges the PR, rerun the exact same command; see
+[PUBLISHING.md](../PUBLISHING.md#policy-automation-and-recovery).
 
 ### Obtain permission for a real package
 
