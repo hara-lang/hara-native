@@ -757,6 +757,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "!*.dockerbuild"
           merge-multiple: true
       - name: Verify payloads and write the release manifest
         shell: bash
@@ -834,6 +835,7 @@ jobs:
         with:
           tag_name: ${{ needs.release-ref.outputs.tag }}
           draft: false
+          body_path: release/release-notes.md
           generate_release_notes: true
           files: |
             dist/*

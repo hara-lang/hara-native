@@ -29,7 +29,13 @@ source/package repositories.
    `ghcr.io/hara-lang/hara-native:<version>`. The workflow creates Linux and
    macOS CLI archives, verifies fresh crates.io/Maven/npm consumers, records
    registry integrities and the immutable OCI digest, then finalizes the GitHub
-   release with `SHA256SUMS` and `release-manifest.json`.
+   release with the curated `release/release-notes.md` introduction, GitHub's
+   generated change list, `SHA256SUMS`, and `release-manifest.json`.
+
+`release/release-notes.md` is the stable, user-facing release introduction.
+Keep it accurate for every supported distribution. GitHub appends the changes
+since the previous release automatically, so do not duplicate commit lists in
+the template.
 
 If a registry publication fails after the draft intent is created, correct only
 the delivery problem and rerun the same `release` commit. The workflow permits
