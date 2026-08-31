@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.4",
-    "@hara-lang/hta": "0.1.11",
+    "@hara-lang/hta": "0.1.12",
     "@sqlite.org/sqlite-wasm": "3.50.4-build1"
   },
   "devDependencies": {
