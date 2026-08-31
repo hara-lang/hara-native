@@ -394,7 +394,7 @@ pub(crate) fn values() -> Vec<(&'static str, Value)> {
                             "new-runtime expects a registry and optional suspension target".into(),
                         );
                     }
-                    let registry = registry(&arguments, 1)?;
+                    let registry = registry(&arguments[..1], 1)?;
                     let runtime = match arguments.get(1).cloned() {
                         None | Some(Value::Nil) => WorkRuntime::new(registry),
                         Some(Value::Function(function)) => WorkRuntime::new(registry)
@@ -467,8 +467,10 @@ fn work_plan(value: Value) -> Result<WorkPlan, String> {
 }
 
 fn plan_children(value: Value) -> Result<Vec<WorkPlan>, String> {
-    let Value::Vector(values) = value else {
-        return Err("work/plan-invalid: work children must be a vector".into());
+    let values = match value {
+        Value::Vector(values) => values.into_iter().collect::<Vec<_>>(),
+        Value::Tuple(values) => values.into_iter().collect::<Vec<_>>(),
+        _ => return Err("work/plan-invalid: work children must be a vector".into()),
     };
     values.into_iter().map(work_plan).collect()
 }
@@ -874,6 +876,17 @@ mod tests {
         ));
         let runtime = native("new-runtime", vec![registry.clone()]);
         assert_eq!(native("runtime-registry", vec![runtime.clone()]), registry);
+        let suspension =
+            crate::core::native_function(
+                "fixture/suspend",
+                1,
+                |arguments| Ok(arguments[0].clone()),
+            );
+        assert!(matches!(
+            native("new-runtime", vec![registry.clone(), suspension]),
+            Value::Extension(value)
+                if value.provider == PROVIDER && value.type_name == RUNTIME_TYPE
+        ));
         let promise = native(
             "evaluate",
             vec![runtime.clone(), plan.clone(), Value::Number(7)],
