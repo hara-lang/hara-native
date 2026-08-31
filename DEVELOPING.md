@@ -44,7 +44,16 @@ put it in a HARP package, verify it, and run an explicit entry:
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle verify app.harp
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle install app.harp
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle run app.harp --entry app.main/start
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle exec app.harp --entry app.main/start -- --help
 ```
+
+If the mounted source project supplies `std.foundation`, package startup
+bootstraps it before the project's ordinary namespaces are evaluated.
+Foundation is intrinsic in that source-project runtime, so source façades need
+not require `std.foundation` merely to use unqualified macros such as
+`intern-in`. This does not make Foundation ambient to the generic source-free
+`eval`, `run`, or `repl` commands, and ordinary project namespaces still
+require each other explicitly.
 
 Use a throwaway `HARA_DIST_HOME` while testing package installation so the
 test does not rely on or alter a developer's package store:
@@ -53,6 +62,66 @@ test does not rely on or alter a developer's package store:
 HARA_DIST_HOME="$(mktemp -d)" cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- \
   bundle run app.harp --entry app.main/start
 ```
+
+## Companion executable distributions
+
+A source project can declare a source-owned launcher without embedding HAL in
+the host:
+
+```clojure
+:project/distribution {:launcher "hara" :entry hara.cli/main}
+```
+
+Compose it with the host binary that will be shipped:
+
+```text
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- \
+  distribution build /path/to/hara --output target/hara
+HARA_DIST_HOME="$(mktemp -d)" target/hara/bin/hara --version
+```
+
+The output contains `bin/hara`, `lib/hara.harp`, and `lib/release.edn`. The
+manifest is digest-bearing and identifies the launcher, source identity,
+source version, and HAL entry. On startup the renamed executable verifies both
+digests before it installs the HARP package and calls that entry with argv.
+Keep release signing, registry provenance, and the full user command surface
+in the Hara source repository; this is the generic host's local composition
+mechanism.
+
+An entry may return a host-action declaration rather than a display value. The
+currently supported declaration, `{:hara/host-action :resp}`, starts the native
+RESP listener and a broker backed by the distribution package plus the selected
+client project. It is intended for `hara-mode` compatibility:
+
+```text
+target/hara/bin/hara --project /path/to/project --root /path/to/project \
+  --host 127.0.0.1 --port 0 headless
+# HARA RESP 127.0.0.1:<ephemeral-port>
+```
+
+Only `127.0.0.1` is accepted for this action because the wire protocol has no
+authentication. The generic `hara-native` commands do not expose a RESP route;
+source code decides whether to request the action, while the host owns broker,
+listener, and shutdown lifecycle.
+
+Package the resulting directory rather than the launcher alone:
+
+```text
+# Run this on the operating system and architecture being packaged.
+tar -C target -czf target/hara-darwin-arm64.tar.gz hara
+
+# Verify the transport artifact, not the build directory.
+bundle_root="$(mktemp -d)"
+tar -xzf target/hara-darwin-arm64.tar.gz -C "$bundle_root"
+HARA_DIST_HOME="$(mktemp -d)" "$bundle_root/hara/bin/hara" --version
+```
+
+The archive must contain one `hara/` directory with `bin/hara`, `lib/hara.harp`,
+and `lib/release.edn`; preserve the executable mode on `bin/hara`. The current
+builder copies the executable that invokes it, so it composes a distribution
+for the host platform rather than cross-compiling one. A public release still
+needs signed source provenance and registry attestation; the digest-bearing
+manifest protects the coupled directory at local startup.
 
 ## Source-package smoke workflow
 

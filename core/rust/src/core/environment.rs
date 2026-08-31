@@ -1080,11 +1080,26 @@ pub(crate) fn thrown_error(value: Value) -> String {
 
 pub(crate) fn thrown_error_at(value: Value, site: Option<ExceptionSite>) -> String {
     record_exception_throw(&value, site);
+    record_trace_failure();
     let error = format!("thrown: {}", value.display());
     ACTIVE_THROWN_VALUE.with(|active| {
         *active.borrow_mut() = Some((error.clone(), value));
     });
     error
+}
+
+/// Captures the uncaught exception value from one evaluator boundary without
+/// changing the string error API used by the runtime.  The previous dynamic
+/// value is restored so a diagnostic request cannot leak exception state into
+/// a later evaluation in the same broker session.
+pub fn with_thrown_value_capture<R>(operation: impl FnOnce() -> R) -> (R, Option<Value>) {
+    ACTIVE_THROWN_VALUE.with(|active| {
+        let previous = active.replace(None);
+        let result = operation();
+        let captured = active.take().map(|(_, value)| value);
+        active.replace(previous);
+        (result, captured)
+    })
 }
 
 pub(crate) fn promise_rejection_error(error: PromiseRejection) -> String {

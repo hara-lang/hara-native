@@ -52,6 +52,30 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
         Form::BigInteger(value) => Ok(crate::numeric::compact_integer(value.clone())),
         Form::Regex(value) => Ok(Value::Regex(value.clone())),
         Form::Tagged(tag, value) if tag == "ptr" => pointer_from_descriptor(literal_value(value)?),
+        Form::Tagged(tag, value) if tag == "arr" => {
+            let Form::Vector(values) = value.as_ref() else {
+                return Err("#arr expects a vector literal".into());
+            };
+            Ok(Value::Array(Rc::new(RefCell::new(
+                values
+                    .iter()
+                    .map(|value| eval(value, env))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))))
+        }
+        Form::Tagged(tag, value) if tag == "obj" => {
+            let Form::Map(entries) = value.as_ref() else {
+                return Err("#obj expects a map literal".into());
+            };
+            Ok(Value::Object(Rc::new(RefCell::new(
+                entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok((marker_key(&eval(key, env)?, "#obj")?, eval(value, env)?))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            ))))
+        }
         Form::Tagged(tag, value) => Ok(Value::Tagged(Box::new(PTaggedLiteral::new(
             Symbol::parse(tag),
             literal_value(value)?,

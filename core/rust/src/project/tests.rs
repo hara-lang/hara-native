@@ -110,6 +110,29 @@ fn registers_project_sources_for_cross_file_requires() {
 }
 
 #[test]
+fn source_catalog_does_not_mutate_an_installed_package_root() {
+    let root = temp("immutable-installed-source").join("roots/sha256/package");
+    fs::create_dir_all(root.join("src/demo")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(root.join("src/demo/main.hal"), "(ns demo.main)").unwrap();
+
+    let project = read(&root).unwrap();
+    assert_eq!(
+        source_catalog(&project)
+            .unwrap()
+            .namespaces()
+            .collect::<Vec<_>>(),
+        vec!["demo.main"]
+    );
+    assert!(!root.join("target/hara/source-catalog-v1.index").exists());
+    fs::remove_dir_all(root.ancestors().nth(3).unwrap()).unwrap();
+}
+
+#[test]
 fn source_discovery_ignores_editor_artifacts() {
     let root = temp("editor-artifacts");
     fs::create_dir_all(root.join("src/demo")).unwrap();
@@ -195,6 +218,37 @@ fn expands_project_aliases_and_rejects_cycles() {
     assert!(expand_aliases(&read(&root).unwrap(), &["a".into()])
         .unwrap_err()
         .contains("cycle"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reads_a_distribution_declaration_and_rejects_an_unsafe_launcher() {
+    let root = temp("distribution");
+    fs::create_dir_all(&root).unwrap();
+    let base = "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}";
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned()
+            + " :project/distribution {:launcher \"hara\" :entry demo.cli/main}}",
+    )
+    .unwrap();
+    assert_eq!(
+        read(&root).unwrap().distribution,
+        Some(Distribution {
+            launcher: "hara".into(),
+            entry: "demo.cli/main".into(),
+        })
+    );
+
+    fs::write(
+        root.join("project.edn"),
+        base.strip_suffix('}').unwrap().to_owned()
+            + " :project/distribution {:launcher \"../hara\" :entry demo.cli/main}}",
+    )
+    .unwrap();
+    assert!(read(&root)
+        .unwrap_err()
+        .contains(":launcher must contain lowercase letters"));
     fs::remove_dir_all(root).unwrap();
 }
 

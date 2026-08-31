@@ -6,7 +6,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.hara-lang</groupId>
 	<artifactId>hara-native-jvm</artifactId>
-	<version>0.1.11</version>
+	<version>0.1.12</version>
 	<packaging>jar</packaging>
 	<name>Hara Native JVM Host</name>
 	<description>HAL-free JVM and GraalVM Truffle host runtime for Hara packages.</description>
@@ -177,6 +177,7 @@
 						<testInclude>hara/truffle/JvmPackageLoaderTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeTestRegistryTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeCommandTest.java</testInclude>
+						<testInclude>hara/truffle/HaraMutableCollectionTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
 					</testIncludes>
 					<annotationProcessorPaths>
@@ -256,6 +257,7 @@
 						<include>hara/truffle/JvmPackageLoaderTest.java</include>
 						<include>hara/truffle/HaraNativeTestRegistryTest.java</include>
 						<include>hara/truffle/HaraNativeCommandTest.java</include>
+						<include>hara/truffle/HaraMutableCollectionTest.java</include>
 					</includes>
 					<failIfNoTests>true</failIfNoTests>
 				</configuration>

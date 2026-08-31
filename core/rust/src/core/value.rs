@@ -20,6 +20,31 @@ pub struct ExceptionInfo {
     pub provenance: Rc<RefCell<ExceptionProvenance>>,
 }
 
+/// A callable frame collected while an evaluation boundary has tracing
+/// enabled.  Keep this structured until a presentation boundary chooses how
+/// to render it: editor clients need the namespace and source site separately
+/// from the human-readable stack label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceFrame {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub site: Option<ExceptionSite>,
+}
+
+impl TraceFrame {
+    pub fn label(&self) -> String {
+        let label = self
+            .namespace
+            .as_ref()
+            .map(|namespace| format!("{namespace}/{}", self.name))
+            .unwrap_or_else(|| self.name.clone());
+        match &self.site {
+            Some(site) if site.line > 0 => format!("{label} @ {}:{}", site.line, site.column),
+            _ => label,
+        }
+    }
+}
+
 fn default_exception_class(code: &Keyword) -> Option<Keyword> {
     if code.get_namespace() != Some("hara") {
         return None;
@@ -2080,7 +2105,8 @@ pub(crate) fn vm_macroexpand(form: &Form) -> Result<Form, String> {
 
 thread_local! {
     static TRACE_ENABLED: Cell<bool> = const { Cell::new(false) };
-    static TRACE_STACK: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static TRACE_STACK: RefCell<Vec<TraceFrame>> = const { RefCell::new(Vec::new()) };
+    static TRACE_FAILURE_STACK: RefCell<Vec<TraceFrame>> = const { RefCell::new(Vec::new()) };
     #[cfg(feature = "evaluation-journal")]
     static EVALUATION_JOURNAL: RefCell<Option<crate::journal::JournalCollector>> = const { RefCell::new(None) };
     #[cfg(feature = "evaluation-journal")]
@@ -2090,11 +2116,25 @@ thread_local! {
     static GENSYM_COUNTER: Cell<u64> = const { Cell::new(0) };
 }
 
-pub(crate) fn trace_stack_snapshot() -> Vec<String> {
+pub(crate) fn trace_stack_snapshot() -> Vec<TraceFrame> {
     TRACE_STACK.with(|stack| stack.borrow().clone())
 }
 
-pub(crate) fn with_trace_stack<R>(trace: &[String], operation: impl FnOnce() -> R) -> R {
+pub(crate) fn record_trace_failure() {
+    if !tracing_enabled() {
+        return;
+    }
+    let trace = trace_stack_snapshot();
+    if !trace.is_empty() {
+        TRACE_FAILURE_STACK.with(|failure| *failure.borrow_mut() = trace);
+    }
+}
+
+fn trace_failure_snapshot() -> Vec<TraceFrame> {
+    TRACE_FAILURE_STACK.with(|stack| stack.borrow().clone())
+}
+
+pub(crate) fn with_trace_stack<R>(trace: &[TraceFrame], operation: impl FnOnce() -> R) -> R {
     let previous = TRACE_STACK.with(|stack| {
         std::mem::replace(&mut *stack.borrow_mut(), trace.to_vec())
     });
@@ -2105,17 +2145,15 @@ pub(crate) fn with_trace_stack<R>(trace: &[String], operation: impl FnOnce() -> 
     result
 }
 
-pub(crate) fn trace_frame_label(
+pub(crate) fn trace_frame(
     name: String,
     namespace: Option<String>,
     site: Option<ExceptionSite>,
-) -> String {
-    let label = namespace
-        .map(|namespace| format!("{namespace}/{name}"))
-        .unwrap_or(name);
-    match site {
-        Some(site) if site.line > 0 => format!("{label} @ {}:{}", site.line, site.column),
-        _ => label,
+) -> TraceFrame {
+    TraceFrame {
+        name,
+        namespace,
+        site,
     }
 }
 
@@ -2225,6 +2263,7 @@ impl StackTraceGuard {
             previous
         });
         TRACE_STACK.with(|stack| stack.borrow_mut().clear());
+        TRACE_FAILURE_STACK.with(|stack| stack.borrow_mut().clear());
         Self { previous }
     }
 }
@@ -2239,9 +2278,28 @@ pub(crate) fn with_stack_trace<R>(operation: impl FnOnce() -> R) -> R {
     operation()
 }
 
+/// Runs an evaluation with trace collection and returns the frames before the
+/// boundary resets its thread-local state.  The textual error contract remains
+/// unchanged; embedding hosts can use this companion to build structured
+/// diagnostics without parsing rendered stack lines.
+pub fn with_stack_trace_snapshot<R>(operation: impl FnOnce() -> R) -> (R, Vec<TraceFrame>) {
+    let _guard = StackTraceGuard::enable();
+    let result = operation();
+    let trace = {
+        let failure = trace_failure_snapshot();
+        if failure.is_empty() {
+            trace_stack_snapshot()
+        } else {
+            failure
+        }
+    };
+    (result, trace)
+}
+
 impl Drop for StackTraceGuard {
     fn drop(&mut self) {
         TRACE_STACK.with(|stack| stack.borrow_mut().clear());
+        TRACE_FAILURE_STACK.with(|stack| stack.borrow_mut().clear());
         TRACE_ENABLED.with(|enabled| enabled.set(self.previous));
     }
 }
@@ -2254,6 +2312,7 @@ pub(crate) fn append_trace(error: String) -> String {
     if !tracing_enabled() {
         return error;
     }
+    record_trace_failure();
     let frames = TRACE_STACK.with(|stack| stack.borrow().iter().rev().cloned().collect::<Vec<_>>());
     if frames.is_empty() {
         return error;
@@ -2265,7 +2324,7 @@ pub(crate) fn append_trace(error: String) -> String {
         "{error}\n[hara stack]\n{}",
         frames
             .iter()
-            .map(|frame| format!("  at {frame}"))
+            .map(|frame| format!("  at {}", frame.label()))
             .collect::<Vec<_>>()
             .join("\n")
     )
@@ -3383,7 +3442,7 @@ impl Value {
                 }
             }
             Self::Array(values) => format!(
-                "(array {})",
+                "#arr[{}]",
                 values
                     .borrow()
                     .iter()
@@ -3392,11 +3451,15 @@ impl Value {
                     .join(" ")
             ),
             Self::Object(values) => format!(
-                "(object {})",
+                "#obj{{{}}}",
                 values
                     .borrow()
                     .iter()
-                    .map(|(key, value)| format!("\"{}\" {}", key, value.display()))
+                    .map(|(key, value)| format!(
+                        "{} {}",
+                        Value::String(key.clone()).display(),
+                        value.display()
+                    ))
                     .collect::<Vec<_>>()
                     .join(" ")
             ),

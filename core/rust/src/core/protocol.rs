@@ -2486,6 +2486,7 @@ impl Value {
                     | Self::Cons(_)
                     | Self::Queue(_)
                     | Self::Deque(_)
+                    | Self::Array(_)
                     | Self::Vector(_)
                     | Self::Tuple(_)
                     | Self::Seq(_)

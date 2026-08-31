@@ -367,6 +367,33 @@ fn literal_value(form: &Form) -> Result<Value, String> {
         Form::BigInteger(value) => Ok(crate::numeric::compact_integer(value.clone())),
         Form::Regex(value) => Ok(Value::Regex(value.clone())),
         Form::Tagged(tag, value) if tag == "ptr" => pointer_from_descriptor(literal_value(value)?),
+        Form::Tagged(tag, value) if tag == "arr" => {
+            let Form::Vector(values) = value.as_ref() else {
+                return Err("#arr expects a vector literal".into());
+            };
+            Ok(Value::Array(Rc::new(RefCell::new(
+                values
+                    .iter()
+                    .map(literal_value)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))))
+        }
+        Form::Tagged(tag, value) if tag == "obj" => {
+            let Form::Map(entries) = value.as_ref() else {
+                return Err("#obj expects a map literal".into());
+            };
+            Ok(Value::Object(Rc::new(RefCell::new(
+                entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            marker_key(&literal_value(key)?, "#obj")?,
+                            literal_value(value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            ))))
+        }
         Form::Tagged(tag, value) => Ok(Value::Tagged(Box::new(PTaggedLiteral::new(
             Symbol::parse(tag),
             literal_value(value)?,
@@ -1008,7 +1035,7 @@ pub(crate) fn call_function(function: &Function, arguments: Vec<Value>) -> Resul
     let tracing = tracing_enabled();
     if tracing {
         TRACE_STACK.with(|stack| {
-            stack.borrow_mut().push(trace_frame_label(
+            stack.borrow_mut().push(trace_frame(
                 function
                     .name
                     .clone()

@@ -105,6 +105,33 @@ fn literals() {
 }
 
 #[test]
+fn mutable_reader_tags_construct_lookup_collections() {
+    assert_eq!(
+        eval(
+            "(let [array #arr[1 (+ 1 1)]\
+                   object #obj{\"answer\" (+ 40 2)}]\
+               [(std.protocol.ilookup.ILookup/lookup array 1)\
+                (std.protocol.ilookup.ILookup/lookup array 9 :missing)\
+                (std.protocol.ilookup.ILookup/lookup object \"answer\")\
+                (std.protocol.ilookup.ILookup/lookup object \"missing\" :missing)\
+                (do (std.native.Arr/set array 0 7)\
+                    (std.protocol.ilookup.ILookup/lookup array 0))\
+                (do (std.native.Obj/set object \"answer\" 43)\
+                    (std.protocol.ilookup.ILookup/lookup object \"answer\"))])"
+        ),
+        "[2 :missing 42 :missing 7 43]"
+    );
+}
+
+#[test]
+fn mutable_reader_tags_round_trip_through_display() {
+    assert_eq!(
+        eval("[#arr[1 (+ 1 1)] #obj {\"answer\" (+ 40 2)} #obj {}]"),
+        "[#arr[1 2] #obj{\"answer\" 42} #obj{}]"
+    );
+}
+
+#[test]
 fn dynamic_collections_and_short_circuit_forms() {
     assert_eq!(
         eval_embedded_foundation("(let [x 19 y 23] [x y])"),

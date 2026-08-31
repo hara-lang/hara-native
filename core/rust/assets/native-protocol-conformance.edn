@@ -3,9 +3,9 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "ef6638d80a19431d0f30e7b97c30b3bfcb058b6f54c3437df3477000675efcf4"
- :binary-sha256 "1d17b46be02c68ce400635c34f13f447648533af907770cca1cc1babcd4118dc"
- :case-count 384
+ :source-sha256 "51624e400a25169400b0e4013a936066fcf0819a2b0780c8235385bcff7a1c18"
+ :binary-sha256 "4b3d09affce774aa553466aa077213de62bc3e06294d10332d372156003dc85b"
+ :case-count 386
  :suites
  [{:id :native
   :setup nil
@@ -39,6 +39,12 @@
     :expect {:display "true"}}
    {:id :native/array-and-object-mutation
     :program (let [array (std.native.Arr/new 1 2) array-copy (std.native.Arr/clone array) object (std.native.Obj/new "answer" 42) object-copy (std.native.Obj/clone object) _ (std.native.Arr/set array-copy 0 9) _ (std.native.Obj/set object-copy "answer" 9) _ (std.native.Obj/delete object-copy "answer")] (= [:std.native.Array 2 1 :std.native.Object 42 true false] [(std.native.Base/type array) (std.native.Arr/get array 1) (std.native.Arr/get array 0) (std.native.Base/type object) (std.native.Obj/get object "answer") (std.native.Obj/has? object "answer") (std.native.Obj/has? object-copy "answer")]))
+    :expect {:display "true"}}
+   {:id :native/mutable-reader-tags-and-lookup
+    :program (let [array #arr[1 (+ 1 1)] object #obj{"answer" (+ 40 2)} lookup (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup))) array-value (std.protocol.ilookup.ILookup/lookup array 1) array-missing (std.protocol.ilookup.ILookup/lookup array 9 :missing) object-value (std.protocol.ilookup.ILookup/lookup object "answer") object-missing (std.protocol.ilookup.ILookup/lookup object "missing" :missing) _ (std.native.Arr/set array 0 7) _ (std.native.Obj/set object "answer" 43)] (= [true true 2 :missing 42 :missing 7 43] [(std.native.Base/satisfies? lookup array) (std.native.Base/satisfies? lookup object) array-value array-missing object-value object-missing (std.protocol.ilookup.ILookup/lookup array 0) (std.protocol.ilookup.ILookup/lookup object "answer")]))
+    :expect {:display "true"}}
+   {:id :native/mutable-reader-tag-display
+    :program (= "[#arr[1 2] #obj{\"answer\" 42} #obj{}]" (std.native.Printer/capture (fn [] (std.native.Printer/p [#arr[1 (+ 1 1)] #obj{"answer" (+ 40 2)} #obj{}]))))
     :expect {:display "true"}}
    {:id :native/runtime-and-codecs
     :program (= [42 {:a 1} "{:a 1}" {"a" 1} "{\"a\":1}"] [(std.native.Runtime/load-string "(+ 19 23)") (std.native.Edn/read "{:a 1}") (std.native.Edn/write {:a 1}) (std.native.Json/read "{\"a\":1}") (std.native.Json/write {"a" 1})])

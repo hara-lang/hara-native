@@ -74,7 +74,17 @@ pub struct Project {
     /// Project-local command aliases.  Values are argv prefixes, never shell
     /// expressions; callers append their own arguments after expansion.
     pub aliases: BTreeMap<String, Vec<String>>,
+    /// Optional declaration for a relocatable Hara source distribution.
+    pub distribution: Option<Distribution>,
     pub recipe: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Distribution {
+    /// Basename for the copied host executable, without a platform extension.
+    pub launcher: String,
+    /// HAL entry Var that receives the complete argv vector.
+    pub entry: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -330,6 +340,9 @@ pub fn read(input: &Path) -> Result<Project, String> {
         .map(project_aliases)
         .transpose()?
         .unwrap_or_default();
+    let distribution = lookup(entries, "project/distribution")
+        .map(project_distribution)
+        .transpose()?;
     let recipe = lookup(entries, "project/recipe")
         .map(|value| relative_path(&string(value, "project/recipe")?, "project/recipe"))
         .transpose()?;
@@ -374,6 +387,7 @@ pub fn read(input: &Path) -> Result<Project, String> {
         shared_dependencies,
         extensions,
         aliases,
+        distribution,
         recipe,
     })
 }
@@ -1062,6 +1076,32 @@ fn project_aliases(form: &Form) -> Result<BTreeMap<String, Vec<String>>, String>
         }
     }
     Ok(output)
+}
+
+fn project_distribution(form: &Form) -> Result<Distribution, String> {
+    let entries = map(form, "project.edn :project/distribution must be an EDN map")?;
+    let launcher = lookup(entries, "launcher")
+        .ok_or_else(|| "project.edn :project/distribution requires :launcher".to_owned())
+        .and_then(|value| string(value, "project.edn :project/distribution :launcher"))?;
+    if !valid_name(&launcher) {
+        return Err(
+            "project.edn :project/distribution :launcher must contain lowercase letters, digits, or hyphens"
+                .into(),
+        );
+    }
+    let entry = lookup(entries, "entry")
+        .ok_or("project.edn :project/distribution requires :entry")
+        .and_then(|value| match value {
+            Form::Symbol(value) => Ok(value.clone()),
+            _ => Err("project.edn :project/distribution :entry must be a symbol".into()),
+        })?;
+    let valid_entry = entry
+        .split_once('/')
+        .is_some_and(|(namespace, symbol)| !namespace.is_empty() && !symbol.is_empty());
+    if !valid_entry || entry.matches('/').count() != 1 {
+        return Err("project.edn :project/distribution :entry must name namespace/symbol".into());
+    }
+    Ok(Distribution { launcher, entry })
 }
 
 /// Expands aliases without shell interpretation. Cycles are rejected rather

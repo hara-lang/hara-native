@@ -3,7 +3,7 @@
 `hara-native` is the host-runtime repository for Hara. It contains the Rust,
 JVM/Truffle, browser/Wasm, and provider implementations that execute Hara
 packages. It intentionally contains no canonical HAL source, embedded
-Foundation bundle, or end-user `hara` command.
+Foundation bundle, or built-in end-user `hara` command.
 
 The Hara source repository publishes signed HARP packages to
 `packages.hara-lang.org`. `hara-native` provides the integrated local signer,
@@ -20,7 +20,7 @@ the official registry, use [PUBLISHING.md](PUBLISHING.md).
 
 | Host | Artifact | Package boundary |
 | --- | --- | --- |
-| Rust | `hara-native` | `bundle verify`, `bundle install`, `bundle run` |
+| Rust | `hara-native` | `bundle verify`, `bundle install`, `bundle run`, `bundle exec`, `distribution build` |
 | JVM | `org.hara-lang:hara-native-jvm` | verified `package.edn` archive and JVM flavor loader |
 | Browser | `@hara-lang/native-browser` | `inspectHarp` and `activateLockedPackages` |
 | Providers | `providers/` | host adapters selected by verified HARP extensions |
@@ -39,10 +39,25 @@ cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle build
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle verify app.harp
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle install app.harp
 cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle run app.harp --entry app.main/start
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- bundle exec app.harp --entry app.main/start -- --help
+cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- distribution build project-dir --output target/app
 ```
 
 `eval`, `run`, and `repl` use only the core host language. Library namespaces
 are available only after a verified package is mounted.
+
+`distribution build` requires `:project/distribution` in the source project's
+`project.edn`. It copies the current host to `bin/<launcher>`, builds the HARP
+archive at `lib/hara.harp`, and writes `lib/release.edn` with source and host
+identity/version/digests. When the copied host starts under `bin/`, it verifies
+that manifest before loading the HARP archive and invokes its declared HAL
+entry with argv. It contains no product command behavior itself. A source entry
+may return a declared host action; the current supported action is
+`{:hara/host-action :resp}`. In a companion distribution only, that action
+starts the source-backed RESP broker and prints `HARA RESP 127.0.0.1:<port>`.
+The host accepts only the loopback address because RESP has no authentication;
+the Hara package remains responsible for choosing the action and its command
+semantics.
 
 ### Native project tests
 

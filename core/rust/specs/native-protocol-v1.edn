@@ -204,6 +204,34 @@
                     (std.native.Obj/has? object "answer")
                     (std.native.Obj/has? object-copy "answer")]))
      :expect {:display "true"}}
+    {:id :native/mutable-reader-tags-and-lookup
+     :program (let [array #arr[1 (+ 1 1)]
+                    object #obj{"answer" (+ 40 2)}
+                    lookup (std.protocol.ideref.IDeref/deref
+                            (std.native.Base/resolve 'std.protocol.ilookup.ILookup))
+                    array-value (std.protocol.ilookup.ILookup/lookup array 1)
+                    array-missing (std.protocol.ilookup.ILookup/lookup array 9 :missing)
+                    object-value (std.protocol.ilookup.ILookup/lookup object "answer")
+                    object-missing (std.protocol.ilookup.ILookup/lookup object "missing" :missing)
+                    _ (std.native.Arr/set array 0 7)
+                    _ (std.native.Obj/set object "answer" 43)]
+                (= [true true 2 :missing 42 :missing 7 43]
+                   [(std.native.Base/satisfies? lookup array)
+                    (std.native.Base/satisfies? lookup object)
+                    array-value
+                    array-missing
+                    object-value
+                    object-missing
+                    (std.protocol.ilookup.ILookup/lookup array 0)
+                    (std.protocol.ilookup.ILookup/lookup object "answer")]))
+     :expect {:display "true"}}
+    {:id :native/mutable-reader-tag-display
+     :program (= "[#arr[1 2] #obj{\"answer\" 42} #obj{}]"
+                 (std.native.Printer/capture
+                   (fn []
+                     (std.native.Printer/p
+                       [#arr[1 (+ 1 1)] #obj {"answer" (+ 40 2)} #obj {}]))))
+     :expect {:display "true"}}
     {:id :native/runtime-and-codecs
      :program (= [42 {:a 1} "{:a 1}" {"a" 1} "{\"a\":1}"]
                  [(std.native.Runtime/load-string "(+ 19 23)")
