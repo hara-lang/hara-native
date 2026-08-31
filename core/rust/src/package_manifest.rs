@@ -167,6 +167,10 @@ pub struct PackageManifest {
     pub version: Version,
     pub provenance: Option<PackageProvenance>,
     pub files: BTreeMap<PathBuf, PackageFile>,
+    /// Canonical namespace-to-resource declarations carried by the verified
+    /// package manifest. Native package registration consumes this map rather
+    /// than scanning every source file at process startup.
+    pub resources: BTreeMap<String, PathBuf>,
     pub bytecode: Option<PackageBytecode>,
     pub schema_catalog: Option<PackageCatalogDescriptor>,
     pub wasm_imports: BTreeMap<String, PackageVariant>,
