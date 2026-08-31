@@ -757,6 +757,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "!*.dockerbuild"
           merge-multiple: true
       - name: Verify payloads and write the release manifest
         shell: bash
