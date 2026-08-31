@@ -11,11 +11,49 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::native_cli::{Documentation, DocumentationValue, RuntimeBroker};
+use crate::core::ExceptionSite;
+use crate::native_cli::{
+    Documentation, DocumentationValue, RuntimeBroker, RuntimeDiagnostic, RuntimeException,
+};
 
 const MAX_LINE: usize = 64 * 1024;
 const MAX_BULK: usize = 64 * 1024 * 1024;
 const MAX_NESTING: usize = 64;
+const MAX_DIAGNOSTIC_DATA_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Debug)]
+struct RespFailure {
+    code: &'static str,
+    message: String,
+    diagnostic: Option<RespValue>,
+}
+
+impl RespFailure {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            diagnostic: None,
+        }
+    }
+
+    fn evaluation(diagnostic: RuntimeDiagnostic, origin: Option<SourceOrigin>) -> Self {
+        let message = diagnostic.message.clone();
+        Self {
+            code: "EVAL_ERROR",
+            message,
+            diagnostic: Some(diagnostic_payload(&diagnostic, origin.as_ref())),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SourceOrigin {
+    file: String,
+    line: usize,
+    column: usize,
+    source: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RespValue {
@@ -376,8 +414,17 @@ fn handle_v4(
             ])));
             let _ = connection.write(&RespValue::array(["DONE", id, "OK"]));
         }
-        Err((code, message)) => {
-            let _ = connection.write(&RespValue::array(["ERROR", id, code, &message]));
+        Err(failure) => {
+            let mut frame = vec![
+                RespValue::bulk("ERROR"),
+                RespValue::bulk(id),
+                RespValue::bulk(failure.code),
+                RespValue::bulk(failure.message),
+            ];
+            if let Some(diagnostic) = failure.diagnostic {
+                frame.push(diagnostic);
+            }
+            let _ = connection.write(&RespValue::Array(Some(frame)));
             let _ = connection.write(&RespValue::array(["DONE", id, "ERROR"]));
         }
     }
@@ -394,13 +441,13 @@ fn handle_legacy(
         broker
             .eval(&arguments[0], &arguments[1])
             .map(RespValue::bulk)
-            .map_err(|message| ("EVAL_ERROR", message))
+            .map_err(|message| RespFailure::new("EVAL_ERROR", message))
     } else {
         operation_result(broker, attached, operation, arguments)
     };
     let response = match result {
         Ok(value) => legacy_value(value),
-        Err((code, message)) => RespValue::Error(format!("{code} {message}")),
+        Err(failure) => RespValue::Error(format!("{} {}", failure.code, failure.message)),
     };
     let _ = connection.write(&response);
 }
@@ -410,36 +457,36 @@ fn operation_result(
     attached: &mut String,
     operation: &str,
     arguments: &[String],
-) -> Result<RespValue, (&'static str, String)> {
+) -> Result<RespValue, RespFailure> {
     match operation {
         "EVAL" => {
             let source = arguments
                 .first()
-                .ok_or(("BAD_REQUEST", "EVAL requires source".into()))?;
+                .ok_or_else(|| RespFailure::new("BAD_REQUEST", "EVAL requires source"))?;
             broker
-                .eval(attached, source)
+                .eval_diagnostic(attached, source)
                 .map(RespValue::bulk)
-                .map_err(|error| ("EVAL_ERROR", error))
+                .map_err(|diagnostic| RespFailure::evaluation(diagnostic, eval_origin(arguments)))
         }
         "COMPLETE" => {
             let prefix = arguments.first().map_or("", String::as_str);
             broker
                 .complete(attached, prefix)
                 .map(RespValue::array)
-                .map_err(|error| ("NO_SESSION", error))
+                .map_err(|error| RespFailure::new("NO_SESSION", error))
         }
         "DOC" => {
             let symbol = arguments
                 .first()
-                .ok_or(("BAD_REQUEST", "DOC requires symbol".into()))?;
+                .ok_or_else(|| RespFailure::new("BAD_REQUEST", "DOC requires symbol"))?;
             broker
                 .documentation(attached, symbol)
                 .map(documentation_value)
                 .map_err(|error| {
                     if error.starts_with("No session:") {
-                        ("NO_SESSION", error)
+                        RespFailure::new("NO_SESSION", error)
                     } else {
-                        ("DOC_NOT_FOUND", error)
+                        RespFailure::new("DOC_NOT_FOUND", error)
                     }
                 })
         }
@@ -450,8 +497,11 @@ fn operation_result(
         "INFO" => broker
             .info(attached)
             .map(RespValue::bulk)
-            .map_err(|error| ("NO_SESSION", error)),
-        _ => Err(("UNKNOWN_OP", format!("Unknown operation: {operation}"))),
+            .map_err(|error| RespFailure::new("NO_SESSION", error)),
+        _ => Err(RespFailure::new(
+            "UNKNOWN_OP",
+            format!("Unknown operation: {operation}"),
+        )),
     }
 }
 
@@ -459,29 +509,31 @@ fn session_operation(
     broker: &RuntimeBroker,
     attached: &mut String,
     arguments: &[String],
-) -> Result<RespValue, (&'static str, String)> {
+) -> Result<RespValue, RespFailure> {
     let action = arguments
         .first()
         .map(|value| value.to_ascii_uppercase())
-        .ok_or(("BAD_REQUEST", "SESSION requires an action".into()))?;
+        .ok_or_else(|| RespFailure::new("BAD_REQUEST", "SESSION requires an action"))?;
     match action.as_str() {
         "NEW" => broker
             .create(
                 arguments
                     .get(1)
-                    .ok_or(("BAD_REQUEST", "SESSION NEW requires name".into()))?,
+                    .ok_or_else(|| RespFailure::new("BAD_REQUEST", "SESSION NEW requires name"))?,
             )
             .map(RespValue::bulk)
-            .map_err(|error| ("BAD_REQUEST", error)),
+            .map_err(|error| RespFailure::new("BAD_REQUEST", error)),
         "LIST" => broker
             .list()
             .map(RespValue::array)
-            .map_err(|error| ("INTERNAL_ERROR", error)),
+            .map_err(|error| RespFailure::new("INTERNAL_ERROR", error)),
         "ATTACH" => {
             let name = arguments
                 .get(1)
-                .ok_or(("BAD_REQUEST", "SESSION ATTACH requires name".into()))?;
-            broker.info(name).map_err(|error| ("NO_SESSION", error))?;
+                .ok_or_else(|| RespFailure::new("BAD_REQUEST", "SESSION ATTACH requires name"))?;
+            broker
+                .info(name)
+                .map_err(|error| RespFailure::new("NO_SESSION", error))?;
             *attached = name.clone();
             Ok(RespValue::bulk(name))
         }
@@ -492,17 +544,225 @@ fn session_operation(
         "INFO" => broker
             .info(attached)
             .map(RespValue::bulk)
-            .map_err(|error| ("NO_SESSION", error)),
-        "CLOSE" => broker
-            .close(
-                arguments
-                    .get(1)
-                    .ok_or(("BAD_REQUEST", "SESSION CLOSE requires name".into()))?,
-            )
-            .map(RespValue::bulk)
-            .map_err(|error| ("BAD_REQUEST", error)),
-        _ => Err(("BAD_REQUEST", format!("Unknown SESSION action: {action}"))),
+            .map_err(|error| RespFailure::new("NO_SESSION", error)),
+        "CLOSE" => {
+            broker
+                .close(arguments.get(1).ok_or_else(|| {
+                    RespFailure::new("BAD_REQUEST", "SESSION CLOSE requires name")
+                })?)
+                .map(RespValue::bulk)
+                .map_err(|error| RespFailure::new("BAD_REQUEST", error))
+        }
+        _ => Err(RespFailure::new(
+            "BAD_REQUEST",
+            format!("Unknown SESSION action: {action}"),
+        )),
     }
+}
+
+fn eval_origin(arguments: &[String]) -> Option<SourceOrigin> {
+    let source = arguments.first()?.clone();
+    let mut file = None;
+    let mut line = None;
+    let mut column = None;
+    for pair in arguments[1..].chunks_exact(2) {
+        match pair[0].to_ascii_uppercase().as_str() {
+            "FILE" => file = Some(pair[1].clone()),
+            "LINE" => line = pair[1].parse::<usize>().ok().filter(|value| *value > 0),
+            "COLUMN" => column = pair[1].parse::<usize>().ok().filter(|value| *value > 0),
+            _ => {}
+        }
+    }
+    Some(SourceOrigin {
+        file: file?,
+        line: line?,
+        column: column.unwrap_or(1),
+        source,
+    })
+}
+
+fn truncated_text(value: String) -> String {
+    if value.len() <= MAX_DIAGNOSTIC_DATA_BYTES {
+        return value;
+    }
+    let mut end = MAX_DIAGNOSTIC_DATA_BYTES.saturating_sub(3);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
+fn optional_bulk(value: Option<String>) -> RespValue {
+    value.map_or(RespValue::Bulk(None), RespValue::bulk)
+}
+
+fn optional_integer(value: Option<usize>) -> RespValue {
+    value.map_or(RespValue::Bulk(None), |value| {
+        RespValue::Integer(value as i64)
+    })
+}
+
+fn exception_site(exception: &RuntimeException) -> Option<ExceptionSite> {
+    exception.throws.last().cloned()
+}
+
+fn site_location(
+    site: Option<&ExceptionSite>,
+    origin: Option<&SourceOrigin>,
+    use_origin: bool,
+) -> (Option<String>, Option<usize>, Option<usize>) {
+    let Some(site) = site else {
+        return origin
+            .filter(|_| use_origin)
+            .map(|origin| {
+                (
+                    Some(origin.file.clone()),
+                    Some(origin.line),
+                    Some(origin.column),
+                )
+            })
+            .unwrap_or((None, None, None));
+    };
+    if let Some(resource) = &site.resource {
+        return (
+            Some(resource.clone()),
+            (site.line > 0).then_some(site.line),
+            (site.column > 0).then_some(site.column),
+        );
+    }
+    if use_origin {
+        if let Some(origin) = origin {
+            let line = (site.line > 0).then(|| origin.line + site.line - 1);
+            let column = if site.line <= 1 {
+                (site.column > 0).then(|| origin.column + site.column - 1)
+            } else {
+                (site.column > 0).then_some(site.column)
+            };
+            return (Some(origin.file.clone()), line, column);
+        }
+    }
+    (
+        None,
+        (site.line > 0).then_some(site.line),
+        (site.column > 0).then_some(site.column),
+    )
+}
+
+fn location_payload(site: Option<&ExceptionSite>, origin: Option<&SourceOrigin>) -> RespValue {
+    let use_origin = site.is_none_or(|site| site.resource.is_none());
+    let (file, line, column) = site_location(site, origin, use_origin);
+    RespValue::Array(Some(vec![
+        RespValue::bulk("FILE"),
+        optional_bulk(file),
+        RespValue::bulk("LINE"),
+        optional_integer(line),
+        RespValue::bulk("COLUMN"),
+        optional_integer(column),
+    ]))
+}
+
+fn exception_payload(exception: &RuntimeException) -> RespValue {
+    let class = exception.class.clone().map(truncated_text);
+    let code = exception.code.clone().map(truncated_text);
+    let cause = exception.cause.as_deref().map(exception_payload);
+    let throws = exception
+        .throws
+        .iter()
+        .map(|site| location_payload(Some(site), None))
+        .collect::<Vec<_>>();
+    RespValue::Array(Some(vec![
+        RespValue::bulk("MESSAGE"),
+        RespValue::bulk(truncated_text(exception.message.clone())),
+        RespValue::bulk("CLASS"),
+        optional_bulk(class),
+        RespValue::bulk("CODE"),
+        optional_bulk(code),
+        RespValue::bulk("DATA"),
+        RespValue::bulk(truncated_text(exception.data.clone())),
+        RespValue::bulk("CAUSE"),
+        cause.unwrap_or(RespValue::Bulk(None)),
+        RespValue::bulk("THROWS"),
+        RespValue::Array(Some(throws)),
+    ]))
+}
+
+fn frame_payload(frame: &crate::core::TraceFrame, origin: Option<&SourceOrigin>) -> RespValue {
+    let use_origin = frame.namespace.is_none()
+        && frame
+            .site
+            .as_ref()
+            .is_none_or(|site| site.resource.is_none());
+    let (file, line, column) = site_location(frame.site.as_ref(), origin, use_origin);
+    RespValue::Array(Some(vec![
+        RespValue::bulk("FUNCTION"),
+        RespValue::bulk(frame.name.clone()),
+        RespValue::bulk("NAMESPACE"),
+        optional_bulk(frame.namespace.clone()),
+        RespValue::bulk("FILE"),
+        optional_bulk(file),
+        RespValue::bulk("LINE"),
+        optional_integer(line),
+        RespValue::bulk("COLUMN"),
+        optional_integer(column),
+    ]))
+}
+
+fn source_excerpt(origin: Option<&SourceOrigin>, line: Option<usize>) -> RespValue {
+    let Some(origin) = origin else {
+        return RespValue::Bulk(None);
+    };
+    let Some(line) = line else {
+        return RespValue::Bulk(None);
+    };
+    let local_line = line.checked_sub(origin.line).map_or(0, |offset| offset + 1);
+    if local_line == 0 {
+        return RespValue::Bulk(None);
+    }
+    let lines = origin.source.lines().collect::<Vec<_>>();
+    if local_line > lines.len() {
+        return RespValue::Bulk(None);
+    }
+    let start = local_line.saturating_sub(3);
+    let end = usize::min(lines.len(), local_line + 2);
+    let text = lines[start..end].join("\n");
+    RespValue::Array(Some(vec![
+        RespValue::bulk("START-LINE"),
+        RespValue::Integer((origin.line + start) as i64),
+        RespValue::bulk("TEXT"),
+        RespValue::bulk(truncated_text(text)),
+    ]))
+}
+
+fn diagnostic_payload(diagnostic: &RuntimeDiagnostic, origin: Option<&SourceOrigin>) -> RespValue {
+    let exception = diagnostic.exception.as_ref();
+    let primary_site = exception.and_then(exception_site).or_else(|| {
+        diagnostic
+            .frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.site.clone())
+    });
+    let (_, primary_line, _) = site_location(primary_site.as_ref(), origin, true);
+    let frames = diagnostic
+        .frames
+        .iter()
+        .rev()
+        .map(|frame| frame_payload(frame, origin))
+        .collect::<Vec<_>>();
+    RespValue::Array(Some(vec![
+        RespValue::bulk("VERSION"),
+        RespValue::Integer(1),
+        RespValue::bulk("MESSAGE"),
+        RespValue::bulk(truncated_text(diagnostic.message.clone())),
+        RespValue::bulk("EXCEPTION"),
+        exception.map_or(RespValue::Bulk(None), exception_payload),
+        RespValue::bulk("PRIMARY"),
+        location_payload(primary_site.as_ref(), origin),
+        RespValue::bulk("EXCERPT"),
+        source_excerpt(origin, primary_line),
+        RespValue::bulk("FRAMES"),
+        RespValue::Array(Some(frames)),
+    ]))
 }
 
 fn documentation_part(value: DocumentationValue) -> RespValue {
@@ -560,6 +820,20 @@ mod tests {
     use super::{RespConnection, RespValue};
     use std::net::{TcpListener, TcpStream};
 
+    fn array(value: &RespValue) -> &[RespValue] {
+        match value {
+            RespValue::Array(Some(values)) => values,
+            value => panic!("expected RESP array, got {value:?}"),
+        }
+    }
+
+    fn field<'a>(values: &'a [RespValue], name: &str) -> &'a RespValue {
+        values
+            .chunks_exact(2)
+            .find_map(|pair| (pair[0].text().as_deref() == Some(name)).then_some(&pair[1]))
+            .unwrap_or_else(|| panic!("missing {name} in {values:?}"))
+    }
+
     #[test]
     fn resp2_values_round_trip() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -600,6 +874,17 @@ mod tests {
             .write(&RespValue::array(["EVAL", "ROOT", "(+ answer 1)"]))
             .unwrap();
         assert_eq!(legacy.read().unwrap().unwrap().text().unwrap(), "42");
+        legacy
+            .write(&RespValue::array([
+                "EVAL",
+                "ROOT",
+                "(throw (ex :test/failed {:value 41}))",
+            ]))
+            .unwrap();
+        assert!(matches!(
+            legacy.read().unwrap().unwrap(),
+            RespValue::Error(_)
+        ));
 
         let mut modern = RespConnection::new(TcpStream::connect(&endpoint).unwrap()).unwrap();
         modern.write(&RespValue::array(["HELLO", "4"])).unwrap();
@@ -670,6 +955,65 @@ mod tests {
         assert_eq!(
             modern.read().unwrap().unwrap(),
             RespValue::array(["DONE", "REQ-4", "OK"])
+        );
+        server.stop();
+    }
+
+    #[test]
+    fn server_v4_error_carries_a_structured_evaluation_diagnostic() {
+        let broker = crate::native_cli::RuntimeBroker::start().unwrap();
+        let mut server = super::RespServer::start("127.0.0.1", 0, broker).unwrap();
+        let endpoint = server.endpoint();
+        let mut client = RespConnection::new(TcpStream::connect(&endpoint).unwrap()).unwrap();
+        client.write(&RespValue::array(["HELLO", "4"])).unwrap();
+        client.read().unwrap().unwrap();
+
+        let source = "(defn boom [] (throw (ex :test/failed {:value 41})))\n(boom)";
+        client
+            .write(&RespValue::array([
+                "EVAL",
+                "REQ-ERROR",
+                source,
+                "FILE",
+                "/tmp/request.hal",
+                "LINE",
+                "10",
+                "COLUMN",
+                "5",
+            ]))
+            .unwrap();
+        let error = client.read().unwrap().unwrap();
+        let error_values = array(&error);
+        assert_eq!(error_values.len(), 5);
+        assert_eq!(error_values[0].text().as_deref(), Some("ERROR"));
+        assert_eq!(error_values[1].text().as_deref(), Some("REQ-ERROR"));
+        assert_eq!(error_values[2].text().as_deref(), Some("EVAL_ERROR"));
+
+        let diagnostic = array(&error_values[4]);
+        assert_eq!(field(diagnostic, "VERSION"), &RespValue::Integer(1));
+        let exception = array(field(diagnostic, "EXCEPTION"));
+        assert_eq!(
+            field(exception, "CODE").text().as_deref(),
+            Some(":test/failed")
+        );
+        assert!(field(exception, "DATA")
+            .text()
+            .is_some_and(|data| data.contains(":value 41")));
+        let primary = array(field(diagnostic, "PRIMARY"));
+        assert_eq!(
+            field(primary, "FILE").text().as_deref(),
+            Some("/tmp/request.hal")
+        );
+        assert_eq!(field(primary, "LINE"), &RespValue::Integer(10));
+        let excerpt = array(field(diagnostic, "EXCERPT"));
+        assert_eq!(field(excerpt, "START-LINE"), &RespValue::Integer(10));
+        assert!(field(excerpt, "TEXT")
+            .text()
+            .is_some_and(|text| text.contains("(boom)")));
+        assert!(!array(field(diagnostic, "FRAMES")).is_empty());
+        assert_eq!(
+            client.read().unwrap().unwrap(),
+            RespValue::array(["DONE", "REQ-ERROR", "ERROR"])
         );
         server.stop();
     }

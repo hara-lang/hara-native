@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc};
 
-use crate::core::{ExceptionInfo, Promise, Value};
+use crate::core::{map_entries, ExceptionInfo, Promise, TraceFrame, Value};
 use crate::invoke_hta::InvokeHtaError;
 use crate::lang::data::Symbol;
 use crate::lang::protocol::INamespaced;
@@ -32,6 +32,7 @@ const RUNTIME_BROKER_STACK_SIZE: usize = if cfg!(debug_assertions) {
 } else {
     8 * 1024 * 1024
 };
+const MAX_DIAGNOSTIC_DATA_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Copy)]
 enum RuntimeBootstrap {
@@ -45,6 +46,11 @@ enum Request {
         session: String,
         source: String,
         reply: mpsc::Sender<Result<String, String>>,
+    },
+    EvalDiagnostic {
+        session: String,
+        source: String,
+        reply: mpsc::Sender<Result<String, RuntimeDiagnostic>>,
     },
     Namespace {
         session: String,
@@ -152,6 +158,79 @@ impl Drop for BrokerHandle {
 #[derive(Clone)]
 pub struct RuntimeBroker {
     handle: Arc<BrokerHandle>,
+}
+
+/// Structured state retained at an embedding boundary when an evaluation
+/// fails.  It deliberately complements `RuntimeBroker::eval` rather than
+/// changing that established string-error API.
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeDiagnostic {
+    pub message: String,
+    pub exception: Option<RuntimeException>,
+    pub frames: Vec<TraceFrame>,
+}
+
+/// Send-safe exception information retained for diagnostics. Runtime Values
+/// use single-threaded reference types, so this snapshot is made on the broker
+/// thread before the reply crosses its channel boundary.
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeException {
+    pub message: String,
+    pub class: Option<String>,
+    pub code: Option<String>,
+    pub data: String,
+    pub cause: Option<Box<RuntimeException>>,
+    pub throws: Vec<crate::core::ExceptionSite>,
+}
+
+impl RuntimeDiagnostic {
+    fn message(message: String) -> Self {
+        Self {
+            message,
+            exception: None,
+            frames: Vec::new(),
+        }
+    }
+}
+
+fn exception_attribute(exception: &ExceptionInfo, name: &str) -> Option<Value> {
+    let key = Value::Keyword(name.into());
+    map_entries(exception.data.as_ref())?
+        .into_iter()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+}
+
+fn bounded_diagnostic_data(value: String) -> String {
+    if value.len() <= MAX_DIAGNOSTIC_DATA_BYTES {
+        return value;
+    }
+    let mut end = MAX_DIAGNOSTIC_DATA_BYTES.saturating_sub(3);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
+fn exception_snapshot(exception: &ExceptionInfo) -> RuntimeException {
+    let provenance = exception.provenance.borrow();
+    RuntimeException {
+        message: exception.message.clone(),
+        class: exception_attribute(exception, "ex/class").map(|value| value.display()),
+        code: exception_attribute(exception, "ex/code").map(|value| value.display()),
+        data: bounded_diagnostic_data(exception.data.display()),
+        cause: exception.cause.as_deref().and_then(|value| match value {
+            Value::ExceptionInfo(cause) => Some(Box::new(exception_snapshot(cause))),
+            _ => None,
+        }),
+        throws: provenance.throws.clone(),
+    }
+}
+
+fn captured_exception(value: Option<Value>) -> Option<RuntimeException> {
+    match value {
+        Some(Value::ExceptionInfo(exception)) => Some(exception_snapshot(&exception)),
+        _ => None,
+    }
 }
 
 impl RuntimeBroker {
@@ -326,6 +405,25 @@ impl RuntimeBroker {
             source: source.into(),
             reply,
         })
+    }
+
+    pub(crate) fn eval_diagnostic(
+        &self,
+        session: &str,
+        source: &str,
+    ) -> Result<String, RuntimeDiagnostic> {
+        let (reply, response) = mpsc::channel();
+        self.handle
+            .sender
+            .send(Request::EvalDiagnostic {
+                session: session.into(),
+                source: source.into(),
+                reply,
+            })
+            .map_err(|_| RuntimeDiagnostic::message("runtime broker is closed".into()))?;
+        response.recv().map_err(|_| {
+            RuntimeDiagnostic::message("runtime broker stopped without a response".into())
+        })?
     }
 
     pub fn namespace(&self, session: &str) -> Result<String, String> {
@@ -619,6 +717,27 @@ fn run(
                         runtime.eval_native_traced(&source)
                     }
                 });
+                let _ = reply.send(result);
+            }
+            Request::EvalDiagnostic {
+                session,
+                source,
+                reply,
+            } => {
+                let result = broker_session_id(&session)
+                    .map_err(RuntimeDiagnostic::message)
+                    .and_then(|id| {
+                        let runtime = kernel
+                            .session_mut(&id)
+                            .and_then(|session| session.runtime_mut())
+                            .map_err(RuntimeDiagnostic::message)?;
+                        let ((result, frames), exception) = runtime.eval_native_diagnostic(&source);
+                        result.map_err(|message| RuntimeDiagnostic {
+                            message,
+                            exception: captured_exception(exception),
+                            frames,
+                        })
+                    });
                 let _ = reply.send(result);
             }
             Request::Namespace { session, reply } => {

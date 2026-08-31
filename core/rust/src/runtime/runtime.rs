@@ -1513,6 +1513,21 @@ impl Runtime {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Runtime {
+    /// Evaluates native source while retaining the typed exception and callable
+    /// frames needed by embedding protocols. The ordinary `eval_native` and
+    /// `eval_native_traced` string contracts remain unchanged.
+    pub fn eval_native_diagnostic(
+        &mut self,
+        source: &str,
+    ) -> (
+        (Result<String, String>, Vec<core::TraceFrame>),
+        Option<core::Value>,
+    ) {
+        core::with_thrown_value_capture(|| {
+            core::with_stack_trace_snapshot(|| self.eval_native(source))
+        })
+    }
+
     /// Replaces the native project source catalog used by namespace loading.
     /// Only paths are retained; source bodies are read at the require
     /// boundary. Existing in-memory resources and bytecode remain higher

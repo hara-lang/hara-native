@@ -289,6 +289,12 @@ public final class HaraNodes {
       for (int i = 0; i < elements.length; i++) {
         values[i] = elements[i].execute(frame);
       }
+      if (kind == Kind.MUTABLE_ARRAY) {
+        return HaraLanguage.currentContext(this).mutableArrayLiteral(values);
+      }
+      if (kind == Kind.MUTABLE_OBJECT) {
+        return HaraLanguage.currentContext(this).mutableObjectLiteral(values);
+      }
       return construct(kind, values);
     }
 

@@ -4,17 +4,21 @@
 //! verified HARP archive.  The user-facing `hara` command is intentionally a
 //! source-package wrapper and is not built into this binary.
 
+use hara_native::kernel::{parse, read_forms, Form};
 use hara_native::{
     command::{
         App as CommandApp, AppConfig, ArgumentSpec, CommandError, OptionKind, OptionSpec,
         ParsedValue, Request, Route, RouteSpec,
     },
     core::Value,
-    identity_tool, package,
+    distribution, identity_tool,
+    native_cli::RuntimeBroker,
+    package,
     package_manifest::PackageManifest,
-    project, Runtime,
+    project,
+    resp::RespServer,
+    Runtime,
 };
-use hara_native::kernel::{read_forms, Form};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::env;
@@ -48,6 +52,15 @@ enum Command {
         archive: PathBuf,
         entry: Option<String>,
     },
+    BundleExec {
+        archive: PathBuf,
+        entry: String,
+        argv: Vec<String>,
+    },
+    DistributionBuild {
+        project: PathBuf,
+        output: PathBuf,
+    },
     Signer(Vec<String>),
     Id(Vec<String>),
     Publish {
@@ -78,6 +91,10 @@ Commands:
   bundle install ARCHIVE.harp   verify and install a content-addressed package
   bundle run ARCHIVE.harp [--entry NAMESPACE/SYMBOL]
                                 mount an installed package and evaluate its main
+  bundle exec ARCHIVE.harp --entry NAMESPACE/SYMBOL [-- ARG...]
+                                mount a verified package and invoke its entry with argv
+  distribution build PROJECT --output DIRECTORY
+                                assemble a relocatable native host and HARP package
   signer generate --key-file PATH
                                 create a local development Ed25519 key
   signer public-key --key-file PATH
@@ -179,6 +196,37 @@ fn cli_application() -> Result<CommandApp<CliHandler>, String> {
     bundle_run.spec.arguments = vec![cli_argument("archive", true, false)];
     bundle_run.spec.options = vec![cli_string_option("entry", "--entry", false, None)];
     cli_install(&mut app, bundle_run)?;
+    let mut bundle_exec = cli_route(
+        "bundle-exec",
+        &["bundle", "exec"],
+        "Run a HARP package entry with argv",
+    );
+    bundle_exec.spec.arguments = vec![
+        cli_argument("archive", true, false),
+        cli_argument("argv", false, true),
+    ];
+    bundle_exec.spec.options = vec![cli_string_option("entry", "--entry", false, None)];
+    cli_install(&mut app, bundle_exec)?;
+
+    let mut distribution = cli_route(
+        "distribution",
+        &["distribution"],
+        "Report an unknown distribution operation",
+    );
+    distribution.spec.passthrough = true;
+    distribution.spec.arguments = vec![
+        cli_argument("operation", true, false),
+        cli_argument("argv", false, true),
+    ];
+    cli_install(&mut app, distribution)?;
+    let mut distribution_build = cli_route(
+        "distribution-build",
+        &["distribution", "build"],
+        "Build a relocatable Hara distribution",
+    );
+    distribution_build.spec.arguments = vec![cli_argument("project", true, false)];
+    distribution_build.spec.options = vec![cli_string_option("output", "--output", false, None)];
+    cli_install(&mut app, distribution_build)?;
 
     for (id, desc) in [
         ("signer", "Manage local signing keys"),
@@ -281,7 +329,7 @@ fn cli_command(request: &Request) -> Result<Command, String> {
             groups: arguments("groups")?,
         }),
         "bundle" => Err(format!(
-            "unknown hara-native bundle operation: {}; expected build, verify, install, or run",
+            "unknown hara-native bundle operation: {}; expected build, verify, install, run, or exec",
             argument("operation")?
         )),
         "bundle-build" => Ok(Command::BundleBuild {
@@ -293,6 +341,22 @@ fn cli_command(request: &Request) -> Result<Command, String> {
         "bundle-run" => Ok(Command::BundleRun {
             archive: PathBuf::from(argument("archive")?),
             entry: non_empty(option("entry")?),
+        }),
+        "bundle-exec" => Ok(Command::BundleExec {
+            archive: PathBuf::from(argument("archive")?),
+            entry: non_empty(option("entry")?)
+                .ok_or_else(|| "hara-native bundle exec requires --entry".to_owned())?,
+            argv: arguments("argv")?,
+        }),
+        "distribution" => Err(format!(
+            "unknown hara-native distribution operation: {}; expected build",
+            argument("operation")?
+        )),
+        "distribution-build" => Ok(Command::DistributionBuild {
+            project: PathBuf::from(argument("project")?),
+            output: non_empty(option("output")?)
+                .map(PathBuf::from)
+                .ok_or_else(|| "hara-native distribution build requires --output".to_owned())?,
         }),
         "signer" => Ok(Command::Signer(arguments("argv")?)),
         "id" => Ok(Command::Id(arguments("argv")?)),
@@ -383,6 +447,12 @@ fn run(command: Command) -> Result<(), String> {
         Command::BundleVerify(archive) => verify_bundle(&archive),
         Command::BundleInstall(archive) => install_bundle(&archive).map(|_| ()),
         Command::BundleRun { archive, entry } => run_bundle(&archive, entry.as_deref()),
+        Command::BundleExec {
+            archive,
+            entry,
+            argv,
+        } => run_bundle_entry(&archive, &entry, &argv),
+        Command::DistributionBuild { project, output } => build_distribution(&project, &output),
         Command::Signer(arguments) => signer::run(arguments),
         Command::Id(arguments) => run_id(&arguments),
         Command::Publish {
@@ -520,8 +590,37 @@ fn install_bundle(archive: &Path) -> Result<PathBuf, String> {
     Ok(installed)
 }
 
+fn install_bundle_silent(archive: &Path) -> Result<PathBuf, String> {
+    PackageManifest::read_archive(archive).map_err(|error| error.to_string())?;
+    package::install_path(archive)
+}
+
 fn run_bundle(archive: &Path, entry: Option<&str>) -> Result<(), String> {
+    let result = execute_bundle(archive, entry, None)?;
+    println!("{result}");
+    Ok(())
+}
+
+fn run_bundle_entry(archive: &Path, entry: &str, argv: &[String]) -> Result<(), String> {
+    let result = execute_bundle(archive, Some(entry), Some(argv))?;
+    println!("{result}");
+    Ok(())
+}
+
+fn execute_bundle(
+    archive: &Path,
+    entry: Option<&str>,
+    argv: Option<&[String]>,
+) -> Result<String, String> {
     let root = install_bundle(archive)?;
+    execute_installed_bundle(&root, entry, argv)
+}
+
+fn execute_installed_bundle(
+    root: &Path,
+    entry: Option<&str>,
+    argv: Option<&[String]>,
+) -> Result<String, String> {
     let project = project::read(&root)?;
     let main = project::main_file(&project)?;
     let source = fs::read_to_string(&main)
@@ -529,12 +628,209 @@ fn run_bundle(archive: &Path, entry: Option<&str>) -> Result<(), String> {
     let catalog = project::source_catalog(&project)?;
     let mut runtime = Runtime::core();
     runtime.register_source_catalog(&catalog);
+    if catalog.path("std.foundation").is_some() {
+        runtime.bootstrap_source_foundation()?;
+    }
     runtime.eval_native(&source)?;
-    let result = match entry {
-        Some(symbol) => runtime.eval_native(&format!("({symbol})"))?,
-        None => "nil".to_owned(),
+    let result = match (entry, argv) {
+        (Some(symbol), Some(argv)) => {
+            let argv = Form::Vector(argv.iter().cloned().map(Form::String).collect()).to_string();
+            runtime.eval_native(&format!("({symbol} {argv})"))?
+        }
+        (Some(symbol), None) => runtime.eval_native(&format!("({symbol})"))?,
+        (None, None) => "nil".to_owned(),
+        (None, Some(_)) => return Err("package argv requires an entry symbol".into()),
     };
-    println!("{result}");
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompanionHostAction {
+    Resp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RespLaunch {
+    project: PathBuf,
+    root: PathBuf,
+    host: String,
+    port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompanionCommandResponse {
+    stdout: String,
+    stderr: String,
+    exit: i32,
+}
+
+fn companion_host_action(result: &str) -> Result<Option<CompanionHostAction>, String> {
+    let form = parse(result)
+        .map_err(|error| format!("companion command returned an invalid Hara result: {error}"))?;
+    let Form::Map(entries) = form else {
+        return Ok(None);
+    };
+    let action = entries.iter().find_map(|(key, value)| {
+        matches!(key, Form::Keyword(name) if name == "hara/host-action").then_some(value)
+    });
+    match action {
+        None => Ok(None),
+        Some(Form::Keyword(action)) if action == "resp" => Ok(Some(CompanionHostAction::Resp)),
+        Some(Form::Keyword(action)) => Err(format!("unsupported Hara host action: :{action}")),
+        Some(_) => Err("Hara host action must be a keyword".into()),
+    }
+}
+
+fn companion_command_response(result: &str) -> Result<Option<CompanionCommandResponse>, String> {
+    let form = parse(result)
+        .map_err(|error| format!("companion command returned an invalid Hara result: {error}"))?;
+    let Form::Map(entries) = form else {
+        return Ok(None);
+    };
+    let field = |name| {
+        entries.iter().find_map(|(key, value)| {
+            matches!(key, Form::Keyword(keyword) if keyword == name).then_some(value)
+        })
+    };
+    let (Some(Form::String(stdout)), Some(Form::String(stderr)), Some(Form::Number(exit))) =
+        (field("stdout"), field("stderr"), field("exit"))
+    else {
+        return Ok(None);
+    };
+    if entries.len() != 3 || !entries.iter().all(|(key, _)| {
+        matches!(key, Form::Keyword(keyword) if keyword == "stdout" || keyword == "stderr" || keyword == "exit")
+    }) {
+        return Ok(None);
+    }
+    let exit = i32::try_from(*exit)
+        .ok()
+        .filter(|exit| (0..=255).contains(exit))
+        .ok_or_else(|| "companion command response :exit must be between 0 and 255".to_owned())?;
+    Ok(Some(CompanionCommandResponse {
+        stdout: stdout.clone(),
+        stderr: stderr.clone(),
+        exit,
+    }))
+}
+
+fn write_companion_command_response(response: &CompanionCommandResponse) -> Result<(), String> {
+    let mut stdout = io::stdout().lock();
+    stdout
+        .write_all(response.stdout.as_bytes())
+        .map_err(|error| error.to_string())?;
+    stdout.flush().map_err(|error| error.to_string())?;
+    let mut stderr = io::stderr().lock();
+    stderr
+        .write_all(response.stderr.as_bytes())
+        .map_err(|error| error.to_string())?;
+    stderr.flush().map_err(|error| error.to_string())
+}
+
+fn resp_launch(arguments: &[String]) -> Result<RespLaunch, String> {
+    let mut project = None;
+    let mut root = None;
+    let mut host = None;
+    let mut port = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        match argument.as_str() {
+            "headless" => index += 1,
+            "--project" | "--root" | "--host" | "--port" => {
+                let value = arguments
+                    .get(index + 1)
+                    .ok_or_else(|| format!("{argument} requires a value"))?;
+                match argument.as_str() {
+                    "--project" => {
+                        if project.replace(PathBuf::from(value)).is_some() {
+                            return Err("--project may be supplied only once".into());
+                        }
+                    }
+                    "--root" => {
+                        if root.replace(PathBuf::from(value)).is_some() {
+                            return Err("--root may be supplied only once".into());
+                        }
+                    }
+                    "--host" => {
+                        if host.replace(value.clone()).is_some() {
+                            return Err("--host may be supplied only once".into());
+                        }
+                    }
+                    "--port" => {
+                        let parsed = value
+                            .parse::<u16>()
+                            .map_err(|_| format!("--port must be a u16: {value}"))?;
+                        if port.replace(parsed).is_some() {
+                            return Err("--port may be supplied only once".into());
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                index += 2;
+            }
+            _ => return Err(format!("RESP host does not accept argument: {argument}")),
+        }
+    }
+    let project = match project {
+        Some(project) => project,
+        None => env::current_dir()
+            .map_err(|error| format!("cannot determine RESP project directory: {error}"))?,
+    };
+    let root = root.unwrap_or_else(|| project.clone());
+    let host = host.unwrap_or_else(|| "127.0.0.1".into());
+    if host != "127.0.0.1" {
+        return Err("RESP host must be the loopback address 127.0.0.1".into());
+    }
+    Ok(RespLaunch {
+        project,
+        root,
+        host,
+        port: port.unwrap_or(0),
+    })
+}
+
+fn start_companion_resp(runtime_root: &Path, arguments: &[String]) -> Result<RespServer, String> {
+    let launch = resp_launch(arguments)?;
+    let runtime_project = project::read(runtime_root)?;
+    let client_project = project::discover(&launch.project)?;
+    let catalog = project::source_catalogs(&[&runtime_project, &client_project])?;
+    let root = launch.root.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve RESP root {}: {error}",
+            launch.root.display()
+        )
+    })?;
+    let broker = RuntimeBroker::start_with_source_catalog(
+        Some(root),
+        false,
+        false,
+        false,
+        "interpreter",
+        catalog,
+    )?;
+    RespServer::start(&launch.host, launch.port, broker)
+}
+
+fn run_companion_resp(runtime_root: &Path, arguments: &[String]) -> Result<(), String> {
+    let server = start_companion_resp(runtime_root, arguments)?;
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "HARA RESP {}", server.endpoint()).map_err(|error| error.to_string())?;
+    stdout.flush().map_err(|error| error.to_string())?;
+    loop {
+        std::thread::park();
+    }
+}
+
+fn build_distribution(project: &Path, output: &Path) -> Result<(), String> {
+    let native = env::current_exe()
+        .map_err(|error| format!("cannot determine native launcher path: {error}"))?;
+    let manifest = distribution::build(project, &native, output)?;
+    println!(
+        "built distribution {} {} at {}",
+        manifest.source_identity,
+        manifest.source_version,
+        output.display()
+    );
     Ok(())
 }
 
@@ -994,6 +1290,19 @@ fn suite_case_count(
 
 fn main() {
     let arguments: Vec<_> = env::args().skip(1).collect();
+    match run_companion_distribution(&arguments) {
+        Ok(Some(exit)) => {
+            if exit != 0 {
+                std::process::exit(exit);
+            }
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("hara: {error}");
+            std::process::exit(1);
+        }
+    }
     let command = if arguments.is_empty() && signer::is_configured() {
         Ok(Command::Signer(Vec::new()))
     } else {
@@ -1009,15 +1318,63 @@ fn main() {
     }
 }
 
+fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, String> {
+    let native = env::current_exe()
+        .map_err(|error| format!("cannot determine native launcher path: {error}"))?;
+    let Some(root) = companion_root(&native) else {
+        return Ok(None);
+    };
+    if !root.join(distribution::MANIFEST_PATH).is_file() {
+        return Ok(None);
+    }
+    let manifest = distribution::verify(&root, &native)?;
+    let archive = root.join(&manifest.archive);
+    let installed = install_bundle_silent(&archive)?;
+    let result = execute_installed_bundle(&installed, Some(&manifest.entry), Some(arguments))?;
+    match companion_host_action(&result)? {
+        Some(CompanionHostAction::Resp) => {
+            run_companion_resp(&installed, arguments)?;
+            Ok(Some(0))
+        }
+        None => match companion_command_response(&result)? {
+            Some(response) => {
+                let exit = response.exit;
+                write_companion_command_response(&response)?;
+                Ok(Some(exit))
+            }
+            None => {
+                println!("{result}");
+                Ok(Some(0))
+            }
+        },
+    }
+}
+
+fn companion_root(native: &Path) -> Option<PathBuf> {
+    let bin = native.parent()?;
+    if bin.file_name()?.to_string_lossy() != "bin" {
+        return None;
+    }
+    bin.parent().map(Path::to_path_buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_arguments, parse_test_suite, reject_top_level_test_run, run_id, run_project_tests,
-        run_test_suite, select_test_cases, signer, Command,
+        companion_command_response, companion_host_action, companion_root, parse_arguments,
+        parse_test_suite, reject_top_level_test_run, resp_launch, run_id, run_project_tests,
+        run_test_suite, select_test_cases, signer, start_companion_resp, Command,
+        CompanionHostAction,
     };
-    use hara_native::{identity_tool, package, package_manifest::PackageManifest, tap};
+    use hara_native::{
+        identity_tool, package,
+        package_manifest::PackageManifest,
+        resp::{RespConnection, RespValue},
+        tap,
+    };
     use std::cell::RefCell;
     use std::fs;
+    use std::net::TcpStream;
     use std::process::Command as ProcessCommand;
 
     fn suite_path(name: &str) -> std::path::PathBuf {
@@ -1096,6 +1453,33 @@ mod tests {
         assert!(matches!(
             parse_arguments([
                 "bundle".into(),
+                "exec".into(),
+                "hara-cli.harp".into(),
+                "--entry".into(),
+                "tool.cli.main/run".into(),
+                "--".into(),
+                "--version".into(),
+            ]),
+            Ok(Command::BundleExec { archive, entry, argv })
+                if archive.to_string_lossy() == "hara-cli.harp"
+                    && entry == "tool.cli.main/run"
+                    && argv == ["--version"]
+        ));
+        assert!(matches!(
+            parse_arguments([
+                "distribution".into(),
+                "build".into(),
+                "source".into(),
+                "--output".into(),
+                "target/hara".into(),
+            ]),
+            Ok(Command::DistributionBuild { project, output })
+                if project == std::path::PathBuf::from("source")
+                    && output == std::path::PathBuf::from("target/hara")
+        ));
+        assert!(matches!(
+            parse_arguments([
+                "bundle".into(),
                 "build".into(),
                 "examples/smoke-answer".into(),
                 "--output".into(),
@@ -1138,6 +1522,209 @@ mod tests {
                     && dry_run
                     && !skip_signed_tag
         ));
+    }
+
+    #[test]
+    fn derives_a_companion_distribution_root_only_from_a_bin_launcher() {
+        assert_eq!(
+            companion_root(std::path::Path::new("target/hara/bin/hara")),
+            Some(std::path::PathBuf::from("target/hara"))
+        );
+        assert_eq!(
+            companion_root(std::path::Path::new("target/hara-native")),
+            None
+        );
+    }
+
+    #[test]
+    fn recognizes_the_source_owned_resp_host_action() {
+        assert_eq!(
+            companion_host_action("{:hara/host-action :resp}").unwrap(),
+            Some(CompanionHostAction::Resp)
+        );
+        assert_eq!(companion_host_action("\"hara 0.1.0\"").unwrap(), None);
+        let error = companion_host_action("{:hara/host-action :other}").unwrap_err();
+        assert!(error.contains("unsupported Hara host action"));
+    }
+
+    #[test]
+    fn recognizes_standard_command_responses_without_claiming_other_maps() {
+        assert_eq!(
+            companion_command_response("{:stdout \"ok\\n\" :stderr \"\" :exit 0}").unwrap(),
+            Some(super::CompanionCommandResponse {
+                stdout: "ok\n".into(),
+                stderr: "".into(),
+                exit: 0,
+            })
+        );
+        assert_eq!(
+            companion_command_response("{:hara/host-action :resp}").unwrap(),
+            None
+        );
+        assert!(
+            companion_command_response("{:stdout \"\" :stderr \"bad\" :exit 999}")
+                .unwrap_err()
+                .contains(":exit")
+        );
+    }
+
+    #[test]
+    fn parses_only_loopback_resp_transport_options() {
+        let launch = resp_launch(&[
+            "--project".into(),
+            "project-root".into(),
+            "--root".into(),
+            "execution-root".into(),
+            "--host".into(),
+            "127.0.0.1".into(),
+            "--port".into(),
+            "0".into(),
+            "headless".into(),
+        ])
+        .unwrap();
+        assert_eq!(launch.project, std::path::PathBuf::from("project-root"));
+        assert_eq!(launch.root, std::path::PathBuf::from("execution-root"));
+        assert_eq!(launch.host, "127.0.0.1");
+        assert_eq!(launch.port, 0);
+        assert!(
+            resp_launch(&["--host".into(), "0.0.0.0".into(), "headless".into()])
+                .unwrap_err()
+                .contains("loopback")
+        );
+        assert!(
+            resp_launch(&["--port".into(), "not-a-port".into(), "headless".into()])
+                .unwrap_err()
+                .contains("u16")
+        );
+    }
+
+    #[test]
+    fn resp_server_mounts_the_client_project_after_source_bootstrap() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-companion-resp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = root.join("runtime");
+        let client = root.join("client");
+        let result = (|| -> Result<(), String> {
+            fs::create_dir_all(runtime.join("src/std")).map_err(|error| error.to_string())?;
+            fs::create_dir_all(client.join("src/demo")).map_err(|error| error.to_string())?;
+            fs::write(
+                runtime.join("project.edn"),
+                "{:hara/type :project :hara/version \"1.0.0\" :project/id hara/foundation :project/version \"0.1.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main std.foundation :project/capabilities #{}}\n",
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(
+                runtime.join("src/std/foundation.hal"),
+                "(ns std.foundation)\n(defmacro intern-in [_] nil)\n",
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(
+                client.join("project.edn"),
+                "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/client :project/version \"0.1.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main demo.app :project/capabilities #{}}\n",
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(
+                client.join("src/demo/app.hal"),
+                "(ns demo.app)\n(defn answer [] 42)\n",
+            )
+            .map_err(|error| error.to_string())?;
+            let arguments = vec![
+                "--project".into(),
+                client.display().to_string(),
+                "--root".into(),
+                client.display().to_string(),
+                "--host".into(),
+                "127.0.0.1".into(),
+                "--port".into(),
+                "0".into(),
+                "headless".into(),
+            ];
+            let mut server = start_companion_resp(&runtime, &arguments)?;
+            let response = (|| -> Result<RespValue, String> {
+                let project = client.display().to_string();
+                let mut connection = RespConnection::new(
+                    TcpStream::connect(server.endpoint())
+                        .map_err(|error| format!("RESP connection failed: {error}"))?,
+                )?;
+                connection.write(&RespValue::array([
+                    "HELLO",
+                    "4",
+                    "EMACS",
+                    "HARA-MODE",
+                    "PROJECT",
+                    &project,
+                ]))?;
+                let hello = connection
+                    .read()?
+                    .ok_or_else(|| "RESP server closed during HELLO".to_owned())?;
+                if !matches!(hello, RespValue::Array(Some(_))) {
+                    return Err(format!("unexpected RESP HELLO: {hello:?}"));
+                }
+                connection.write(&RespValue::array([
+                    "EVAL",
+                    "REQ-1",
+                    "(require 'demo.app) (demo.app/answer)",
+                ]))?;
+                connection
+                    .read()?
+                    .ok_or_else(|| "RESP server closed during EVAL".to_owned())
+            })();
+            server.stop();
+            let response = response?;
+            let expected = RespValue::array(["RESULT", "REQ-1", "42"]);
+            if response != expected {
+                return Err(format!("unexpected RESP EVAL: {response:?}"));
+            }
+            Ok(())
+        })();
+        let cleanup = fs::remove_dir_all(&root);
+        cleanup.map_err(|error| error.to_string()).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn bundle_exec_makes_intern_in_available_after_require_and_passes_argv() {
+        let root =
+            std::env::temp_dir().join(format!("hara-native-bundle-exec-{}", std::process::id()));
+        let store = root.join("store");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/demo/cli")).unwrap();
+        fs::create_dir_all(root.join("src/std")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/cli :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main demo.cli :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/std/foundation.hal"),
+            "(ns std.foundation)\n(defmacro intern-in [_] '(def main demo.cli.internal/main))\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/demo/cli/internal.hal"),
+            "(ns demo.cli.internal)\n(defn main [argv] argv)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/demo/cli.hal"),
+            "(ns demo.cli)\n(require 'demo.cli.internal)\n(intern-in [main demo.cli.internal/main])\n",
+        )
+        .unwrap();
+        let archive = package::build_path(&root, None).unwrap();
+        let installed = package::install_path_at(&archive, &store).unwrap();
+        let result = super::execute_installed_bundle(
+            &installed,
+            Some("demo.cli/main"),
+            Some(&["--version".into(), "project".into()]),
+        )
+        .unwrap();
+        assert_eq!(result, "[\"--version\" \"project\"]");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

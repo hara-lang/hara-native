@@ -340,7 +340,7 @@ pub enum Step {
     Continue(Box<dyn FnOnce() -> Step>),
 }
 
-fn with_trace_stack_step(trace: Vec<String>, step: Step) -> Step {
+fn with_trace_stack_step(trace: Vec<TraceFrame>, step: Step) -> Step {
     match step {
         Step::Continue(next) => Step::Continue(Box::new(move || {
             let step = with_trace_stack(&trace, next);
@@ -1442,7 +1442,7 @@ fn call(f: Rc<Function>, args: Vec<Value>, k: Cont) -> Step {
     let tracing = tracing_enabled();
     if tracing {
         TRACE_STACK.with(|stack| {
-            stack.borrow_mut().push(trace_frame_label(
+            stack.borrow_mut().push(trace_frame(
                 f.name.clone().unwrap_or_else(|| "<anonymous>".into()),
                 f.namespace.clone(),
                 current_exception_site(),

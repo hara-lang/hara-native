@@ -7311,7 +7311,7 @@ public final class HaraContext {
     if ("new".equals(method)) {
       Object[] unwrapped =
           java.util.Arrays.stream(values).map(HaraBox::unwrap).toArray(Object[]::new);
-      return "Arr".equals(type) ? new HaraArray(unwrapped) : new HaraObject(unwrapped);
+      return "Arr".equals(type) ? mutableArrayLiteral(unwrapped) : mutableObjectLiteral(unwrapped);
     }
     if (values.length == 0) {
       throw new HaraException("std.native." + type + "/" + method + " expects a receiver");
@@ -7328,6 +7328,14 @@ public final class HaraContext {
       return invokeObjectMethod(object, method, arguments);
     }
     throw new HaraException("std.native." + type + "/" + method + " receiver type mismatch");
+  }
+
+  public Object mutableArrayLiteral(Object[] values) {
+    return new HaraArray(values);
+  }
+
+  public Object mutableObjectLiteral(Object[] values) {
+    return new HaraObject(values);
   }
 
   private Object invokeArrayMethod(HaraArray array, String method, Object[] arguments) {
@@ -9444,7 +9452,7 @@ public final class HaraContext {
   }
 
   private static final class HaraArray extends ArrayList<Object>
-      implements ICount, INth<Object>, IEmpty, IConj<Object> {
+      implements ILookup<Object, Object>, ICount, INth<Object>, IEmpty, IConj<Object>, IDisplay {
     private HaraArray() {}
 
     private HaraArray(Object[] values) {
@@ -9454,6 +9462,43 @@ public final class HaraContext {
     @Override
     public long count() {
       return size();
+    }
+
+    @Override
+    public Map.Entry<Object, Object> find(Object key) {
+      if (!HaraNumericConversions.isNumeric(key)) {
+        throw new HaraException("ILookup/lookup on arrays expects a numeric index");
+      }
+      long index = HaraNumericConversions.toLong(key, "ILookup/lookup on arrays");
+      if (index < 0) {
+        throw new HaraException("ILookup/lookup on arrays expects a non-negative index");
+      }
+      if (index >= size()) {
+        return null;
+      }
+      return new MapEntry<>(null, index, get((int) index));
+    }
+
+    @Override
+    public Iterator<Object> keys() {
+      return new Iterator<>() {
+        private long index;
+
+        @Override
+        public boolean hasNext() {
+          return index < size();
+        }
+
+        @Override
+        public Object next() {
+          return index++;
+        }
+      };
+    }
+
+    @Override
+    public Iterator<Object> vals() {
+      return iterator();
     }
 
     @Override
@@ -9474,10 +9519,20 @@ public final class HaraContext {
       add(value);
       return this;
     }
+
+    @Override
+    public String display() {
+      StringBuilder output = new StringBuilder("#arr[");
+      for (int index = 0; index < size(); index++) {
+        if (index > 0) output.append(' ');
+        output.append(G.display(get(index)));
+      }
+      return output.append(']').toString();
+    }
   }
 
   private static final class HaraObject extends LinkedHashMap<String, Object>
-      implements ICount, IEmpty, IConj<Object> {
+      implements ILookup<Object, Object>, ICount, IEmpty, IConj<Object>, IDisplay {
     private HaraObject() {}
 
     private HaraObject(Object[] values) {
@@ -9496,6 +9551,35 @@ public final class HaraContext {
     @Override
     public long count() {
       return size();
+    }
+
+    @Override
+    public Map.Entry<Object, Object> find(Object key) {
+      if (!(key instanceof String name) || !containsKey(name)) {
+        return null;
+      }
+      return new MapEntry<>(null, name, get(name));
+    }
+
+    @Override
+    public Iterator<Object> keys() {
+      Iterator<String> keys = keySet().iterator();
+      return new Iterator<>() {
+        @Override
+        public boolean hasNext() {
+          return keys.hasNext();
+        }
+
+        @Override
+        public Object next() {
+          return keys.next();
+        }
+      };
+    }
+
+    @Override
+    public Iterator<Object> vals() {
+      return values().iterator();
     }
 
     @Override
@@ -9519,6 +9603,17 @@ public final class HaraContext {
       }
       put(objectKey(key, "IConj/conj object"), item);
       return this;
+    }
+
+    @Override
+    public String display() {
+      StringBuilder output = new StringBuilder("#obj{");
+      int index = 0;
+      for (Map.Entry<String, Object> entry : entrySet()) {
+        if (index++ > 0) output.append(' ');
+        output.append(G.display(entry.getKey())).append(' ').append(G.display(entry.getValue()));
+      }
+      return output.append('}').toString();
     }
   }
 

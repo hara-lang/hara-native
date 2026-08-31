@@ -1053,6 +1053,67 @@ impl Compiler {
                 self.constant(crate::numeric::compact_integer(value.clone()), span)
             }
             Form::Regex(value) => self.constant(Value::Regex(value.clone()), span),
+            Form::Tagged(tag, value) if tag == "arr" => {
+                let Form::Vector(values) = value.as_ref() else {
+                    return Err(CompileError::new(
+                        CompileErrorKind::UnsupportedForm,
+                        "#arr expects a vector literal",
+                        Some(span.start),
+                    ));
+                };
+                if values.len() > MAX_PRIMITIVE_ARGUMENTS {
+                    return Err(CompileError::new(
+                        CompileErrorKind::Limit,
+                        format!(
+                            "#arr supports at most {MAX_PRIMITIVE_ARGUMENTS} elements"
+                        ),
+                        Some(span.start),
+                    ));
+                }
+                self.compile_collection_values(values.iter(), span)?;
+                let target = self.name_constant("std.native.Arr/new", span)?;
+                self.emit(
+                    Instruction::IntrinsicCall {
+                        target,
+                        argc: values.len() as u8,
+                    },
+                    Some(span.start),
+                );
+                Ok(())
+            }
+            Form::Tagged(tag, value) if tag == "obj" => {
+                let Form::Map(entries) = value.as_ref() else {
+                    return Err(CompileError::new(
+                        CompileErrorKind::UnsupportedForm,
+                        "#obj expects a map literal",
+                        Some(span.start),
+                    ));
+                };
+                let arguments = entries.len().saturating_mul(2);
+                if arguments > MAX_PRIMITIVE_ARGUMENTS {
+                    return Err(CompileError::new(
+                        CompileErrorKind::Limit,
+                        format!(
+                            "#obj supports at most {} entries",
+                            MAX_PRIMITIVE_ARGUMENTS / 2
+                        ),
+                        Some(span.start),
+                    ));
+                }
+                for (key, value) in entries {
+                    self.compile_form(key, span, None, false)?;
+                    self.compile_form(value, span, None, false)?;
+                }
+                let target = self.name_constant("std.native.Obj/new", span)?;
+                self.emit(
+                    Instruction::IntrinsicCall {
+                        target,
+                        argc: arguments as u8,
+                    },
+                    Some(span.start),
+                );
+                Ok(())
+            }
             // Collection identity is observable even when language equality
             // is structural across concrete sequential/map/set types.  Do
             // not intern collection literals in the Value-keyed constant

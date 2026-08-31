@@ -339,6 +339,38 @@ final class HaraAnalyzer {
   }
 
   private HaraExpressionNode analyzeCollectionLiteral(Object form) {
+    if (form instanceof TaggedLiteral tagged) {
+      String namespace = tagged.tag().getNamespace();
+      String name = tagged.tag().getName();
+      if (namespace == null && "arr".equals(name)) {
+        if (!(tagged.form() instanceof ILinearType<?> linear)
+            || !"[".equals(linear.startString())) {
+          throw error("#arr expects a vector literal");
+        }
+        HaraExpressionNode[] elements = new HaraExpressionNode[(int) linear.count()];
+        for (int i = 0; i < elements.length; i++) {
+          elements[i] = analyze(linear.nth(i));
+        }
+        return new HaraNodes.CollectionLiteral(
+            HaraNodes.CollectionLiteral.Kind.MUTABLE_ARRAY, elements);
+      }
+      if (namespace == null && "obj".equals(name)) {
+        if (!(tagged.form() instanceof IMapType<?, ?> map)) {
+          throw error("#obj expects a map literal");
+        }
+        ArrayList<HaraExpressionNode> elements = new ArrayList<>();
+        for (Object entry : map) {
+          if (!(entry instanceof java.util.Map.Entry<?, ?> pair)) {
+            throw error("#obj literal contains a non-entry value");
+          }
+          elements.add(analyze(pair.getKey()));
+          elements.add(analyze(pair.getValue()));
+        }
+        return new HaraNodes.CollectionLiteral(
+            HaraNodes.CollectionLiteral.Kind.MUTABLE_OBJECT,
+            elements.toArray(new HaraExpressionNode[0]));
+      }
+    }
     if (form instanceof IMapType<?, ?>) {
       IMapType<?, ?> map = (IMapType<?, ?>) form;
       ArrayList<HaraExpressionNode> elements = new ArrayList<>();

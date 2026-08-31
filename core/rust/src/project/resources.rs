@@ -34,8 +34,12 @@ struct IndexedSource {
 
 const SOURCE_INDEX_HEADER: &str = "hara-source-index-v1";
 
-fn source_index_path(project_root: &Path) -> PathBuf {
-    project_root.join("target/hara/source-catalog-v1.index")
+fn source_index_path(project_root: &Path) -> Option<PathBuf> {
+    let installed = project_root
+        .parent()
+        .and_then(Path::parent)
+        .is_some_and(|parent| parent.file_name().is_some_and(|name| name == "roots"));
+    (!installed).then(|| project_root.join("target/hara/source-catalog-v1.index"))
 }
 
 fn file_stamp(path: &Path) -> Option<FileStamp> {
@@ -49,7 +53,10 @@ fn file_stamp(path: &Path) -> Option<FileStamp> {
 }
 
 fn load_source_index(project_root: &Path) -> BTreeMap<String, IndexedSource> {
-    let Ok(source) = fs::read_to_string(source_index_path(project_root)) else {
+    let Some(path) = source_index_path(project_root) else {
+        return BTreeMap::new();
+    };
+    let Ok(source) = fs::read_to_string(path) else {
         return BTreeMap::new();
     };
     let mut lines = source.lines();
@@ -96,6 +103,9 @@ fn load_source_index(project_root: &Path) -> BTreeMap<String, IndexedSource> {
 }
 
 fn write_source_index(project_root: &Path, entries: &BTreeMap<String, IndexedSource>) {
+    let Some(path) = source_index_path(project_root) else {
+        return;
+    };
     let mut output = String::from(SOURCE_INDEX_HEADER);
     output.push('\n');
     for (path, entry) in entries {
@@ -110,7 +120,6 @@ fn write_source_index(project_root: &Path, entries: &BTreeMap<String, IndexedSou
             entry.stamp.length, entry.stamp.modified_seconds, entry.stamp.modified_nanos,
         ));
     }
-    let path = source_index_path(project_root);
     if fs::create_dir_all(path.parent().expect("source index has a parent")).is_ok() {
         let _ = fs::write(path, output);
     }
