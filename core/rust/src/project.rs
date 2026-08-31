@@ -30,6 +30,10 @@ pub struct Project {
     pub manifest_path: PathBuf,
     pub id: String,
     pub version: Version,
+    /// Exact native host version required by this project, when it declares
+    /// `:project/native`. This is deliberately an equality constraint: Hara
+    /// source and its native surface are released as one verified pair.
+    pub native: Option<NativeRequirement>,
     /// Signed source tag for publication.  It defaults to the exact project
     /// version so source packages do not need a separate `v` convention.
     pub release_tag: String,
@@ -77,6 +81,11 @@ pub struct Project {
     /// Optional declaration for a relocatable Hara source distribution.
     pub distribution: Option<Distribution>,
     pub recipe: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeRequirement {
+    pub version: Version,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +259,12 @@ pub fn read(input: &Path) -> Result<Project, String> {
     )?;
     let version = Version::parse(&version_text)
         .map_err(|error| format!("project.edn :project/version is not SemVer: {error}"))?;
+    let native = lookup(entries, "project/native")
+        .map(native_requirement)
+        .transpose()?;
+    if let Some(requirement) = &native {
+        validate_native_requirement(requirement)?;
+    }
     let release_tag = lookup(entries, "project/release-tag")
         .map(|value| string(value, "project.edn :project/release-tag"))
         .transpose()?
@@ -359,6 +374,7 @@ pub fn read(input: &Path) -> Result<Project, String> {
         manifest_path,
         id,
         version,
+        native,
         release_tag,
         source_paths,
         test_paths,
@@ -390,6 +406,34 @@ pub fn read(input: &Path) -> Result<Project, String> {
         distribution,
         recipe,
     })
+}
+
+fn native_requirement(form: &Form) -> Result<NativeRequirement, String> {
+    let entries = map(form, "project.edn :project/native must be an EDN map")?;
+    if entries.len() != 1 || lookup(entries, "version").is_none() {
+        return Err("project.edn :project/native requires exactly :version".into());
+    }
+    let version = string(
+        lookup(entries, "version").expect("validated required :version"),
+        "project.edn :project/native :version",
+    )?;
+    let version = Version::parse(&version).map_err(|error| {
+        format!("project.edn :project/native :version must be exact SemVer: {error}")
+    })?;
+    Ok(NativeRequirement { version })
+}
+
+fn validate_native_requirement(requirement: &NativeRequirement) -> Result<(), String> {
+    let host = Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("the hara-native Cargo package version must be valid SemVer");
+    if requirement.version == host {
+        Ok(())
+    } else {
+        Err(format!(
+            "project.edn requires hara-native {}, but this host is {}",
+            requirement.version, host
+        ))
+    }
 }
 
 fn validate_release_tag(tag: &str) -> Result<(), String> {

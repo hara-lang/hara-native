@@ -685,12 +685,7 @@ fn work_options(options: &Value) -> Result<WorkOptions, String> {
         .transpose()?;
     let deadline = option(options, "deadline-nanos")
         .map(|value| match value {
-            Value::Number(value) if value > 0 => {
-                let remaining = (value as u64).saturating_sub(monotonic_nanos());
-                Ok(std::time::Instant::now()
-                    .checked_add(Duration::from_nanos(remaining))
-                    .unwrap_or_else(std::time::Instant::now))
-            }
+            Value::Number(value) if value > 0 => Ok(WorkDeadline::at_monotonic_nanos(value as u64)),
             _ => Err(":deadline-nanos must be a positive integer".to_string()),
         })
         .transpose()?;
@@ -832,6 +827,19 @@ pub(crate) fn install(protocols: &mut ProtocolRegistry) {
 mod tests {
     use super::*;
 
+    struct ProcessHostReset;
+
+    impl Drop for ProcessHostReset {
+        fn drop(&mut self) {
+            process_work_host().reset();
+            HANDLES.with(|handles| {
+                let mut handles = handles.borrow_mut();
+                handles.runs.clear();
+                handles.ids.clear();
+            });
+        }
+    }
+
     fn native(name: &str, arguments: Vec<Value>) -> Value {
         let Value::Function(function) = values()
             .into_iter()
@@ -915,6 +923,107 @@ mod tests {
         let second = register_run(run);
         assert_eq!(first, second);
         assert_eq!(reference_id(&first).unwrap(), "guest-stable");
+    }
+
+    #[test]
+    fn reset_host_is_idempotent_and_forgets_guest_run_handles() {
+        let _reset = ProcessHostReset;
+        let host = process_work_host();
+        host.reset();
+
+        let run = host
+            .submit(Some("guest-reset"), || Ok(Value::Number(42)))
+            .expect("fixture work must be admitted");
+        let handle = register_run(run.clone());
+
+        assert_eq!(
+            native("reset-host", vec![default_host_value()]),
+            default_host_value()
+        );
+        assert_eq!(
+            native("reset-host", vec![default_host_value()]),
+            default_host_value()
+        );
+        assert!(host.started());
+        assert_eq!(host.status().run_count, 0);
+        assert_eq!(
+            run.work_status().state,
+            WorkRunState::Cancelled,
+            "reset must cancel admitted work before restoring the host"
+        );
+        assert!(work_result(&[handle])
+            .expect_err("reset must discard guest run handles")
+            .contains("native work run handle is no longer available"));
+
+        let replacement = host
+            .submit(None, || Ok(Value::Number(7)))
+            .expect("reset host must accept new work");
+        assert_eq!(replacement.work_id().as_str(), "run-1");
+        host.drain();
+        assert_eq!(
+            replacement.work_result().wait_state(),
+            PromiseState::Fulfilled(Value::Number(7))
+        );
+    }
+
+    #[test]
+    fn scope_native_methods_execute_inside_admitted_work() {
+        let _reset = ProcessHostReset;
+        let host = process_work_host();
+        host.reset();
+        let finalizers = Rc::new(std::cell::Cell::new(0));
+        let finalizer_count = finalizers.clone();
+
+        let run = host
+            .submit_scoped(
+                WorkOptions::with_id("guest-native-scope").unwrap(),
+                move |context| {
+                    let current = native("current-run", vec![]);
+                    assert_eq!(reference_id(&current).unwrap(), context.work_id().as_str());
+                    assert_eq!(native("cancelled?", vec![]), Value::Bool(false));
+                    assert_eq!(native("check-cancelled", vec![]), Value::Nil);
+                    assert_eq!(native("deadline-nanos", vec![]), Value::Nil);
+                    assert_eq!(
+                        native(
+                            "emit",
+                            vec![Value::Keyword("fixture/progress".into()), Value::Number(7)]
+                        ),
+                        Value::Bool(true)
+                    );
+
+                    let finalizer_count = finalizer_count.clone();
+                    let finalizer =
+                        crate::core::native_function("fixture/on-close", 1, move |_| {
+                            finalizer_count.set(finalizer_count.get() + 1);
+                            Ok(Value::Nil)
+                        });
+                    assert_eq!(native("on-close", vec![finalizer]), Value::Bool(true));
+
+                    let child = native(
+                        "submit-child",
+                        vec![
+                            crate::core::native_function("fixture/child", 4, |arguments| {
+                                Ok(arguments[1].clone())
+                            }),
+                            Value::Number(7),
+                        ],
+                    );
+                    assert!(matches!(
+                        child,
+                        Value::Extension(value)
+                            if value.provider == PROVIDER && value.type_name == RUN_TYPE
+                    ));
+                    Ok(Value::Number(7))
+                },
+            )
+            .expect("fixture work must be admitted");
+        host.drain();
+
+        assert_eq!(
+            run.work_result().wait_state(),
+            PromiseState::Fulfilled(Value::Number(7))
+        );
+        assert_eq!(finalizers.get(), 1);
     }
 
     #[test]

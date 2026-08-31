@@ -62,16 +62,12 @@ impl WorkContext {
         self.token().reason()
     }
 
-    pub fn deadline(&self) -> Option<Instant> {
+    pub fn deadline(&self) -> Option<WorkDeadline> {
         self.run.deadline()
     }
 
     pub fn deadline_nanos(&self) -> Option<u64> {
-        let deadline = self.deadline()?;
-        let now = Instant::now();
-        let remaining =
-            u64::try_from(deadline.saturating_duration_since(now).as_nanos()).unwrap_or(u64::MAX);
-        Some(monotonic_nanos().saturating_add(remaining))
+        self.deadline().map(WorkDeadline::monotonic_nanos)
     }
 
     pub fn check_cancelled(&self) -> Result<(), PromiseRejection> {
@@ -128,11 +124,10 @@ impl WorkContext {
 thread_local! {
     static PROCESS_WORK_HOST: WorkHost = WorkHost::new();
     static CURRENT_WORK_CONTEXT: RefCell<Option<WorkContext>> = const { RefCell::new(None) };
-    static MONOTONIC_ORIGIN: Instant = Instant::now();
 }
 
 pub fn monotonic_nanos() -> u64 {
-    MONOTONIC_ORIGIN.with(|origin| origin.elapsed().as_nanos() as u64)
+    u64::try_from(crate::clock::time_ns()).unwrap_or_default()
 }
 
 /// Return the process/evaluator-thread host shared by independent sessions.
@@ -182,24 +177,20 @@ pub(super) fn install_progress_hooks(host: &WorkHost, run: &WorkRun) {
     }));
 }
 
-pub(super) fn resolve_deadline(options: &WorkOptions, parent: Option<&WorkRun>) -> Option<Instant> {
+pub(super) fn resolve_deadline(
+    options: &WorkOptions,
+    parent: Option<&WorkRun>,
+) -> Option<WorkDeadline> {
     let inherited = parent.and_then(WorkRun::deadline);
-    let relative = options
-        .timeout
-        .and_then(|timeout| Instant::now().checked_add(timeout));
+    let relative = options.timeout.map(WorkDeadline::after);
     [inherited, options.deadline, relative]
         .into_iter()
         .flatten()
         .min()
 }
 
-pub(super) fn deadline_remaining_millis(deadline: Instant) -> u64 {
-    u64::try_from(
-        deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
+pub(super) fn deadline_remaining_millis(deadline: WorkDeadline) -> u64 {
+    deadline.remaining_millis()
 }
 
 pub(super) fn next_work_id(host: &mut WorkHostInner) -> Result<WorkId, String> {
@@ -246,9 +237,5 @@ pub(super) fn cancellation_rejection(reason: Value) -> PromiseRejection {
 }
 
 pub(super) fn now_millis() -> u64 {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    u64::try_from(millis).unwrap_or(u64::MAX)
+    u64::try_from(crate::clock::time_ms()).unwrap_or_default()
 }
