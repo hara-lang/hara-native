@@ -1,10 +1,13 @@
 package hara.truffle;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import hara.lang.declaration.HaraAvailability;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Value;
 import org.junit.Test;
@@ -17,6 +20,38 @@ public class HaraNativeWorkPlanTest {
       if (Files.isRegularFile(candidate.resolve("src/work/core.hal"))) return candidate;
     }
     throw new IllegalStateException("cannot locate the hara project from test working directory");
+  }
+
+  @Test
+  public void workBindingIsPortableAndResetHostRestoresTheDefaultHost() {
+    assertEquals(HaraAvailability.PORTABLE, HaraNativeDeclarations.binding("Work").availability());
+    assertTrue(HaraNativeDeclarations.methods("Work").contains("reset-host"));
+
+    String id = "jvm-work-reset-" + UUID.randomUUID();
+    try (Context context =
+        Context.newBuilder(HaraLanguage.ID)
+            .currentWorkingDirectory(haraProjectRoot())
+            .allowIO(org.graalvm.polyglot.io.IOAccess.ALL)
+            .build()) {
+      Value result =
+          context.eval(
+              HaraLanguage.ID,
+              "(let [host (Work/default-host) "
+                  + "run (IWorkHost/work-submit host :payload 7 "
+                  + "{:id \""
+                  + id
+                  + "\" :work/execute (fn [work input options run-id] input)}) "
+                  + "_ (deref (IWorkRun/work-result run)) "
+                  + "first (Work/reset-host host) "
+                  + "second (Work/reset-host host)] "
+                  + "[(= host first) (= first second) (IComponent/started? host) "
+                  + "(try (IWorkHost/work-resolve host run) false (catch error true))])");
+      assertTrue(result.hasArrayElements());
+      assertEquals(4L, result.getArraySize());
+      for (long index = 0; index < result.getArraySize(); index++) {
+        assertTrue(result.getArrayElement(index).asBoolean());
+      }
+    }
   }
 
   @Test

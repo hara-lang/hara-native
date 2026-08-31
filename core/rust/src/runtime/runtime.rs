@@ -1626,9 +1626,8 @@ impl Runtime {
         self.load_namespace_from_provider("std.foundation")?;
         self.loaded_resources.insert("std.foundation".into());
         for &name in EAGER_HAL_RESOURCES {
-            let has_resource = self.resources.contains_key(name)
-                || self.has_bytecode_resource(name)
-                || {
+            let has_resource =
+                self.resources.contains_key(name) || self.has_bytecode_resource(name) || {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         self.source_paths.contains_key(name)
@@ -1820,4 +1819,27 @@ fn foundation_namespace_for_request(name: &str) -> Option<String> {
         let namespace = name.strip_prefix("classpath:").unwrap_or(name);
         (namespace.starts_with("std.foundation.")).then(|| namespace.to_owned())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_keeps_the_portable_work_surface() {
+        let mut runtime = Runtime::sandbox();
+
+        assert_eq!(
+            runtime
+                .eval("(Work/plan? (Work/pure \"fixture/value\"))")
+                .expect("sandbox must retain portable Work plan methods"),
+            "true"
+        );
+        assert_eq!(
+            runtime
+                .eval("(= (Work/default-host) (Work/reset-host (Work/default-host)))")
+                .expect("sandbox must retain portable Work host methods"),
+            "true"
+        );
+    }
 }

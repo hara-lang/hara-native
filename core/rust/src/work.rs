@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::rc::{Rc, Weak};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 pub(crate) mod guest;
 pub mod plan;
@@ -14,7 +14,7 @@ mod types;
 pub use scope::{
     current_work_context, monotonic_nanos, process_work_host, WorkCancellationToken, WorkContext,
 };
-pub use types::{WorkHostStatus, WorkId, WorkOptions, WorkRunState, WorkRunStatus};
+pub use types::{WorkDeadline, WorkHostStatus, WorkId, WorkOptions, WorkRunState, WorkRunStatus};
 
 use scope::{
     cancellation_rejection, deadline_remaining_millis, install_progress_hooks, next_work_id,
@@ -372,7 +372,7 @@ struct WorkRunInner {
     host: Weak<RefCell<WorkHostInner>>,
     parent: Option<Weak<WorkRunInner>>,
     children: RefCell<HashMap<WorkId, WorkRun>>,
-    deadline: Option<Instant>,
+    deadline: Option<WorkDeadline>,
     cancellation: RefCell<Option<CancellationRequest>>,
     body_done: Cell<bool>,
     body_outcome: RefCell<Option<Result<Value, PromiseRejection>>>,
@@ -424,7 +424,7 @@ impl WorkRun {
         status
     }
 
-    pub fn deadline(&self) -> Option<Instant> {
+    pub fn deadline(&self) -> Option<WorkDeadline> {
         self.inner.deadline
     }
 
@@ -648,11 +648,7 @@ impl WorkRun {
     }
 
     fn check_deadline(&self) {
-        if self
-            .inner
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        if self.inner.deadline.is_some_and(WorkDeadline::expired) {
             self.cancel(Value::Keyword("deadline-exceeded".into()));
         }
     }
