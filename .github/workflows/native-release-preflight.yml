@@ -198,8 +198,41 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - run: docker buildx build --check --file core/rust/Dockerfile core/rust
+      - name: Require the OCI image to use release artifacts, not Cargo
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -En '^[[:space:]]*FROM[[:space:]]+rust:|cargo[[:space:]]+install' core/rust/Dockerfile; then
+            printf '%s\n' 'OCI image must consume verified release artifacts, not compile with Cargo' >&2
+            exit 1
+          fi
+      - name: Stage synthetic architecture artifacts
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          context="$RUNNER_TEMP/hara-native-oci-container-check"
+          mkdir -p "$context/bin/amd64" "$context/bin/arm64"
+          cp core/rust/Dockerfile "$context/Dockerfile"
+          printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "hara-native synthetic-amd64"' > "$context/bin/amd64/hara-native"
+          printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "hara-native synthetic-arm64"' > "$context/bin/arm64/hara-native"
+          chmod 0555 "$context/bin/amd64/hara-native" "$context/bin/arm64/hara-native"
+          printf 'context=%s\n' "$context" >> "$GITHUB_OUTPUT"
+      - name: Build and exercise each OCI architecture selection
+        shell: bash
+        env:
+          CONTEXT: ${{ steps.stage.outputs.context }}
+        run: |
+          set -euo pipefail
+          build_and_check() {
+            local platform="$1" architecture="$2" tag="hara-native-container-check-${architecture}"
+            docker buildx build --platform "$platform" --load --tag "$tag" --file "$CONTEXT/Dockerfile" "$CONTEXT"
+            test "$(docker run --rm --platform "$platform" "$tag")" = "hara-native synthetic-${architecture}"
+          }
+          build_and_check linux/amd64 amd64
+          build_and_check linux/arm64 arm64
 
   release-ready:
     name: release ready
