@@ -109,7 +109,7 @@
   {:id :evaluator/catch-portable-binding
    :origin {:kind :registry :document "language/registry/bytecode-vm.edn" :case :error/catch-portable-binding}
    :layer :evaluator
-   :program (try (throw (ex :test/failed {})) (catch error :caught))
+   :program (try (/ 1 0) (catch error :caught))
    :expect {:display ":caught"}
    :browser-safe true}
   {:id :evaluator/string-arithmetic
