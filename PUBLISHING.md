@@ -75,7 +75,7 @@ core/rust/target/release/hara-native signer generate --key-file "$HOME/.local/st
 export HARA_NATIVE="$PWD/core/rust/target/release/hara-native"
 export HARA_SIGNER_KEY_FILE="$HOME/.local/state/hara/publisher.ed25519"
 export HARA_SIGNER_KEY_ID="YOUR_GITHUB_OWNER-2026-01"
-export HARA_OFFICIAL_ROOT_SHA256="sha256:8861d398c14a53b2fe13f7736310bb2c55624260c84e131452457e8aa69ac3dc"
+export HARA_OFFICIAL_ROOT_SHA256="sha256:b8733a0627b8d0063974b6b2a01721da76ee24e1f069a32e5e2cecb522f5ec40"
 ```
 
 `generate` refuses to overwrite a key file and never prints the seed. The
@@ -114,18 +114,20 @@ but a new publisher normally starts at `publish`:
 
 For an owner namespace such as `hara:YOUR_GITHUB_OWNER/*`, Identity creates an
 automatically approved grant request. Protected namespaces such as
-`hara:hara-native/*` create a review issue. In both cases the offline identity
-root signer must produce and merge a valid signed policy PR before the command
-can continue. Re-run the same `publish` command after that merge.
+`hara:hara-native/*` create a review issue. The protected Identity policy
+workflow validates that broker-authored issue and prepares the exact signed
+policy PR automatically. One policy-owner approval merges it; re-run the same
+`publish` command after that merge.
 
-### Finalize a reviewed grant offline
+### Policy automation and recovery
 
 The browser flow never receives the identity root private key and it never
-changes policy. After the review issue is approved, a policy maintainer works
-from an offline checkout of `hara-identity` and uses the same `hara-native`
-executable to make the narrowly scoped change. This command refuses relative
-paths, a root key that does not match `:identity/root-key`, a conflicting key
-id, or a changed authorization-service key.
+changes policy. Normal publisher grants require no local policy-signing step:
+the protected workflow invokes the same exact-coordinate grant command and
+keeps its root seed in GitHub's protected environment. The command below is an
+operator recovery tool; it refuses relative paths, a root key that does not
+match `:identity/root-key`, a conflicting key id, or a changed
+authorization-service key.
 
 ```text
 export HARA_IDENTITY_ROOT_KEY_FILE="/offline/keys/hara-identity-root.ed25519"
