@@ -49,6 +49,8 @@ jobs:
   validate:
     needs: release-origin
     uses: ./.github/workflows/native-host.yml
+    with:
+      include_conformance: true
 
   release-contract:
     name: release contract

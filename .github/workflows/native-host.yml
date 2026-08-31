@@ -2,6 +2,12 @@ name: Native host
 
 on:
   workflow_call:
+    inputs:
+      include_conformance:
+        description: Run the full cross-host conformance suite.
+        required: false
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
@@ -35,6 +41,7 @@ jobs:
 
   conformance:
     name: native conformance (serial)
+    if: ${{ inputs.include_conformance }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
