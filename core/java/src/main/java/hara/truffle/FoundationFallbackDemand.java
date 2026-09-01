@@ -555,8 +555,11 @@ final class FoundationFallbackDemand {
         || globals.contains(name)
         || "&".equals(name)
         || context.isSpecialSymbol(symbol)) return false;
-    if (FoundationFallbackDefinitions.defines(name)) return true;
-    return context.resolve(symbol) == null && context.resolveMacro(symbol) == null;
+    // Only an exact Foundation definition warrants demand-loading Foundation.
+    // An arbitrary unresolved name must reach ordinary analysis so the caller
+    // receives the language's unbound-symbol error rather than a failed
+    // std.foundation load when no package is installed.
+    return FoundationFallbackDefinitions.defines(name);
   }
 
   private void addDefinitionNames(Set<String> globals, String operation, String name) {

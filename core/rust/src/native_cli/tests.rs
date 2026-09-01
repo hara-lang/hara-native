@@ -25,7 +25,9 @@ fn native_sandbox_surface_uses_the_broker_kernel() {
     assert_eq!(sandbox, "1");
     assert_eq!(
         runtime
-            .eval_native("(std.protocol.ideref.IDeref/deref (std.native.Sandbox/eval 1 \"(+ 40 2)\"))")
+            .eval_native(
+                "(std.protocol.ideref.IDeref/deref (std.native.Sandbox/eval 1 \"(+ 40 2)\"))"
+            )
             .unwrap(),
         "42"
     );

@@ -2020,3 +2020,156 @@ fn require_process_access(operation: &str) -> Result<(), String> {
             })
     })
 }
+
+#[cfg(test)]
+mod capability_profile_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[derive(Debug)]
+    struct Profile {
+        id: String,
+        grants: BTreeSet<String>,
+    }
+
+    fn profile_corpus() -> (Vec<String>, Vec<Profile>) {
+        let source = include_str!("../../assets/native-capability-profiles-v1.edn");
+        let root = read_edn(source).expect("capability profile corpus must parse");
+        let format = field(&root, "format");
+        assert_eq!(
+            format,
+            Value::String("hara.native/capability-profiles/v1".into())
+        );
+        let capabilities = keywords(field(&root, "capabilities"), "capabilities");
+        let profiles = values(field(&root, "profiles"), "profiles")
+            .into_iter()
+            .map(|value| {
+                let id = match field(&value, "id") {
+                    Value::Keyword(id) => id,
+                    _ => panic!("capability profile ids must be keywords"),
+                };
+                let grants = keywords(field(&value, "grants"), "profile grants")
+                    .into_iter()
+                    .collect();
+                Profile {
+                    id: id.as_str().to_owned(),
+                    grants,
+                }
+            })
+            .collect::<Vec<_>>();
+        (capabilities, profiles)
+    }
+
+    fn field(value: &Value, name: &str) -> Value {
+        map_entries(value)
+            .expect("capability profile records must be maps")
+            .into_iter()
+            .find_map(|(key, value)| {
+                matches!(key, Value::Keyword(ref keyword) if keyword.as_str() == name)
+                    .then_some(value)
+            })
+            .unwrap_or_else(|| panic!("capability profile record is missing :{name}"))
+    }
+
+    fn values(value: Value, field: &str) -> Vec<Value> {
+        match value {
+            Value::Vector(values) => values.iter().cloned().collect(),
+            Value::Tuple(values) => values.iter().cloned().collect(),
+            _ => panic!("{field} must be a vector"),
+        }
+    }
+
+    fn keywords(value: Value, field: &str) -> Vec<String> {
+        values(value, field)
+            .into_iter()
+            .map(|value| match value {
+                Value::Keyword(keyword) => keyword.as_str().to_owned(),
+                _ => panic!("{field} entries must be keywords"),
+            })
+            .collect()
+    }
+
+    fn with_profile<R>(grants: &BTreeSet<String>, operation: impl FnOnce() -> R) -> R {
+        let file = grants
+            .contains("file")
+            .then(|| Rc::new(NativeFileProvider::new(".")) as Rc<dyn FileProvider>);
+        let socket = grants
+            .contains("network")
+            .then(|| Rc::new(NativeSocketProvider::default()) as Rc<dyn SocketProvider>);
+        let kernel = grants
+            .contains("kernel")
+            .then(|| Rc::new(|_, _| Ok(Value::Nil)) as Rc<KernelProvider>);
+        with_capability_providers(
+            file,
+            socket,
+            grants.contains("native-runtime"),
+            kernel,
+            || {
+                if grants.contains("host-call") {
+                    with_host_calls(Rc::new(|_, _, _| Ok(Value::Nil)), operation)
+                } else {
+                    operation()
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn native_capability_profiles_are_shared_and_exact() {
+        let (capabilities, profiles) = profile_corpus();
+        assert_eq!(
+            capabilities,
+            [
+                "kernel",
+                "sandbox",
+                "file",
+                "network",
+                "native-runtime",
+                "host-call",
+            ]
+        );
+        assert_eq!(
+            profiles
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "zero",
+                "kernel-sandbox",
+                "file",
+                "network",
+                "native-runtime",
+                "host-call",
+                "all"
+            ]
+        );
+
+        for profile in profiles {
+            assert!(profile
+                .grants
+                .iter()
+                .all(|grant| capabilities.contains(grant)));
+            let observed = with_profile(&profile.grants, || {
+                capabilities
+                    .iter()
+                    .filter(|capability| native_capability_granted(capability))
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+            });
+            assert_eq!(observed, profile.grants, "profile {}", profile.id);
+
+            with_profile(&profile.grants, || {
+                for capability in &capabilities {
+                    if profile.grants.contains(capability) {
+                        require_native_capability("Profile", "probe", capability).unwrap();
+                    } else {
+                        let error =
+                            require_native_capability("Profile", "probe", capability).unwrap_err();
+                        assert!(error.contains("std.native.Profile/probe requires capability"));
+                        assert!(error.contains(":native/capability-denied"));
+                    }
+                }
+            });
+        }
+    }
+}

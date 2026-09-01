@@ -594,7 +594,7 @@ fn execute_installed_bundle(
     entry: Option<&str>,
     argv: Option<&[String]>,
 ) -> Result<String, String> {
-    execute_installed_bundle_roots(root, &[root.to_path_buf()], entry, argv)
+    execute_installed_bundle_roots(root, &[root.to_path_buf()], entry, argv, None)
 }
 
 fn execute_installed_bundle_roots(
@@ -602,18 +602,20 @@ fn execute_installed_bundle_roots(
     roots: &[PathBuf],
     entry: Option<&str>,
     argv: Option<&[String]>,
+    file_root: Option<&Path>,
 ) -> Result<String, String> {
     let project = project::read(&root)?;
     let main = project::main_file(&project)?;
     let source = fs::read_to_string(&main)
         .map_err(|error| format!("cannot read {}: {error}", main.display()))?;
     let catalog = project::source_catalog(&project)?;
+    let file_root = file_root.unwrap_or(root);
     let mut runtime = Runtime::core();
-    runtime.install_native_file_provider(root.to_string_lossy().as_ref());
+    runtime.install_native_file_provider(file_root.to_string_lossy().as_ref());
     install_native_kernel(
         &mut runtime,
         RuntimeBroker::start_with_source_catalog(
-            Some(root.to_path_buf()),
+            Some(file_root.to_path_buf()),
             false,
             false,
             false,
@@ -1379,7 +1381,8 @@ fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, Strin
     }
     let manifest = distribution::verify(&root, &native)?;
     let archive = root.join(&manifest.archive);
-    let installation_root = companion_installation_root(&package::install_root(), &manifest.archive_sha256);
+    let installation_root =
+        companion_installation_root(&package::install_root(), &manifest.archive_sha256);
     let installed = install_bundle_silent_at(&archive, &installation_root)?;
     run_installed_distribution(&installed, &manifest.entry, arguments).map(Some)
 }
@@ -1398,7 +1401,16 @@ fn run_installed_distribution_roots(
     entry: &str,
     arguments: &[String],
 ) -> Result<i32, String> {
-    let result = execute_installed_bundle_roots(installed, roots, Some(entry), Some(arguments))?;
+    let file_root = env::current_dir()
+        .and_then(|path| path.canonicalize())
+        .map_err(|error| format!("cannot determine companion working directory: {error}"))?;
+    let result = execute_installed_bundle_roots(
+        installed,
+        roots,
+        Some(entry),
+        Some(arguments),
+        Some(&file_root),
+    )?;
     match companion_host_action(&result)? {
         Some(CompanionHostAction::Resp) => {
             run_companion_resp(installed, arguments)?;
@@ -1436,10 +1448,9 @@ fn companion_installation_root(install_root: &Path, archive_sha256: &str) -> Pat
 mod tests {
     use super::{
         companion_command_response, companion_host_action, companion_installation_root,
-        companion_root, parse_arguments,
-        parse_test_suite, reject_top_level_test_run, resp_launch, run_id, run_project_tests,
-        run_test_suite, sealed_installation_root, select_test_cases, signer, start_companion_resp,
-        Command, CompanionHostAction,
+        companion_root, parse_arguments, parse_test_suite, reject_top_level_test_run, resp_launch,
+        run_id, run_project_tests, run_test_suite, sealed_installation_root, select_test_cases,
+        signer, start_companion_resp, Command, CompanionHostAction,
     };
     use hara_native::{
         identity_tool, package,
@@ -1848,6 +1859,43 @@ mod tests {
     }
 
     #[test]
+    fn companion_execution_scopes_file_capability_to_the_callers_project_root() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-companion-file-root-{}",
+            std::process::id()
+        ));
+        let store = root.join("store");
+        let source = root.join("source");
+        let client = root.join("client");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source.join("src/demo")).unwrap();
+        fs::create_dir_all(&client).unwrap();
+        fs::write(
+            source.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/cli :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main demo.cli :project/capabilities #{:file}}\n",
+        )
+        .unwrap();
+        fs::write(
+            source.join("src/demo/cli.hal"),
+            "(ns demo.cli) (defn main [_] (std.protocol.ideref.IDeref/deref (File/exists? \"/command-input.txt\")))\n",
+        )
+        .unwrap();
+        fs::write(client.join("command-input.txt"), "available\n").unwrap();
+        let archive = package::build_path(&source, None).unwrap();
+        let installed = package::install_path_at(&archive, &store).unwrap();
+        let result = super::execute_installed_bundle_roots(
+            &installed,
+            &[installed.clone()],
+            Some("demo.cli/main"),
+            Some(&[]),
+            Some(&client),
+        )
+        .unwrap();
+        assert_eq!(result, "true");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn sealed_bundle_execution_mounts_companion_package_content_for_package_read() {
         let root = std::env::temp_dir().join(format!(
             "hara-native-package-content-{}",
@@ -1874,7 +1922,11 @@ mod tests {
             "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/specs :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/artifact-paths [\"content\"] :project/capabilities #{:kernel}}\n",
         )
         .unwrap();
-        fs::write(specs.join("content/suite.edn"), "{:suite/id :fixture/specs}\n").unwrap();
+        fs::write(
+            specs.join("content/suite.edn"),
+            "{:suite/id :fixture/specs}\n",
+        )
+        .unwrap();
 
         let primary_archive = package::build_path(&primary, None).unwrap();
         let specs_archive = package::build_path(&specs, None).unwrap();
@@ -1885,6 +1937,7 @@ mod tests {
             &[primary_root.clone(), specs_root],
             Some("demo.cli/main"),
             Some(&[]),
+            None,
         )
         .unwrap();
         assert_eq!(result, "\"{:suite/id :fixture/specs}\\n\"");

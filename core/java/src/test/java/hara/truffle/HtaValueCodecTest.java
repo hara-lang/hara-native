@@ -71,6 +71,13 @@ public class HtaValueCodecTest {
   }
 
   @Test
+  public void rejectsRetiredTuplePayloads() {
+    byte[] retired = HtaValueCodec.encode(List.of(1L, 2L));
+    retired[4] = 23;
+    assertThrows(HaraException.class, () -> HtaValueCodec.decode(retired));
+  }
+
+  @Test
   public void uuidRoundTripsAsAStandardTaggedValue() {
     UUID uuid = UUID.fromString("00000000-0000-0000-0000-000000000000");
     byte[] encoded = HtaValueCodec.encode(uuid);

@@ -46,7 +46,6 @@ public final class HtaValueCodec {
   private static final int CHARACTER = 19;
   private static final int BIG_INTEGER = 20;
   private static final int REGEX = 22;
-  private static final int TUPLE = 23;
   private static final int CONS = 24;
   private static final int QUEUE = 25;
   private static final int ORDERED_MAP = 26;
@@ -82,9 +81,8 @@ public final class HtaValueCodec {
    * Decodes a canonical frame and materializes Hara persistent collections for
    * HBC0 constants.
    *
-   * <p>The ordinary decoder remains permissive for trusted legacy state. Wire
-   * and artifact boundaries must use this method so alternate BigInteger text,
-   * map/set ordering, and other noncanonical representations are rejected.
+   * <p>Wire and artifact boundaries must use this method so alternate BigInteger text, map/set
+   * ordering, and other noncanonical representations are rejected.
    */
   public static Object decodeCanonical(byte[] bytes) {
     Object value = decode(bytes, true);
@@ -426,8 +424,6 @@ public final class HtaValueCodec {
           return sequence(depth + 1, false);
         case VECTOR:
           return sequence(depth + 1, true);
-        case TUPLE:
-          return tuple(depth + 1);
         case MAP_ENTRY:
           return mapEntry(depth + 1);
         case CONS:
@@ -572,23 +568,6 @@ public final class HtaValueCodec {
       return vector
           ? hara.lang.data.Vector.Standard.from(null, values)
           : hara.lang.data.List.Standard.from(null, values);
-    }
-
-    private Object tuple(int depth) {
-      Object[] values = sequenceArray(depth, "tuple");
-      int size = values.length;
-      return switch (size) {
-        case 0 -> hara.lang.data.Tuple.Tup0.EMPTY;
-        case 1 -> new hara.lang.data.Tuple.Tup1.L<>(null, values[0]);
-        case 2 -> new hara.lang.data.Tuple.Tup2.L<>(null, values[0], values[1]);
-        case 3 -> new hara.lang.data.Tuple.Tup3.L<>(null, values[0], values[1], values[2]);
-        case 4 -> new hara.lang.data.Tuple.Tup4.L<>(null, values[0], values[1], values[2], values[3]);
-        case 5 -> new hara.lang.data.Tuple.Tup5.L<>(null, values[0], values[1], values[2], values[3], values[4]);
-        case 6 -> new hara.lang.data.Tuple.Tup6.L<>(null, values[0], values[1], values[2], values[3], values[4], values[5]);
-        case 7 -> new hara.lang.data.Tuple.Tup7.L<>(null, values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
-        case 8 -> new hara.lang.data.Tuple.Tup8.L<>(null, values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7]);
-        default -> throw malformed("tuple arity exceeds Java runtime maximum");
-      };
     }
 
     private Object mapEntry(int depth) {

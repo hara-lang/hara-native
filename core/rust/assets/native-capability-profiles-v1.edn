@@ -1,0 +1,19 @@
+;; Host-neutral capability-grant matrix. Every host must consume this exact
+;; corpus: profile names are deterministic and omissions mean denial.
+{:format "hara.native/capability-profiles/v1"
+ :capabilities [:kernel :sandbox :file :network :native-runtime :host-call]
+ :profiles
+ [{:id :zero
+   :grants []}
+  {:id :kernel-sandbox
+   :grants [:kernel :sandbox]}
+  {:id :file
+   :grants [:file]}
+  {:id :network
+   :grants [:network]}
+  {:id :native-runtime
+   :grants [:native-runtime]}
+  {:id :host-call
+   :grants [:host-call]}
+  {:id :all
+   :grants [:kernel :sandbox :file :network :native-runtime :host-call]}]}

@@ -96,7 +96,6 @@ fn hex(bytes: &[u8]) -> String {
 fn origin_name(origin: HalcOrigin) -> &'static str {
     match origin {
         HalcOrigin::Halc => "halc",
-        HalcOrigin::LegacyHir => "legacy-hir",
     }
 }
 
@@ -346,13 +345,10 @@ mod tests {
     }
 
     #[test]
-    fn classifies_legacy_hir_without_weakening_validation() {
+    fn rejects_legacy_hir_artifacts() {
         let mut artifact = artifact();
         artifact[..MAGIC_BYTES].copy_from_slice(b"HIR\0");
-        let inspection = inspect_halc_artifact(&artifact).unwrap();
-        assert_eq!(inspection.origin, HalcOrigin::LegacyHir);
-        assert_eq!(inspection.format_version, 1);
-        assert_eq!(inspection.flags, 1);
+        assert_eq!(inspect_halc_artifact(&artifact).unwrap_err(), "bad magic");
     }
 
     #[test]

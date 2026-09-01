@@ -36,7 +36,6 @@ final class HalcArtifact {
   static final String FOUNDATION_HALC_RESOURCE = "std/foundation.halc";
 
   private static final byte[] MAGIC = {'H', 'A', 'L', 'C'};
-  private static final byte[] LEGACY_MAGIC = {'H', 'I', 'R', 0};
   private static final int HASH_BYTES = 32;
   private static final int MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
   private static final int MAX_COLLECTION_ITEMS = 1_000_000;
@@ -96,8 +95,6 @@ final class HalcArtifact {
       Origin origin;
       if (Arrays.equals(MAGIC, magic)) {
         origin = Origin.HALC;
-      } else if (Arrays.equals(LEGACY_MAGIC, magic)) {
-        origin = Origin.LEGACY_HIR;
       } else {
         throw invalid("bad magic");
       }
@@ -832,7 +829,6 @@ final class HalcArtifact {
   }
 
   enum Origin {
-    HALC,
-    LEGACY_HIR
+    HALC
   }
 }

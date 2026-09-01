@@ -485,7 +485,7 @@ public final class HaraServer implements AutoCloseable {
         "SERVER",
         "HARA",
         "VERSION",
-        "0.1.18",
+        "0.1.19",
         "PROTO",
         (long) protocol,
         "RUNTIME",
@@ -636,19 +636,11 @@ public final class HaraServer implements AutoCloseable {
   }
 
   private static String documentationSource(String symbol) {
-    return "[\"SYMBOL\" \""
+    return "(let [metadata (IObjType/meta (var "
         + symbol
-        + "\" \"DOC\" (get (meta #'"
+        + "))] [\"SYMBOL\" \""
         + symbol
-        + ") :doc) \"ARGLISTS\" (get (meta #'"
-        + symbol
-        + ") :arglists) \"FILE\" (get (meta #'"
-        + symbol
-        + ") :file) \"LINE\" (get (meta #'"
-        + symbol
-        + ") :line) \"COLUMN\" (get (meta #'"
-        + symbol
-        + ") :column)]";
+        + "\" \"DOC\" (ILookup/lookup metadata :doc) \"ARGLISTS\" (ILookup/lookup metadata :arglists) \"FILE\" (ILookup/lookup metadata :file) \"LINE\" (ILookup/lookup metadata :line) \"COLUMN\" (ILookup/lookup metadata :column)])";
   }
 
   private List<String> completions(String session, String prefix) {

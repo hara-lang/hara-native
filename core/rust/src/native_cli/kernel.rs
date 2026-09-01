@@ -1,5 +1,24 @@
 use super::*;
 
+fn project_path(root: Option<&std::path::Path>, value: &str) -> Result<std::path::PathBuf, String> {
+    let logical = crate::file::logical_normalise(value).map_err(|error| {
+        format!(
+            "package path must be a logical File path: {}",
+            error.message()
+        )
+    })?;
+    match root {
+        Some(root) => {
+            let logical_path = std::path::Path::new(&logical);
+            let relative = logical_path
+                .strip_prefix(root)
+                .unwrap_or_else(|_| std::path::Path::new(logical.trim_start_matches('/')));
+            Ok(root.join(relative))
+        }
+        None => Ok(std::path::PathBuf::from(value)),
+    }
+}
+
 pub(super) fn kernel_call(
     broker: &RuntimeBroker,
     operation: &str,
@@ -115,15 +134,24 @@ pub(super) fn kernel_call(
             let output = optional_string_argument(arguments, 1, operation)?.map(str::to_owned);
             let package = optional_string_argument(arguments, 2, operation)?.map(str::to_owned);
             let profile = optional_string_argument(arguments, 3, operation)?.map(str::to_owned);
+            let input = project_path(broker.root(), &input)?;
+            let output = output
+                .as_deref()
+                .map(|value| project_path(broker.root(), value))
+                .transpose()?;
+            let profile = profile
+                .as_deref()
+                .map(|value| project_path(broker.root(), value))
+                .transpose()?;
             let built = std::thread::Builder::new()
                 .name("hara-package-build".into())
                 .stack_size(crate::package::BUILD_THREAD_STACK_SIZE)
                 .spawn(move || {
                     crate::package::build_path_with_package(
-                        std::path::Path::new(&input),
-                        output.as_deref().map(std::path::Path::new),
+                        &input,
+                        output.as_deref(),
                         package.as_deref(),
-                        profile.as_deref().map(std::path::Path::new),
+                        profile.as_deref(),
                     )
                 })
                 .map_err(|error| format!("{operation}: package build thread failed: {error}"))?
@@ -315,6 +343,33 @@ pub(super) fn kernel_call(
             Err(format!("{operation} is unavailable in the runtime broker"))
         }
         _ => Err(format!("unknown foundation.kernel operation: {operation}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_path;
+    use std::path::Path;
+
+    #[test]
+    fn project_path_maps_logical_file_paths_through_the_runtime_root() {
+        let root = Path::new("/workspace/demo");
+        assert_eq!(
+            project_path(Some(root), "/target/deploy/demo").unwrap(),
+            Path::new("/workspace/demo/target/deploy/demo")
+        );
+        assert_eq!(
+            project_path(Some(root), "/workspace/demo/target/demo.harp").unwrap(),
+            Path::new("/workspace/demo/target/demo.harp")
+        );
+    }
+
+    #[test]
+    fn project_path_preserves_host_paths_without_a_runtime_root() {
+        assert_eq!(
+            project_path(None, "/tmp/demo").unwrap(),
+            Path::new("/tmp/demo")
+        );
     }
 }
 

@@ -344,10 +344,10 @@
   IColl/end-string IColl/sep-string IComponent/props
   IComponent/status IComponent/started? IComponent/stopped? IComponent/start
   IComponent/stop IComponent/kill IComponent/remote? IConj/conj
-  ICons/cons IContext/call IContext/has-ptr? IContextEval/evaluate IContextEval/evaluate-raw
+  ICons/cons IContext/call IContextEval/evaluate IContextEval/evaluate-raw
   IContextEval/eval-ptr IContextEval/eval-await-ptr IContextEval/tags-ptr IContextEval/deref-ptr
   IContextEval/display-ptr IContextEval/invoke-ptr IContextEval/transform-in-ptr IContextEval/transform-out-ptr
-  ICoroutine/status ICoroutine/resume IContextLifeCycle/has-module? IContextLifeCycle/setup-module
+  ICoroutine/status ICoroutine/resume IContextLifeCycle/has-module? IContextLifeCycle/has-setup-ptr? IContextLifeCycle/setup-module
   IContextLifeCycle/teardown-module IContextLifeCycle/setup-ptr IContextLifeCycle/teardown-ptr ICount/count IDeref/deref
   IDerefTimeout/deref-timeout IDisplay/display IDissoc/dissoc IEmpty/empty
   IEquality/equality IExInfo/data IFind/find IFn/invoke
@@ -371,10 +371,10 @@
  [IApplicable/apply-default IApplicable/apply-in IApplicable/transform-in IApplicable/transform-out
   IClose/close IComponent/props IComponent/status IComponent/started?
   IComponent/stopped? IComponent/start IComponent/stop IComponent/kill
-  IComponent/remote? IContext/call IContext/has-ptr? IContextEval/evaluate IContextEval/evaluate-raw
+  IComponent/remote? IContext/call IContextEval/evaluate IContextEval/evaluate-raw
   IContextEval/eval-ptr IContextEval/eval-await-ptr IContextEval/tags-ptr IContextEval/deref-ptr
   IContextEval/display-ptr IContextEval/invoke-ptr IContextEval/transform-in-ptr IContextEval/transform-out-ptr
-  ICoroutine/status ICoroutine/resume IContextLifeCycle/has-module? IContextLifeCycle/setup-module
+  ICoroutine/status ICoroutine/resume IContextLifeCycle/has-module? IContextLifeCycle/has-setup-ptr? IContextLifeCycle/setup-module
   IContextLifeCycle/teardown-module IContextLifeCycle/setup-ptr IContextLifeCycle/teardown-ptr IDerefTimeout/deref-timeout IDisplay/display
   IEquality/equality IFn/invoke IHashCached/hash-current
   IHashCached/hash-put IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val
@@ -404,10 +404,10 @@
   {:dispatch IComponent/kill, :target std.lib.component/kill}
   {:dispatch IComponent/remote?, :target std.lib.component/remote?}
   {:dispatch IContext/call, :target std.lib.context/call}
-  {:dispatch IContext/has-ptr?, :target std.lib.context/has-ptr?}
   {:dispatch ICoroutine/status, :target std.foundation.coroutine/status}
   {:dispatch ICoroutine/resume, :target std.foundation.coroutine/resume}
   {:dispatch IContextLifeCycle/has-module?, :target std.lib.context/has-module?}
+  {:dispatch IContextLifeCycle/has-setup-ptr?, :target std.lib.context/has-setup-ptr?}
   {:dispatch IContextLifeCycle/setup-module, :target std.lib.context/setup-module}
   {:dispatch IContextLifeCycle/teardown-module, :target std.lib.context/teardown-module}
   {:dispatch IContextLifeCycle/setup-ptr, :target std.lib.context/setup-ptr}
@@ -606,13 +606,6 @@
                 :name call
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
-  {:protocol IContext :method has-ptr? :arity 2 :domain :execution-context
-   :dispatch IContext/has-ptr?
-   :foundation {:classification :direct-interface-wrapper
-                :namespace std.lib.context
-                :name has-ptr?
-                :status :proposed}
-   :clojure {:equivalent nil :relation :none}}
   {:protocol IContextEval :method evaluate :arity 3 :domain :execution-context
    :dispatch IContextEval/evaluate
    :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
@@ -672,6 +665,13 @@
    :foundation {:classification :direct-interface-wrapper
                 :namespace std.lib.context
                 :name has-module?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextLifeCycle :method has-setup-ptr? :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/has-setup-ptr?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name has-setup-ptr?
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
   {:protocol IContextLifeCycle :method setup-module :arity 2 :domain :execution-context

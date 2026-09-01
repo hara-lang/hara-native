@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "hara-abi"
-version = "0.1.18"
+version = "0.1.19"
 
 [[package]]
 name = "hara-compiler"
@@ -1212,14 +1212,14 @@ dependencies = [
 
 [[package]]
 name = "hara-hta"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "hara-abi",
 ]
 
 [[package]]
 name = "hara-native"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "console_error_panic_hook",
  "ed25519-dalek 2.2.0",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "hara-protocol-macros"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "proc-macro2",
  "quote",

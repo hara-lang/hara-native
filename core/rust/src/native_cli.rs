@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{mpsc, Arc};
 
@@ -158,6 +158,7 @@ impl Drop for BrokerHandle {
 #[derive(Clone)]
 pub struct RuntimeBroker {
     handle: Arc<BrokerHandle>,
+    root: Option<PathBuf>,
 }
 
 /// Structured state retained at an embedding boundary when an evaluation
@@ -378,13 +379,14 @@ impl RuntimeBroker {
         }
         let execution_backend = execution_backend.to_owned();
         let (sender, receiver) = mpsc::channel();
+        let runtime_root = root.clone();
         std::thread::Builder::new()
             .name("hara-runtime-broker".into())
             .stack_size(RUNTIME_BROKER_STACK_SIZE)
             .spawn(move || {
                 run(
                     receiver,
-                    root,
+                    runtime_root,
                     native_sockets,
                     allow_process,
                     allow_postgres,
@@ -396,7 +398,12 @@ impl RuntimeBroker {
             .map_err(|error| format!("runtime broker failed: {error}"))?;
         Ok(Self {
             handle: Arc::new(BrokerHandle { sender }),
+            root,
         })
+    }
+
+    pub(super) fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
     }
 
     pub fn eval(&self, session: &str, source: &str) -> Result<String, String> {

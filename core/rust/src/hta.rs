@@ -1,7 +1,7 @@
 use crate::core::{ResultValue, Value};
 use crate::lang::data::MapEntry as PMapEntry;
 #[cfg(test)]
-use crate::lang::data::{Tuple as PTuple, Vector as PVector};
+use crate::lang::data::Vector as PVector;
 use crate::lang::protocol::INamespaced;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -23,7 +23,6 @@ const SET: u8 = 10;
 const MAP: u8 = 11;
 const HANDLE: u8 = 12;
 const NAMESPACE: u8 = 13;
-const VAR: u8 = 14;
 const F64: u8 = 15;
 const ATOM: u8 = 16;
 const ARRAY: u8 = 17;
@@ -31,7 +30,6 @@ const OBJECT: u8 = 18;
 const CHARACTER: u8 = 19;
 const BIG_INTEGER: u8 = 20;
 const REGEX: u8 = 22;
-const TUPLE: u8 = 23;
 const CONS: u8 = 24;
 const QUEUE: u8 = 25;
 const ORDERED_MAP: u8 = 26;
@@ -67,7 +65,6 @@ pub const HTA0_TAG_INVENTORY: &[(u8, &str)] = &[
     (MAP, "map"),
     (HANDLE, "handle"),
     (NAMESPACE, "namespace"),
-    (VAR, "legacy-var"),
     (F64, "f64"),
     (ATOM, "atom"),
     (ARRAY, "array"),
@@ -75,7 +72,6 @@ pub const HTA0_TAG_INVENTORY: &[(u8, &str)] = &[
     (CHARACTER, "character"),
     (BIG_INTEGER, "big-integer"),
     (REGEX, "regex"),
-    (TUPLE, "tuple"),
     (CONS, "cons"),
     (QUEUE, "queue"),
     (ORDERED_MAP, "ordered-map"),
@@ -602,9 +598,6 @@ impl Reader<'_> {
                     .into(),
             )),
             LIST => Ok(Value::List(self.sequence(depth)?.into())),
-            TUPLE => Ok(Value::Tuple(Box::new(
-                crate::lang::data::Tuple::from_values(self.sequence(depth)?)?,
-            ))),
             MAP_ENTRY => {
                 let values = self.sequence(depth)?;
                 let [key, value] = values.as_slice() else {
@@ -677,7 +670,6 @@ impl Reader<'_> {
                     crate::kernel::Namespace::new(name),
                 )))
             }
-            VAR => Err("hta/value-malformed: legacy var tag is not supported; use var-ref".into()),
             VAR_REF => {
                 let symbol = match self.value(depth + 1)? {
                     Value::Symbol(symbol) if symbol.get_namespace().is_some() => symbol,
@@ -866,17 +858,15 @@ mod tests {
         assert_eq!(encode(&decode(&encoded).unwrap()).unwrap(), encoded);
     }
     #[test]
-    fn compact_vectors_and_legacy_tuples_have_distinct_wire_boundaries() {
-        let tuple = Value::Tuple(Box::new(
-            PTuple::from_values(vec![Value::Number(1), Value::Number(2)]).unwrap(),
-        ));
-        let encoded = encode(&tuple).unwrap();
+    fn compact_vectors_reject_retired_tuple_payloads() {
+        let value = Value::Vector(PVector::from(vec![Value::Number(1), Value::Number(2)]));
+        let encoded = encode(&value).unwrap();
         assert_eq!(encoded[4], VECTOR);
         assert!(matches!(decode(&encoded).unwrap(), Value::Vector(_)));
 
-        let mut legacy = encoded;
-        legacy[4] = TUPLE;
-        assert!(matches!(decode(&legacy).unwrap(), Value::Tuple(_)));
+        let mut retired = encoded;
+        retired[4] = 23;
+        assert!(decode(&retired).is_err());
 
         let entry = Value::MapEntry(Box::new(PMapEntry::new(
             Value::Keyword("key".into()),
@@ -1026,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn tag_inventory_keeps_legacy_var_distinct_from_var_reference() {
+    fn tag_inventory_excludes_retired_var_and_tuple_tags() {
         assert_eq!(
             HTA0_TAG_INVENTORY
                 .iter()
@@ -1045,6 +1035,9 @@ mod tests {
                 .find(|(_, name)| *name == "var-ref"),
             Some(&(35, "var-ref"))
         );
+        assert!(HTA0_TAG_INVENTORY
+            .iter()
+            .all(|(_, name)| *name != "legacy-var" && *name != "tuple"));
         assert!(decode(b"HTA0\x0e\x07\0\0\0\x04rank\0").is_err());
     }
 

@@ -147,7 +147,7 @@ fn compile_bytecode_bundle_with_runtime(
         // aliases become canonical globals owned by its declaration.
         runtime.use_namespace(source.resource);
         let artifact = core::with_definition_origin(kernel::VarOrigin::HalFallback, || {
-            runtime.compile_bytecode_artifact(body)
+            runtime.compile_package_bytecode_artifact(body)
         })
         .map_err(|error| format!("{}: bytecode compilation: {error}", source.resource))?;
         core::with_definition_origin(kernel::VarOrigin::HalFallback, || {
@@ -635,7 +635,10 @@ mod tests {
     fn empty_host_bundle_round_trips_against_the_native_registry() {
         on_compiler_gate_stack(|| {
             let sources = embedded_standard_library_sources();
-            assert!(sources.is_empty(), "the standalone host embeds no HAL source");
+            assert!(
+                sources.is_empty(),
+                "the standalone host embeds no HAL source"
+            );
             let bytes = compile_bytecode_bundle(&sources).expect("compile empty host bundle");
             let mut runtime = Runtime::core();
             eval_bytecode_bundle(&mut runtime, &bytes).expect("load empty host bundle");
@@ -697,6 +700,23 @@ mod tests {
             .expect("load Foundation companion");
         assert!(runtime.use_namespace("std.foundation.bootstrap"));
         assert_eq!(runtime.eval_native("ready").unwrap(), "true");
+    }
+
+    #[test]
+    fn package_bundle_preserves_forward_globals_until_their_runtime_call_site() {
+        let sources = [ModuleSource {
+            resource: "demo.forward",
+            source: "(ns demo.forward) (defn answer [] (increment 41)) (defn increment [value] (+ value 1))",
+        }];
+        let bytes = compile_package_bytecode_bundle(&sources, &sources)
+            .expect("compile package with a forward global");
+        let mut runtime = Runtime::core();
+        eval_bytecode_bundle(&mut runtime, &bytes).expect("index forward package bundle");
+        runtime
+            .load_bytecode_resource("demo.forward")
+            .expect("load forward package module");
+        assert!(runtime.use_namespace("demo.forward"));
+        assert_eq!(runtime.eval_native("(answer)").unwrap(), "42");
     }
 
     #[test]
@@ -870,11 +890,17 @@ mod tests {
                     || EAGER_HAL_RESOURCES.contains(&source.resource)
             })
             .collect::<Vec<_>>();
-        assert!(sources.is_empty(), "the standalone host embeds no eager HAL modules");
+        assert!(
+            sources.is_empty(),
+            "the standalone host embeds no eager HAL modules"
+        );
         let bytes = compile_bytecode_bundle(&sources).expect("compile empty eager inventory");
         let mut runtime = Runtime::core();
         eval_bytecode_bundle(&mut runtime, &bytes).expect("load empty eager inventory");
-        assert!(runtime.namespace_registry.find("std.foundation.string").is_none());
+        assert!(runtime
+            .namespace_registry
+            .find("std.foundation.string")
+            .is_none());
     }
 
     #[cfg(feature = "tracing-jit")]

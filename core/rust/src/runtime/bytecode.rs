@@ -307,9 +307,9 @@ impl Runtime {
                     .unwrap_or_else(kernel::GeneratedNamespaceConfig::defaults)
             };
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-            let allow_unbound_globals = self.execution_backend == "direct-native"
-                && (allow_unbound_globals_for_direct_native
-                    || vm::source_uses_dynamic_evaluation(source).unwrap_or(false));
+            let allow_unbound_globals = allow_unbound_globals_for_direct_native
+                || (self.execution_backend == "direct-native"
+                    && vm::source_uses_dynamic_evaluation(source).unwrap_or(false));
             #[cfg(not(all(feature = "direct-native", not(target_arch = "wasm32"))))]
             let allow_unbound_globals = false;
             let compiled = if allow_unbound_globals {
@@ -519,6 +519,18 @@ impl Runtime {
     /// program for later native or browser execution.
     pub fn compile_bytecode_artifact(&self, source: &str) -> Result<Vec<u8>, String> {
         let program = self.compile_bytecode(source)?;
+        vm::encode_program(program.as_ref())
+    }
+
+    /// Compiles package source whose namespace forms may refer to Vars that
+    /// materialize in a later top-level form or a dependency package. The
+    /// resulting global read stays late-bound, so an absent Var still fails at
+    /// its runtime call site.
+    pub(crate) fn compile_package_bytecode_artifact(
+        &self,
+        source: &str,
+    ) -> Result<Vec<u8>, String> {
+        let program = self.compile_bytecode_with_policy(source, true)?;
         vm::encode_program(program.as_ref())
     }
 

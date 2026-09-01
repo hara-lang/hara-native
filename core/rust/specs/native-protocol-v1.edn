@@ -1030,9 +1030,7 @@
            lifecycle-protocol (std.protocol.ideref.IDeref/deref
                                (std.native.Base/resolve 'std.protocol.icontextlifecycle.IContextLifeCycle))
            _ (std.native.Base/extend target fixture-type context-protocol
-               {'call (fn [& values] [:call (std.native.Base/vec values)])
-                'has-ptr? (fn [runtime pointer]
-                            (= :fixture (std.protocol.ipointer.IPointer/ptr-context pointer)))})
+               {'call (fn [& values] [:call (std.native.Base/vec values)])})
            _ (std.native.Base/extend target fixture-type eval-protocol
                {'evaluate (fn [runtime request options] [:evaluate request options])
                 'evaluate-raw (fn [runtime request options] [:evaluate-raw request options])
@@ -1050,6 +1048,8 @@
                {'has-module? (fn [runtime module] false)
                 'setup-module (fn [runtime module] :setup-module)
                 'teardown-module (fn [runtime module] :teardown-module)
+                'has-setup-ptr? (fn [runtime pointer]
+                                  (= :fixture (std.protocol.ipointer.IPointer/ptr-context pointer)))
                 'setup-ptr (fn [runtime pointer] :setup-ptr)
                 'teardown-ptr (fn [runtime pointer] :teardown-ptr)})
            constructor (std.protocol.ideref.IDeref/deref
@@ -1080,7 +1080,7 @@
            [:out [:eval-await-ptr pointer [:in [1]] {}]]
            "![:fixture :fixture :tag]\nfixture-pointer"]
           [(std.protocol.icontext.IContext/call runtime :request)
-           (std.protocol.icontext.IContext/has-ptr? runtime pointer)
+           (std.protocol.icontextlifecycle.IContextLifeCycle/has-setup-ptr? runtime pointer)
            (std.protocol.icontexteval.IContextEval/evaluate runtime :request {:mode :value})
            (std.protocol.icontexteval.IContextEval/evaluate-raw runtime :request {:mode :raw})
            (std.protocol.icontexteval.IContextEval/eval-ptr runtime pointer [1] {:mode :async})

@@ -5,6 +5,7 @@ SHELL := /usr/bin/env bash
 .PHONY: help test \
 	test-boundary test-rust test-raw test-jvm test-native-benchmark benchmark-native \
 	test-conformance test-conformance-full test-conformance-rust test-conformance-jvm test-conformance-browser \
+	test-artifact-fixtures test-native-behavioral \
 	mirror-conformance check-conformance-mirror \
 	web-install test-browser-integrity test-provider-hosts \
 	build-browser-profiles browser-playwright-install test-browser-sdk test-browser-playwright \
@@ -23,6 +24,8 @@ help:
 	  '  make benchmark-native PROFILE=smoke|guard|standard   build isolated tier workers and record evidence' \
 	  '  make test-raw                  raw Wasm host boundary' \
 	  '  make test-jvm                  JVM CLI, HARP, and prebuilt-provider loader' \
+	  '  make test-artifact-fixtures    verify tracked Rust-produced HBX, HALC, HTA, and HARP fixtures' \
+	  '  make test-native-behavioral    run the specs-owned Rust native behavioral corpus' \
 	  '  make test-conformance          serial native/protocol and language Rust/JVM/browser conformance' \
 	  '  make test-conformance-full     portable HNC1 conformance plus trusted provider profiles' \
 	  '  make mirror-conformance HNC_MIRROR=/path   write a registry HNC source mirror' \
@@ -119,9 +122,12 @@ benchmark-native:
 test-raw:
 	cargo test --manifest-path core/rust/crates/raw/Cargo.toml
 
-test-jvm:
+test-jvm: test-artifact-fixtures
 	mvn -q -f core/java/pom.xml -Djacoco.skip=true test
 	mvn -q -f core/java/pom.xml -Djacoco.skip=true -DskipTests package
+
+test-artifact-fixtures:
+	cargo run --quiet --manifest-path core/rust/Cargo.toml --features halc-encoder --bin hara-native-host-fixtures -- check
 
 # Native-owned portable semantics. The HNC1 ABI artifact and HLC1 functional
 # language artifact are generated from local declarative EDN specifications.
@@ -132,9 +138,15 @@ test-conformance:
 
 test-conformance-full:
 	+$(MAKE) test-conformance
+	+$(MAKE) test-native-behavioral
 	+$(MAKE) test-provider-hosts
 
+test-native-behavioral:
+	cargo test --manifest-path core/rust/Cargo.toml --lib native_behavioral_conformance_tests
+
 test-conformance-rust:
+	+$(MAKE) test-artifact-fixtures
+	cargo test --manifest-path core/rust/Cargo.toml --lib capability_profile
 	cargo run --quiet --manifest-path core/rust/Cargo.toml --bin hara-native-conformance-artifact -- check
 	cargo run --quiet --manifest-path core/rust/Cargo.toml --bin hara-native-language-conformance-artifact -- check
 	cargo test --manifest-path core/rust/crates/runtime/Cargo.toml --features code-vm-conformance vm::conformance::tests
@@ -142,6 +154,8 @@ test-conformance-rust:
 
 test-conformance-jvm:
 	mvn -q -f core/java/pom.xml -Djacoco.skip=true '-Dtest=HbcCodecTest#executesNativeProtocolConformanceArtifactSerially+executesLanguageConformanceArtifactSerially' test
+	mvn -q -f core/java/pom.xml -Djacoco.skip=true '-Dtest=HaraNativeCapabilityProfileConformanceTest' test
+	mvn -q -f core/java/pom.xml -Djacoco.skip=true '-Dtest=RustProducedArtifactFixtureTest' test
 
 test-conformance-browser: build-browser-profiles
 	cd core/rust/web && npm run test:native-protocol-conformance
