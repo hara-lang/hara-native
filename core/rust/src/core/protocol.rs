@@ -432,15 +432,6 @@ fn protocol_transform_out(arguments: &[Value]) -> Result<Value, String> {
     }
 }
 
-fn protocol_invoke_in(arguments: &[Value]) -> Result<Value, String> {
-    match arguments {
-        [Value::Pointer(pointer), runtime, rest @ ..] => {
-            pointer_invoke_ptr(pointer, runtime.clone(), pointer_arguments(rest))
-        }
-        _ => Err("IInvokeIn/invoke-in expects a pointer and runtime".into()),
-    }
-}
-
 fn protocol_assoc(arguments: &[Value]) -> Result<Value, String> {
     if arguments.len() == 3 {
         collection_assoc(&arguments[0], &arguments[1], arguments[2].clone())
@@ -2610,9 +2601,6 @@ impl Value {
     fn supports_native_iapplicable(value: &Self) -> bool {
         Self::supports_native_ipointer(value)
     }
-    fn supports_native_iinvokein(value: &Self) -> bool {
-        Self::supports_native_ipointer(value)
-    }
     fn supports_native_ipair(value: &Self) -> bool {
         pair_parts(value).is_some()
     }
@@ -2759,7 +2747,6 @@ fn native_protocol_supports(protocol: &str, value: &Value) -> bool {
         "IFn" => Value::supports_native_ifn(value),
         "IPointer" => Value::supports_native_ipointer(value),
         "IApplicable" => Value::supports_native_iapplicable(value),
-        "IInvokeIn" => Value::supports_native_iinvokein(value),
         "IPair" => Value::supports_native_ipair(value),
         "IObjType" => Value::supports_native_iobjtype(value),
         "IStringLike" => Value::supports_native_istringlike(value),

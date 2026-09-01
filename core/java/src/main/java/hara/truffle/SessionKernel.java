@@ -3,7 +3,6 @@ package hara.truffle;
 import hara.lang.protocol.IApplicable;
 import hara.lang.protocol.IComponent;
 import hara.lang.protocol.IContext;
-import hara.lang.protocol.IInvokeIn;
 import hara.lang.protocol.IMetadata;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -731,7 +730,7 @@ final class SessionKernel implements AutoCloseable {
   }
 
   static final class Session
-      implements AutoCloseable, IContext, IComponent, IApplicable, IInvokeIn {
+      implements AutoCloseable, IContext, IComponent, IApplicable {
     private final SessionModel.SessionSpec spec;
     private final SessionAuthorityPolicy authority;
     private final HaraProject project;
@@ -1193,11 +1192,6 @@ final class SessionKernel implements AutoCloseable {
     @Override
     public Object transformOut(Object runtime, Object[] args, Object value) {
       return value;
-    }
-
-    @Override
-    public Object invokeIn(IContext context, Object... args) {
-      return applyIn(context, args);
     }
 
     @Override

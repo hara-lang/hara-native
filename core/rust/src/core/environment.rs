@@ -702,11 +702,6 @@ impl ProtocolRegistry {
             protocol_transform_out,
         );
         registry.register(
-            "std.protocol.iinvokein.IInvokeIn",
-            "invoke-in",
-            protocol_invoke_in,
-        );
-        registry.register(
             "std.protocol.idereftimeout.IDerefTimeout",
             "deref-timeout",
             protocol_deref_timeout,
