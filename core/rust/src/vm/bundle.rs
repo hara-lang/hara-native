@@ -101,12 +101,14 @@ pub fn compile_package_bytecode_bundle(
     for source in context {
         runtime.register_resource(source.resource, source.source);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if package_needs_foundation_bootstrap(context, &ordered) {
         runtime.bootstrap_source_foundation()?;
     }
     compile_bytecode_bundle_with_runtime(&mut runtime, context, &ordered)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn package_needs_foundation_bootstrap(
     context: &[ModuleSource<'_>],
     sources: &[ModuleSource<'_>],
