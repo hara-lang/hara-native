@@ -235,6 +235,47 @@ fn source_catalog_falls_back_to_legacy_path_discovery_on_demand() {
 }
 
 #[test]
+fn native_profile_excludes_legacy_source_subtrees() {
+    let root = temp("native-source-excludes");
+    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::create_dir_all(root.join("src/std")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/runtime-profiles {:rust {:runtime/source-excludes [\"src/std\"]}}}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/lang/runtime.hal"),
+        "(ns lang.runtime) (def answer 42)",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/std/foundation.hal"),
+        "(ns std.foundation) (def legacy-foundation true)",
+    )
+    .unwrap();
+
+    let project = read(&root).unwrap();
+    assert_eq!(project.source_excludes, vec![PathBuf::from("src/std")]);
+    let catalog = source_catalog(&project).unwrap();
+    assert_eq!(catalog.path("std.foundation"), None);
+    assert_eq!(
+        catalog.path("lang.runtime"),
+        Some(root.join("src/lang/runtime.hal").canonicalize().unwrap())
+    );
+    assert_eq!(
+        source_resources(&project)
+            .unwrap()
+            .into_iter()
+            .map(|(namespace, _)| namespace)
+            .collect::<Vec<_>>(),
+        vec!["lang.runtime".to_owned()]
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn source_catalog_bootstraps_the_fixed_foundation_family_without_a_full_index() {
     let root = temp("lazy-foundation-bootstrap");
     fs::create_dir_all(root.join("src/std/foundation")).unwrap();
