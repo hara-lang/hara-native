@@ -19,6 +19,7 @@ mod installed;
 pub struct SourceCatalog {
     entries: Arc<Mutex<BTreeMap<String, PathBuf>>>,
     roots: Vec<PathBuf>,
+    excluded_roots: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +118,25 @@ impl SourceCatalog {
             .root
             .canonicalize()
             .map_err(|error| format!("cannot resolve {}: {error}", project.root.display()))?;
+        for excluded_root in &project.source_excludes {
+            let excluded_root = project.root.join(excluded_root);
+            if !excluded_root.exists() {
+                continue;
+            }
+            let excluded_root = excluded_root.canonicalize().map_err(|error| {
+                format!(
+                    "cannot resolve excluded source root {}: {error}",
+                    excluded_root.display()
+                )
+            })?;
+            if !excluded_root.starts_with(&project_root) {
+                return Err(format!(
+                    "excluded source root escapes project root: {}",
+                    excluded_root.display()
+                ));
+            }
+            self.excluded_roots.push(excluded_root);
+        }
         for source_root in &project.source_paths {
             let source_root = project.root.join(source_root);
             if !source_root.exists() {
@@ -137,6 +157,12 @@ impl SourceCatalog {
             self.roots.push(source_root);
         }
         Ok(())
+    }
+
+    fn excluded(&self, path: &Path) -> bool {
+        self.excluded_roots
+            .iter()
+            .any(|excluded_root| path.starts_with(excluded_root))
     }
 
     fn conventional_path(&self, namespace: &str) -> Option<PathBuf> {
@@ -161,7 +187,7 @@ impl SourceCatalog {
                 segments.last().expect("non-empty segments")
             ));
             let path = candidate.canonicalize().ok()?;
-            if path.starts_with(root) && path.is_file() {
+            if path.starts_with(root) && path.is_file() && !self.excluded(&path) {
                 return Some(path);
             }
         }
@@ -178,7 +204,7 @@ impl SourceCatalog {
                 let Ok(path) = path.canonicalize() else {
                     continue;
                 };
-                if !path.starts_with(root) {
+                if !path.starts_with(root) || self.excluded(&path) {
                     continue;
                 }
                 let Ok(source) = fs::read_to_string(&path) else {
@@ -311,6 +337,13 @@ fn collect_project(
     resources: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
     for path in files_in(&project.root, &project.source_paths)? {
+        if project
+            .source_excludes
+            .iter()
+            .any(|excluded_root| path.starts_with(project.root.join(excluded_root)))
+        {
+            continue;
+        }
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let namespace = declared_namespace(&source)

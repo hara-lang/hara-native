@@ -73,6 +73,8 @@ pub struct Project {
     pub profiles: BTreeMap<String, ProjectProfile>,
     /// Effective native-Rust Hara dependencies.
     pub dependencies: BTreeMap<String, String>,
+    /// Source subtrees omitted by the selected native runtime profile.
+    pub source_excludes: Vec<PathBuf>,
     pub shared_dependencies: BTreeMap<String, String>,
     pub extensions: BTreeMap<String, Form>,
     /// Project-local command aliases.  Values are argv prefixes, never shell
@@ -106,6 +108,7 @@ pub struct ProjectProfile {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RuntimeProfile {
     pub source_paths: Vec<PathBuf>,
+    pub source_excludes: Vec<PathBuf>,
     pub test_paths: Vec<PathBuf>,
     pub extension_paths: Vec<PathBuf>,
     pub native_source_paths: Vec<PathBuf>,
@@ -133,6 +136,7 @@ pub struct WasmNativeImport {
 pub struct ResolvedRuntimeProfile {
     pub runtime: String,
     pub source_paths: Vec<PathBuf>,
+    pub source_excludes: Vec<PathBuf>,
     pub test_paths: Vec<PathBuf>,
     pub extension_paths: Vec<PathBuf>,
     pub native_source_paths: Vec<PathBuf>,
@@ -339,6 +343,7 @@ pub fn read(input: &Path) -> Result<Project, String> {
         &runtime_profiles,
     )?;
     let source_paths = active.source_paths.clone();
+    let source_excludes = active.source_excludes.clone();
     let test_paths = active.test_paths.clone();
     let extension_paths = active.extension_paths.clone();
     let dependencies = active.hara_dependencies.clone();
@@ -400,6 +405,7 @@ pub fn read(input: &Path) -> Result<Project, String> {
         default_profile,
         profiles,
         dependencies,
+        source_excludes,
         shared_dependencies,
         extensions,
         aliases,
@@ -830,6 +836,10 @@ fn runtime_profiles(form: &Form) -> Result<BTreeMap<String, RuntimeProfile>, Str
             .map(|value| paths(value, "runtime/source-paths"))
             .transpose()?
             .unwrap_or_default();
+        let source_excludes = lookup(entries, "runtime/source-excludes")
+            .map(|value| paths(value, "runtime/source-excludes"))
+            .transpose()?
+            .unwrap_or_default();
         let test_paths = lookup(entries, "runtime/test-paths")
             .map(|value| paths(value, "runtime/test-paths"))
             .transpose()?
@@ -876,6 +886,7 @@ fn runtime_profiles(form: &Form) -> Result<BTreeMap<String, RuntimeProfile>, Str
             .unwrap_or_default();
         let profile = RuntimeProfile {
             source_paths,
+            source_excludes,
             test_paths,
             extension_paths,
             native_source_paths,
@@ -924,6 +935,7 @@ fn resolve_runtime_profile_values(
     Ok(ResolvedRuntimeProfile {
         runtime: runtime.into(),
         source_paths,
+        source_excludes: profile.source_excludes,
         test_paths,
         extension_paths,
         native_source_paths: profile.native_source_paths,
