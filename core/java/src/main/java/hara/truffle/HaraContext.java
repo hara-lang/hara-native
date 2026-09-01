@@ -3967,6 +3967,16 @@ public final class HaraContext {
         "regexp?",
         new UnaryBuiltin(
             "regexp?", value -> HaraBox.unwrap(value) instanceof java.util.regex.Pattern));
+    target.define(
+        "vector?",
+        new UnaryBuiltin(
+            "vector?",
+            value -> {
+              Object raw = HaraBox.unwrap(value);
+              return raw instanceof hara.lang.data.Vector<?> || hara.lang.data.Tuple.isCompact(raw);
+            }));
+    target.define("pair?", typePredicate("pair?", hara.lang.protocol.IPair.class));
+    target.define("map-entry?", typePredicate("map-entry?", hara.lang.data.MapEntry.class));
     target.define("promise", new UnaryBuiltin("promise", this::promiseRun));
     target.define("bytes", new VariadicBuiltin("bytes", this::createBytes));
     target.define("array", new VariadicBuiltin("array", HaraArray::new));

@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { start as startNativeFull } from "./packages/browser/dist/native-full/hara.mjs";
 import { start as startNativeVm } from "./packages/browser/dist/native-vm/hara.mjs";
+import { HtaKeyword, parseEdnData } from "./packages/hta/index.js";
+import { CapabilityRegistry } from "./studio/capability-registry.js";
 
 const HNC_MAGIC = "HNC1";
 const ERROR_EXPECTATION_PREFIX = "!error:";
@@ -73,6 +75,43 @@ function parseHnc(bytes) {
   return suites;
 }
 
+function field(map, name) {
+  for (const [key, value] of map) {
+    if (key instanceof HtaKeyword && key.name === name) return value;
+  }
+  throw new Error(`capability profile record is missing :${name}`);
+}
+
+function keywords(value, fieldName) {
+  assert.ok(Array.isArray(value), `${fieldName} must be a vector`);
+  return value.map((entry) => {
+    assert.ok(entry instanceof HtaKeyword, `${fieldName} entries must be keywords`);
+    return entry.name;
+  });
+}
+
+async function capabilityProfiles() {
+  const source = await readFile(
+    new URL("../assets/native-capability-profiles-v1.edn", import.meta.url),
+    "utf8",
+  );
+  const corpus = parseEdnData(source, "native/capability-profiles-malformed");
+  assert.ok(corpus instanceof Map, "capability profile corpus must be a map");
+  assert.equal(field(corpus, "format"), "hara.native/capability-profiles/v1");
+  const capabilities = keywords(field(corpus, "capabilities"), "capabilities");
+  const profiles = field(corpus, "profiles");
+  assert.ok(Array.isArray(profiles), "profiles must be a vector");
+  return {
+    capabilities,
+    profiles: profiles.map((profile) => {
+      assert.ok(profile instanceof Map, "profile must be a map");
+      const id = field(profile, "id");
+      assert.ok(id instanceof HtaKeyword, "profile id must be a keyword");
+      return { id: id.name, grants: keywords(field(profile, "grants"), "profile grants") };
+    }),
+  };
+}
+
 test("browser core executes native/protocol HNC1 cases in both Wasm profiles", async () => {
   const bytes = new Uint8Array(
     await readFile(new URL("../assets/native-protocol-conformance.hnc", import.meta.url)),
@@ -120,4 +159,31 @@ test("HNC1 outcome categories reject the wrong normalized error", () => {
     normalizedErrorCategory(new Error("protocol/unsupported-receiver: missing")),
     "protocol/arity",
   );
+});
+
+test("browser session grants conform to the shared native capability profiles", async () => {
+  const corpus = await capabilityProfiles();
+  assert.deepEqual(corpus.capabilities, [
+    "kernel", "sandbox", "file", "network", "native-runtime", "host-call",
+  ]);
+  assert.deepEqual(corpus.profiles.map((profile) => profile.id), [
+    "zero", "kernel-sandbox", "file", "network", "native-runtime", "host-call", "all",
+  ]);
+
+  const registry = new CapabilityRegistry({ capabilities: corpus.capabilities });
+  for (const profile of corpus.profiles) {
+    const sessionId = `capability-profile/${profile.id}`;
+    assert.deepEqual(registry.grant(sessionId, profile.grants), profile.grants.slice().sort());
+    for (const capability of corpus.capabilities) {
+      if (profile.grants.includes(capability)) {
+        assert.doesNotThrow(() => registry.assert(sessionId, [capability]));
+      } else {
+        assert.throws(
+          () => registry.assert(sessionId, [capability]),
+          (error) => error?.code === "program/capability-denied",
+          `${profile.id} denies ${capability}`,
+        );
+      }
+    }
+  }
 });

@@ -6,7 +6,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.hara-lang</groupId>
 	<artifactId>hara-native-jvm</artifactId>
-	<version>0.1.18</version>
+	<version>0.1.19</version>
 	<packaging>jar</packaging>
 	<name>Hara Native JVM Host</name>
 	<description>HAL-free JVM and GraalVM Truffle host runtime for Hara packages.</description>
@@ -178,12 +178,17 @@
 						<testInclude>hara/truffle/HaraNativeTestRegistryTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeCommandTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeWorkPlanTest.java</testInclude>
+						<testInclude>hara/truffle/HalcArtifactTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbxBundleCodecTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeLangTest.java</testInclude>
 						<testInclude>hara/truffle/HaraMutableCollectionTest.java</testInclude>
 						<testInclude>hara/truffle/HtaValueCodecTest.java</testInclude>
+						<testInclude>hara/truffle/HaraNativeCapabilityProfileConformanceTest.java</testInclude>
+						<testInclude>hara/truffle/RustProducedArtifactFixtureTest.java</testInclude>
 						<testInclude>hara/truffle/HaraServerTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
+						<testInclude>hara/lang/context/ContextRuntimeTest.java</testInclude>
+						<testInclude>hara/lang/data/PointerTest.java</testInclude>
 					</testIncludes>
 					<annotationProcessorPaths>
 						<path>
@@ -253,6 +258,7 @@
 				<version>3.0.0-M5</version>
 				<configuration>
 					<workingDirectory>${project.basedir}/..</workingDirectory>
+					<excludedGroups>${surefire.excluded.groups}</excludedGroups>
 					<!-- Source-library conformance lives in hara source/packages; this
 					     repository validates the independent host and HARP boundary. -->
 					<includes>
@@ -263,9 +269,17 @@
 						<include>hara/truffle/HaraNativeTestRegistryTest.java</include>
 						<include>hara/truffle/HaraNativeCommandTest.java</include>
 						<include>hara/truffle/HaraNativeWorkPlanTest.java</include>
+						<include>hara/truffle/HalcArtifactTest.java</include>
 						<include>hara/truffle/bytecode/HbxBundleCodecTest.java</include>
 						<include>hara/truffle/HaraNativeLangTest.java</include>
 						<include>hara/truffle/HaraMutableCollectionTest.java</include>
+						<include>hara/truffle/HtaValueCodecTest.java</include>
+						<include>hara/truffle/HaraNativeCapabilityProfileConformanceTest.java</include>
+						<include>hara/truffle/RustProducedArtifactFixtureTest.java</include>
+						<include>hara/truffle/HaraServerTest.java</include>
+						<include>hara/truffle/bytecode/HbcCodecTest.java</include>
+						<include>hara/lang/context/ContextRuntimeTest.java</include>
+						<include>hara/lang/data/PointerTest.java</include>
 					</includes>
 					<failIfNoTests>true</failIfNoTests>
 				</configuration>

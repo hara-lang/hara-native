@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 const MAGIC: &[u8] = b"HALC";
-const LEGACY_MAGIC: &[u8] = b"HIR\0";
 const FORMAT_VERSION: u16 = 1;
 const EXECUTABLE_FOUNDATION_FLAG: u16 = 1;
 const HASH_BYTES: usize = 32;
@@ -65,7 +64,6 @@ impl HalcSchemaIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HalcOrigin {
     Halc,
-    LegacyHir,
 }
 
 pub fn decode_halc(bytes: &[u8]) -> Result<HalcModule, String> {
@@ -97,13 +95,9 @@ pub fn decode_halc(bytes: &[u8]) -> Result<HalcModule, String> {
 fn decode_envelope(bytes: &[u8]) -> Result<(Vec<u8>, HalcOrigin), String> {
     let mut reader = ByteReader::new(bytes);
     let magic = reader.read_bytes(MAGIC.len())?;
-    let origin = if magic == MAGIC {
-        HalcOrigin::Halc
-    } else if magic == LEGACY_MAGIC {
-        HalcOrigin::LegacyHir
-    } else {
+    if magic != MAGIC {
         return Err("bad magic".into());
-    };
+    }
     let version = reader.read_u16()?;
     if version != FORMAT_VERSION {
         return Err(format!("unsupported format version {version}"));
@@ -125,7 +119,7 @@ fn decode_envelope(bytes: &[u8]) -> Result<(Vec<u8>, HalcOrigin), String> {
     if actual_hash[..] != expected_hash[..] {
         return Err("payload checksum mismatch".into());
     }
-    Ok((payload, origin))
+    Ok((payload, HalcOrigin::Halc))
 }
 
 struct ByteReader<'a> {
@@ -1091,12 +1085,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_hir_magic_decodes_but_encoding_always_uses_halc_magic() {
+    fn rejects_legacy_hir_magic() {
         let halc = artifact_payload(vec![Form::Number(42)]);
         let mut legacy = halc.clone();
-        legacy[..4].copy_from_slice(LEGACY_MAGIC);
+        legacy[..4].copy_from_slice(b"HIR\0");
 
-        assert_eq!(decode_halc(&legacy).unwrap().origin, HalcOrigin::LegacyHir);
+        assert_eq!(decode_halc(&legacy).unwrap_err(), "bad magic");
         assert_eq!(&halc[..4], MAGIC);
     }
 
@@ -1106,15 +1100,10 @@ mod tests {
             "01-lang/009-halc/draft/conformance/golden/complete.halc",
         ))
         .expect("complete HALC golden is readable");
-        let legacy = std::fs::read(crate::spec_registry::require(
-            "01-lang/009-halc/draft/conformance/golden/legacy-v1.hir",
-        ))
-        .expect("legacy HIR golden is readable");
         let current = decode_halc(&complete).unwrap();
         assert_eq!(current.origin, HalcOrigin::Halc);
         assert_eq!(current.namespace, "halc.conformance.complete");
         assert_eq!(current.resource, "conformance/complete.hal");
-        assert_eq!(decode_halc(&legacy).unwrap().origin, HalcOrigin::LegacyHir);
     }
 
     #[test]

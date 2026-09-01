@@ -141,7 +141,7 @@ public final class ToolVmLibrary {
     return orderedMap(
         "artifact/format", HALC,
         "artifact/version", 1L,
-        "artifact/origin", keyword(module.origin == HalcArtifact.Origin.HALC ? "halc" : "legacy-hir"),
+        "artifact/origin", keyword("halc"),
         "artifact/bytes", (long) bytes.length,
         "payload/bytes", (long) payloadBytes,
         "payload/checksum", Arrays.copyOfRange(bytes, 12, 44),

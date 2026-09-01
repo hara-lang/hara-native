@@ -209,16 +209,13 @@ impl Session {
     }
 }
 
-impl crate::lang::protocol::IContext<&str, crate::core::Value> for Session {
+impl crate::lang::protocol::IContext<&str> for Session {
     type Output = Result<String, String>;
 
     fn call(&mut self, source: &str) -> Self::Output {
         self.eval(source)
     }
 
-    fn has_ptr(&self, _pointer: &crate::core::Value) -> bool {
-        false
-    }
 }
 
 impl crate::lang::protocol::IComponent for Session {

@@ -488,7 +488,7 @@ public abstract class HbcBytecodeRootNode extends RootNode implements BytecodeRo
       }
       context.installHbcTypes(
           program.schemaTypes(), program.functionTypes(), program.inferredFunctionTypes());
-      return HbcMachine.execute(program, context);
+      return HbcMachine.executeAwaiting(program, context);
     }
   }
 

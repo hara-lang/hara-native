@@ -37,6 +37,22 @@ public final class HbcMachine {
     return context.withDeclarationTransaction(() -> executeTransactional(program, context));
   }
 
+  /** Resolves await continuations at the guest execution boundary. */
+  public static Object executeAwaiting(HbcProgram program, HaraContext context) {
+    Object result = execute(program, context);
+    while (result instanceof HbcSuspension suspension
+        && suspension.kind() == SuspensionKind.AWAIT) {
+      try {
+        Thread.sleep(1);
+      } catch (InterruptedException error) {
+        Thread.currentThread().interrupt();
+        throw new HaraException("HBC await interrupted");
+      }
+      result = execute(program, context);
+    }
+    return result;
+  }
+
   private static Object executeTransactional(HbcProgram program, HaraContext context) {
     HbcContinuation continuation = context.hbcContinuation(program);
     if (continuation != null
@@ -1164,6 +1180,26 @@ public final class HbcMachine {
     };
   }
 
+  private static String primitiveTarget(HbcProgram.Primitive primitive) {
+    return switch (primitive) {
+      case COUNT -> "std.protocol.icount.ICount/count";
+      case GET -> "std.protocol.ilookup.ILookup/lookup";
+      case META -> "std.protocol.iobjtype.IObjType/meta";
+      case NTH -> "std.protocol.inth.INth/nth";
+      case ASSOC -> "std.protocol.iassoc.IAssoc/assoc";
+      case TO_MUTABLE -> "std.protocol.itomutable.IToMutable/to-mutable";
+      case TO_PERSISTENT -> "std.protocol.itopersistent.IToPersistent/to-persistent";
+      case NUMBER_PREDICATE -> "std.native.Base/number?";
+      case ARRAY_NEW -> "std.native.Arr/new";
+      case ARRAY_GET -> "std.native.Arr/get";
+      case ARRAY_SET -> "std.native.Arr/set";
+      case OBJECT_NEW -> "std.native.Obj/new";
+      case OBJECT_GET -> "std.native.Obj/get";
+      case OBJECT_SET -> "std.native.Obj/set";
+      default -> null;
+    };
+  }
+
   public static Object invokePrimitive(HaraContext context, int id, Object[] arguments) {
     HbcProgram.Primitive primitive = HbcProgram.Primitive.fromId(id);
     if (primitive == HbcProgram.Primitive.EQUAL) {
@@ -1208,6 +1244,11 @@ public final class HbcMachine {
           : Num.mod(left, right);
     }
     try {
+      String target = primitiveTarget(primitive);
+      if (target != null) {
+        return HbcPrimitiveRuntime.invokeTarget(
+            context, target, arguments, HaraTargetRuntime.ResultMode.HANDLE);
+      }
       String name = primitiveName(id);
       return invokeGlobal(
           context,

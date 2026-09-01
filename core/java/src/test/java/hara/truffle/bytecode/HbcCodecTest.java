@@ -741,7 +741,11 @@ public class HbcCodecTest {
       context.eval(source);
       assertEquals(
           "portable metadata",
-          context.eval(HaraLanguage.ID, "(get (meta #'answer) :doc)").asString());
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(ILookup/lookup (IObjType/meta (var answer)) :doc)")
+              .asString());
     }
   }
 

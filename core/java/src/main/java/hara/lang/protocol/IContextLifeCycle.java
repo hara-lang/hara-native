@@ -14,6 +14,9 @@ public interface IContextLifeCycle {
   @HaraMethod(value = "teardown-module", arity = 2)
   void teardownModule(Object moduleId);
 
+  @HaraMethod(value = "has-setup-ptr?", arity = 2)
+  boolean hasSetupPtr(IPointer pointer);
+
   @HaraMethod(value = "setup-ptr", arity = 2)
   void setupPtr(IPointer pointer);
 

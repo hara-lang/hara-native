@@ -213,7 +213,10 @@ fn vm_tool_transform(
             #[cfg(not(all(feature = "bytecode-vm", feature = "halc-encoder")))]
             {
                 let _ = input;
-                Err("std.native.Instrument does not support :hal -> :hbc in this runtime profile".into())
+                Err(
+                    "std.native.Instrument does not support :hal -> :hbc in this runtime profile"
+                        .into(),
+                )
             }
         }
         ("halc", "hbc") => {
@@ -374,14 +377,10 @@ fn vm_tool_names(values: impl Iterator<Item = String>) -> Value {
 fn vm_tool_inspect_halc(bytes: &[u8]) -> Result<Value, String> {
     let module = crate::kernel::halc::decode_halc(bytes)?;
     let payload_bytes = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let origin = match module.origin {
-        crate::kernel::halc::HalcOrigin::Halc => "halc",
-        crate::kernel::halc::HalcOrigin::LegacyHir => "legacy-hir",
-    };
     Ok(vm_tool_map([
         (vm_tool_keyword("artifact/format"), vm_tool_keyword("halc")),
         (vm_tool_keyword("artifact/version"), Value::Number(1)),
-        (vm_tool_keyword("artifact/origin"), vm_tool_keyword(origin)),
+        (vm_tool_keyword("artifact/origin"), vm_tool_keyword("halc")),
         (
             vm_tool_keyword("artifact/bytes"),
             Value::Number(bytes.len() as i64),
@@ -538,7 +537,9 @@ pub(crate) fn native_instrument_values(
             _ => Err("std.native.Instrument/inspect expects a format and Bytes".into()),
         },
         "disassemble" => match arguments.as_slice() {
-            [bytes] => vm_tool_disassemble(&vm_tool_bytes(bytes, "disassemble")?).map(Value::String),
+            [bytes] => {
+                vm_tool_disassemble(&vm_tool_bytes(bytes, "disassemble")?).map(Value::String)
+            }
             _ => Err("std.native.Instrument/disassemble expects Bytes".into()),
         },
         "transform" => match arguments.as_slice() {
@@ -557,7 +558,9 @@ pub(crate) fn native_instrument_values(
             }
             _ => Err("std.native.Instrument/execute expects a format, Bytes, and options".into()),
         },
-        _ => Err(format!("unknown std.native.Instrument operation: {operation}")),
+        _ => Err(format!(
+            "unknown std.native.Instrument operation: {operation}"
+        )),
     }
 }
 

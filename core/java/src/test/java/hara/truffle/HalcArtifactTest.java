@@ -282,7 +282,7 @@ public class HalcArtifactTest {
   }
 
   @Test
-  public void legacyHirMagicDecodesButEncodingAlwaysUsesHalcMagic() {
+  public void rejectsLegacyHirMagic() {
     byte[] halc = HalcArtifact.encode("t", "t", new byte[0], new Object[] {42L});
     byte[] legacy = halc.clone();
     legacy[0] = 'H';
@@ -290,7 +290,10 @@ public class HalcArtifactTest {
     legacy[2] = 'R';
     legacy[3] = 0;
 
-    assertEquals(HalcArtifact.Origin.LEGACY_HIR, HalcArtifact.decode(legacy).origin);
+    assertTrue(
+        assertThrows(HaraException.class, () -> HalcArtifact.decode(legacy))
+            .getMessage()
+            .contains("bad magic"));
     assertArrayEquals(new byte[] {'H', 'A', 'L', 'C'}, java.util.Arrays.copyOf(halc, 4));
   }
 
@@ -342,9 +345,6 @@ public class HalcArtifactTest {
     assertEquals(HalcArtifact.Origin.HALC, current.origin);
     assertEquals("halc.conformance.complete", current.namespace);
     assertEquals("conformance/complete.hal", current.resource);
-    assertEquals(
-        HalcArtifact.Origin.LEGACY_HIR,
-        HalcArtifact.decode(Files.readAllBytes(root.resolve("legacy-v1.hir"))).origin);
   }
 
   @Test

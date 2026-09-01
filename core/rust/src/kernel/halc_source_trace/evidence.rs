@@ -230,7 +230,6 @@ pub(super) fn schema_evidence(
 fn origin_name(origin: HalcOrigin) -> &'static str {
     match origin {
         HalcOrigin::Halc => "halc",
-        HalcOrigin::LegacyHir => "legacy-hir",
     }
 }
 

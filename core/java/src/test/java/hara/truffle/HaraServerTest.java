@@ -67,11 +67,16 @@ public class HaraServerTest {
       Conn conn = new Conn(socket);
       conn.write("SESSION", "NEW", "OTHER");
       conn.read();
+      conn.write("EVAL", "ROOT", "(def answer 41)");
+      assertEquals("#'user/answer", text(conn.read()));
       conn.write("SESSION", "ATTACH", "OTHER");
       conn.read();
       conn.write("EVAL", "OTHER", "answer");
       Object response = conn.read();
-      assertTrue(text(response).contains("ERROR") || text(response).contains("Unbound"));
+      assertTrue(response instanceof Throwable);
+      assertTrue(
+          ((Throwable) response).getMessage(),
+          ((Throwable) response).getMessage().contains("Unbound symbol: answer"));
     }
   }
 
