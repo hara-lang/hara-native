@@ -1,4 +1,5 @@
 use super::*;
+use crate::{package, package_manifest::PackageManifest};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp(name: &str) -> PathBuf {
@@ -141,6 +142,100 @@ fn registers_project_sources_for_cross_file_requires() {
             .unwrap(),
         "42"
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn installed_semantic_harps_resolve_and_load_through_an_explicit_store() {
+    let root = temp("installed-semantic-harps");
+    let base = root.join("base");
+    let client = root.join("client");
+    let consumer = root.join("consumer");
+    let distribution = root.join("distribution");
+    fs::create_dir_all(base.join("src/demo")).unwrap();
+    fs::create_dir_all(client.join("src/demo")).unwrap();
+    fs::create_dir_all(client.join("config")).unwrap();
+    fs::create_dir_all(&consumer).unwrap();
+
+    fs::write(
+        base.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/base\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        base.join("src/demo/base.hal"),
+        "(ns demo.base) (defn answer [] 42)",
+    )
+    .unwrap();
+    fs::write(
+        client.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/client\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/dependencies {\"hara:demo/base\" {:version \"=1.0.0\"}} :project/package {:name \"demo.client\" :profile \"config/packages.edn\"}}",
+    )
+    .unwrap();
+    fs::write(
+        client.join("config/packages.edn"),
+        "{demo.client {:include [[demo.client :complete]]}}",
+    )
+    .unwrap();
+    fs::write(
+        client.join("project.lock.edn"),
+        "{:lock/format \"0.0.1\" :packages {}}",
+    )
+    .unwrap();
+    // The client carries the dependency source only as compilation context.
+    // Its profile must exclude that context from the installed HARP payload.
+    fs::write(
+        client.join("src/demo/base.hal"),
+        "(ns demo.base) (defn answer [] 42)",
+    )
+    .unwrap();
+    fs::write(
+        client.join("src/demo/client.hal"),
+        "(ns demo.client (:require [demo.base :as base])) (defn answer [] (base/answer))",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/consumer\" :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/dependencies {\"hara:demo/client\" {:version \"=1.0.0\"}}}",
+    )
+    .unwrap();
+
+    let base_archive = base.join("target/base.harp");
+    package::build_path(&base, Some(&base_archive)).unwrap();
+    let base_root = package::install_path_at(&base_archive, &distribution).unwrap();
+    let client_archive = client.join("target/client.harp");
+    package::build_path(&client, Some(&client_archive)).unwrap();
+    let client_manifest = PackageManifest::read_archive(&client_archive).unwrap();
+    assert_eq!(client_manifest.identity, "hara:demo/client");
+    assert!(client_manifest.resources.contains_key("demo.client"));
+    assert!(!client_manifest.resources.contains_key("demo.base"));
+    let client_root = package::install_path_at(&client_archive, &distribution).unwrap();
+
+    let catalog = source_catalog_at(&read(&consumer).unwrap(), &distribution).unwrap();
+    assert_eq!(
+        catalog.path("demo.base"),
+        Some(base_root.join("src/demo/base.hal").canonicalize().unwrap())
+    );
+    assert_eq!(
+        catalog.path("demo.client"),
+        Some(
+            client_root
+                .join("src/demo/client.hal")
+                .canonicalize()
+                .unwrap()
+        )
+    );
+    let mut runtime = Runtime::core();
+    runtime.register_installed_package(&base_root).unwrap();
+    runtime.register_installed_package(&client_root).unwrap();
+    runtime.register_source_catalog(&catalog);
+    assert_eq!(
+        runtime
+            .eval_native("(ns demo.consumer (:require [demo.client :as client])) (client/answer)")
+            .unwrap(),
+        "42"
+    );
+
     fs::remove_dir_all(root).unwrap();
 }
 
