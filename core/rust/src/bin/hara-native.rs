@@ -46,6 +46,10 @@ enum Command {
         project: PathBuf,
         output: Option<PathBuf>,
     },
+    BundleInspect {
+        archive: PathBuf,
+        json: bool,
+    },
     BundleVerify(PathBuf),
     BundleInstall(PathBuf),
     BundleRun {
@@ -82,6 +86,8 @@ Commands:
                                 run selected JSON host tests in one runtime
   bundle build PROJECT [--output ARCHIVE.harp]
                                 package a source project into a HARP archive
+  bundle inspect ARCHIVE.harp [--json]
+                                read verified package metadata
   bundle verify ARCHIVE.harp    verify archive paths, digests, and metadata
   bundle install ARCHIVE.harp   verify and install a content-addressed package
   bundle run ARCHIVE.harp [--entry NAMESPACE/SYMBOL]
@@ -173,6 +179,14 @@ fn cli_application() -> Result<CommandApp<CliHandler>, String> {
     bundle_build.spec.arguments = vec![cli_argument("project", true, false)];
     bundle_build.spec.options = vec![cli_string_option("output", "--output", false, None)];
     cli_install(&mut app, bundle_build)?;
+    let mut bundle_inspect = cli_route(
+        "bundle-inspect",
+        &["bundle", "inspect"],
+        "Read verified HARP metadata",
+    );
+    bundle_inspect.spec.arguments = vec![cli_argument("archive", true, false)];
+    bundle_inspect.spec.options = vec![cli_boolean_option("json", "--json")];
+    cli_install(&mut app, bundle_inspect)?;
     let mut bundle_verify = cli_route(
         "bundle-verify",
         &["bundle", "verify"],
@@ -324,12 +338,16 @@ fn cli_command(request: &Request) -> Result<Command, String> {
             groups: arguments("groups")?,
         }),
         "bundle" => Err(format!(
-            "unknown hara-native bundle operation: {}; expected build, verify, install, run, or exec",
+            "unknown hara-native bundle operation: {}; expected build, inspect, verify, install, run, or exec",
             argument("operation")?
         )),
         "bundle-build" => Ok(Command::BundleBuild {
             project: PathBuf::from(argument("project")?),
             output: non_empty(option("output")?).map(PathBuf::from),
+        }),
+        "bundle-inspect" => Ok(Command::BundleInspect {
+            archive: PathBuf::from(argument("archive")?),
+            json: enabled("json")?,
         }),
         "bundle-verify" => Ok(Command::BundleVerify(PathBuf::from(argument("archive")?))),
         "bundle-install" => Ok(Command::BundleInstall(PathBuf::from(argument("archive")?))),
@@ -433,6 +451,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Test { project, files } => run_project_tests(&project, &files).map(|_| ()),
         Command::TestJson { suite, groups } => run_test_suite(&suite, &groups),
         Command::BundleBuild { project, output } => build_bundle(&project, output.as_deref()),
+        Command::BundleInspect { archive, json } => inspect_bundle(&archive, json),
         Command::BundleVerify(archive) => verify_bundle(&archive),
         Command::BundleInstall(archive) => install_bundle(&archive).map(|_| ()),
         Command::BundleRun { archive, entry } => run_bundle(&archive, entry.as_deref()),
@@ -547,6 +566,25 @@ fn repl() -> Result<(), String> {
 fn verify_bundle(archive: &Path) -> Result<(), String> {
     let manifest = PackageManifest::read_archive(archive).map_err(|error| error.to_string())?;
     println!("verified {} {}", manifest.identity, manifest.version);
+    Ok(())
+}
+
+fn inspect_bundle(archive: &Path, json: bool) -> Result<(), String> {
+    let manifest = PackageManifest::read_archive(archive).map_err(|error| error.to_string())?;
+    if json {
+        let value = serde_json::json!({
+            "coordinate": manifest.identity,
+            "name": manifest.name,
+            "version": manifest.version.to_string(),
+            "resources": manifest.resources.keys().collect::<Vec<_>>(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("{}", package::inspect_path(archive)?);
+    }
     Ok(())
 }
 
@@ -1574,6 +1612,16 @@ mod tests {
             Ok(Command::BundleBuild { project, output: Some(output) })
                 if project == std::path::PathBuf::from("examples/smoke-answer")
                     && output == std::path::PathBuf::from("target/smoke-answer.harp")
+        ));
+        assert!(matches!(
+            parse_arguments([
+                "bundle".into(),
+                "inspect".into(),
+                "target/smoke-answer.harp".into(),
+                "--json".into(),
+            ]),
+            Ok(Command::BundleInspect { archive, json: true })
+                if archive == std::path::PathBuf::from("target/smoke-answer.harp")
         ));
         assert!(matches!(
             parse_arguments([

@@ -283,17 +283,36 @@ fn declared_namespace_header(source: &str) -> Result<Option<String>, String> {
 /// Builds a path-backed source catalog for one project and its installed Hara
 /// dependencies.
 pub fn source_catalog(project: &Project) -> Result<SourceCatalog, String> {
-    source_catalogs(&[project])
+    source_catalog_at(project, &dist_root())
+}
+
+/// Builds a source catalog for one project using packages installed beneath an
+/// explicit distribution root. Embedders use this to keep an isolated package
+/// store from falling back to the user's global installation.
+pub fn source_catalog_at(
+    project: &Project,
+    distribution_root: &Path,
+) -> Result<SourceCatalog, String> {
+    source_catalogs_at(&[project], distribution_root)
 }
 
 /// Builds a path-backed source catalog for several ordered project layers.
 /// Each project contributes its verified installed dependencies first,
 /// followed by its own source paths; later project layers take precedence.
 pub fn source_catalogs(projects: &[&Project]) -> Result<SourceCatalog, String> {
-    let distribution_root = dist_root();
+    source_catalogs_at(projects, &dist_root())
+}
+
+/// Builds a multi-project source catalog using one explicit installed-package
+/// store. This keeps dependency resolution deterministic for isolated hosts,
+/// release verification, and native conformance tests.
+pub(crate) fn source_catalogs_at(
+    projects: &[&Project],
+    distribution_root: &Path,
+) -> Result<SourceCatalog, String> {
     let mut catalog = SourceCatalog::default();
     for project in projects {
-        for dependency in installed::resolve(project, &distribution_root)? {
+        for dependency in installed::resolve(project, distribution_root)? {
             catalog.add_project(&dependency.project)?;
         }
         catalog.add_project(project)?;

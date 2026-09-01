@@ -586,7 +586,7 @@ pub fn files_in(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> 
 #[path = "project/resources.rs"]
 mod resources;
 pub use resources::source_resources;
-pub use resources::{source_catalog, source_catalogs, SourceCatalog};
+pub use resources::{source_catalog, source_catalog_at, source_catalogs, SourceCatalog};
 
 /// Registers namespaces from the automatically selected native Rust profile.
 pub fn register_sources(project: &Project, runtime: &mut Runtime) -> Result<(), String> {
