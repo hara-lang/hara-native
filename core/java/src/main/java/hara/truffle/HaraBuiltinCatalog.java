@@ -48,7 +48,7 @@ import java.util.Set;
 @HaraNativeBinding(namespace = "std.native", name = "Runtime", methods = {"load-string", "macroexpand-1", "gensym", "ns-publics", "ns-aliases", "ns-find", "ns-create", "ns-name", "var-sym", "current", "snapshot", "vars", "namespaces", "namespace", "module", "alias-state", "intern-var", "eval-in", "eval"})
 @HaraNativeBinding(namespace = "std.native", name = "Printer", methods = {"p", "println", "capture"})
 @HaraNativeBinding(namespace = "std.native", name = "Document", methods = {"element", "text", "fragment", "annotate", "pass", "escaped", "group", "line", "break", "nest", "align", "normalize", "valid?", "render"})
-@HaraNativeBinding(namespace = "std.native", name = "Edn", methods = {"read", "read-forms", "write", "pretty"})
+@HaraNativeBinding(namespace = "std.native", name = "Edn", methods = {"read", "read-forms", "read-forms-spanned", "write", "pretty"})
 @HaraNativeBinding(namespace = "std.native", name = "Json", methods = {"read", "write", "pretty"})
 @HaraNativeBinding(
     namespace = "std.native", name = "Host", availability = HaraAvailability.CAPABILITY_GATED,

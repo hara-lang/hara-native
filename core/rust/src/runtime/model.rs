@@ -48,10 +48,10 @@ mod embedding_namespace_tests {
     }
 
     #[test]
-    fn exported_registry_satisfies_bootstrap_requires_without_source_provider() {
+    fn exported_registry_satisfies_native_requires_without_source_provider() {
         let namespaces = embedding_namespace_registry();
         let form = kernel::parse_forms(
-            "(ns example.embedding (:require [std.foundation :refer :all] [std.foundation.coroutine :as coroutine]))",
+            "(ns example.embedding (:require [std.native.Base :as base] [std.native.Coroutine :as coroutine]))",
         )
         .expect("parse embedding namespace declaration")
         .into_iter()
@@ -60,14 +60,14 @@ mod embedding_namespace_tests {
         let mut environment = std::collections::HashMap::new();
 
         core::with_namespace_registry(&namespaces, || core::eval(&form, &mut environment))
-            .expect("embedding registry must satisfy bootstrapped requires");
+            .expect("embedding registry must satisfy native requires");
 
         assert_eq!(
-            namespaces.load_state("std.foundation"),
+            namespaces.load_state("std.native.Base"),
             Some(kernel::NamespaceLoadState::Loaded)
         );
         assert_eq!(
-            namespaces.load_state("std.foundation.coroutine"),
+            namespaces.load_state("std.native.Coroutine"),
             Some(kernel::NamespaceLoadState::Loaded)
         );
         assert!(namespaces.find("example.embedding").is_some());

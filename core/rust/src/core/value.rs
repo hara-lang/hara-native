@@ -936,36 +936,6 @@ pub(crate) fn exception_function_values() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "ex-info",
-            native_variadic_function("ex-info", |arguments| {
-                if !(2..=3).contains(&arguments.len()) {
-                    return Err("ex-info expects a message, data map, and optional cause".into());
-                }
-                let Value::String(message) = &arguments[0] else {
-                    return Err("ex-info expects a string message".into());
-                };
-                if map_entries(&arguments[1]).is_none() {
-                    return Err("ex-info expects a data map".into());
-                }
-                let cause = match arguments.get(2) {
-                    Some(cause @ Value::ExceptionInfo(_)) => Some(Box::new(cause.clone())),
-                    Some(_) => return Err("ex-info expects an Exception cause".into()),
-                    None => None,
-                };
-                let value = Value::ExceptionInfo(Rc::new(ExceptionInfo {
-                    message: message.clone(),
-                    data: Box::new(arguments[1].clone()),
-                    cause,
-                    provenance: Rc::new(RefCell::new(ExceptionProvenance {
-                        created_at: None,
-                        throws: Vec::new(),
-                    })),
-                }));
-                record_exception_creation(&value, current_exception_site());
-                Ok(value)
-            }),
-        ),
-        (
             "ex-data",
             native_function("ex-data", 1, |arguments| match &arguments[0] {
                 Value::ExceptionInfo(value) => Ok((*value.data).clone()),
@@ -1490,9 +1460,53 @@ fn native_coroutine_await_fiber(arguments: Vec<Value>, k: Cont) -> Step {
     }
 }
 
+fn native_reader_position_value(position: crate::kernel::Position) -> Value {
+    Value::Map(PMap::from_iter([
+        (Value::Keyword("offset".into()), Value::Number(position.offset as i64)),
+        (Value::Keyword("line".into()), Value::Number(position.line as i64)),
+        (
+            Value::Keyword("column".into()),
+            Value::Number(position.column as i64),
+        ),
+    ]))
+}
+
+fn native_spanned_form_value(form: &crate::kernel::SpannedForm) -> Result<Value, String> {
+    let children = form
+        .children
+        .iter()
+        .map(native_spanned_form_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Value::Map(PMap::from_iter([
+        (Value::Keyword("form".into()), form_to_value(&form.form)?),
+        (
+            Value::Keyword("start".into()),
+            native_reader_position_value(form.span.start),
+        ),
+        (
+            Value::Keyword("end".into()),
+            native_reader_position_value(form.span.end),
+        ),
+        (
+            Value::Keyword("children".into()),
+            Value::Vector(PVector::from_iter(children)),
+        ),
+    ])))
+}
+
 fn native_edn_values(method: &str, arguments: Vec<Value>) -> Result<Value, String> {
     match (method, arguments.as_slice()) {
         ("read", [Value::String(source)]) => read_edn(source),
+        ("read-forms-spanned", [Value::String(source)]) => {
+            let forms = crate::kernel::read_forms(source)
+                .map_err(|error| format!("read-forms-spanned failed: {error}"))?;
+            Ok(Value::Vector(PVector::from_iter(
+                forms
+                    .iter()
+                    .map(native_spanned_form_value)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )))
+        }
         ("read-forms", [Value::String(path)]) => {
             if !(path.ends_with(".hal") || path.ends_with(".hrl")) {
                 return Err("read-forms expects a .hal or .hrl path".into());
@@ -1530,6 +1544,9 @@ fn native_edn_values(method: &str, arguments: Vec<Value>) -> Result<Value, Strin
         ("pretty", [_, _]) => Err("edn/pretty expects an options map".into()),
         ("read", _) => Err("edn/read expects one string".into()),
         ("read-forms", _) => Err("read-forms expects a path string".into()),
+        ("read-forms-spanned", _) => {
+            Err("read-forms-spanned expects one source string".into())
+        }
         ("write", _) => Err("std.native.Edn/write expects one value".into()),
         ("pretty", _) => Err("std.native.Edn/pretty expects a value and options map".into()),
         _ => Err(format!("unknown std.native.Edn operation: {method}")),
@@ -3672,7 +3689,7 @@ impl Value {
             Self::Result(value) => value.display(),
             Self::ExceptionInfo(value) => {
                 format!(
-                    "#error[{} {}]",
+                    "#ex[{} {}]",
                     Self::String(value.message.clone()).display(),
                     value.data.display()
                 )

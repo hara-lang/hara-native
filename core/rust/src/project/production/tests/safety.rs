@@ -60,7 +60,7 @@ fn reports_dynamic_access_generated_by_a_referred_macro() {
     let modules = vec![
         SourceModule::synthetic(
             "app.macros",
-            "(ns app.macros)\n(defmacro dynamic-form [target] (list 'resolve target))\n",
+            "(ns app.macros)\n(defmacro dynamic-form [target] (std.native.Base/list 'std.native.Base/resolve target))\n",
         ),
         SourceModule::synthetic(
             "app.main",

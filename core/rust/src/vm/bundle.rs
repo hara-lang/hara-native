@@ -33,6 +33,9 @@ pub struct BytecodeBundleModule {
 }
 
 pub fn embedded_foundation_bootstrap_sources() -> Vec<ModuleSource<'static>> {
+    if EMBEDDED_HAL_RESOURCES.is_empty() {
+        return Vec::new();
+    }
     let ordered = std::iter::once("std.foundation")
         .chain(EAGER_HAL_RESOURCES.iter().copied())
         .chain(
@@ -629,69 +632,26 @@ mod tests {
     }
 
     #[test]
-    fn embedded_bundle_round_trips_and_bootstraps() {
+    fn empty_host_bundle_round_trips_against_the_native_registry() {
         on_compiler_gate_stack(|| {
-            let bytes = compile_embedded_foundation_bootstrap_bundle()
-                .expect("compile Foundation bootstrap bundle");
+            let sources = embedded_standard_library_sources();
+            assert!(sources.is_empty(), "the standalone host embeds no HAL source");
+            let bytes = compile_bytecode_bundle(&sources).expect("compile empty host bundle");
             let mut runtime = Runtime::core();
-            for &(name, _, source) in EMBEDDED_HAL_RESOURCES {
-                runtime.register_resource(name, source);
-            }
-            eval_bytecode_bundle(&mut runtime, &bytes).expect("load foundation bundle");
-            let publics = runtime
-                .eval_native("(keys (ns-publics 'std.foundation.string))")
-                .expect("inspect string namespace");
-            assert!(publics.contains("upper"), "{publics}");
-            assert!(runtime.use_namespace("std.foundation.string"));
-            assert_eq!(runtime.eval_native("(upper \"hara\")").unwrap(), "\"HARA\"");
-            assert!(runtime.use_namespace("std.foundation"));
-            assert_eq!(runtime.eval_native("(if-not false 42)").unwrap(), "42");
-            assert!(runtime.namespace_registry.find("lang.core").is_none());
-            assert!(!runtime.bytecode_resources.contains_key("lang.core"));
+            eval_bytecode_bundle(&mut runtime, &bytes).expect("load empty host bundle");
+            assert!(!runtime.bytecode_resources.contains_key("std.foundation"));
+            assert_eq!(
+                runtime.eval_native("(std.native.String/upper \"hara\")"),
+                Ok("\"HARA\"".into())
+            );
         });
     }
 
     #[test]
-    fn foundation_module_loads_through_the_bytecode_index() {
-        let source = embedded_standard_library_sources()
-            .into_iter()
-            .find(|source| source.resource == "std.foundation")
-            .expect("embedded foundation source");
-        let bytes = compile_bytecode_bundle(&[source]).expect("compile foundation module");
-        let modules = decode(&bytes).expect("decode foundation bundle");
-        let program =
-            crate::vm::decode_program(&modules[0].artifact).expect("decode foundation HBC");
-        let first_macro = program
-            .entry_function()
-            .code
-            .iter()
-            .position(|instruction| matches!(instruction, crate::vm::Instruction::DefMacro { .. }));
-        let first_return = program
-            .entry_function()
-            .code
-            .iter()
-            .position(|instruction| matches!(instruction, crate::vm::Instruction::Return));
-        assert!(
-            first_macro.is_some() && first_return.is_some_and(|index| index > first_macro.unwrap()),
-            "Foundation artifact must execute macros before return: macro={first_macro:?}, return={first_return:?}"
-        );
-        let mut runtime = Runtime::core();
-        runtime.register_resource(source.resource, source.source);
-        eval_bytecode_bundle(&mut runtime, &bytes).expect("load indexed foundation module");
-        assert!(runtime.use_namespace("std.foundation"));
-        assert_eq!(
-            runtime.eval_native("(vec (repeat 3 :x))").unwrap(),
-            "[:x :x :x]"
-        );
-        assert!(
-            runtime
-                .macros
-                .borrow()
-                .contains_key(&("std.foundation".into(), "if-not".into())),
-            "indexed Foundation load must register macros: {:?}",
-            runtime.macros.borrow().keys().collect::<Vec<_>>()
-        );
-        assert_eq!(runtime.eval_native("(if-not false 42)").unwrap(), "42");
+    fn bytecode_index_has_no_implicit_foundation_module() {
+        let modules = decode(&compile_bytecode_bundle(&[]).expect("compile empty host bundle"))
+            .expect("decode empty host bundle");
+        assert!(modules.is_empty());
     }
 
     #[test]
@@ -820,15 +780,15 @@ mod tests {
     }
 
     #[test]
-    fn lazy_module_loads_protocol_dependency_before_extend_type() {
+    fn lazy_module_loads_dependency_before_consumer() {
         let sources = [
             ModuleSource {
                 resource: "example.protocol",
-                source: "(ns example.protocol) (defprotocol IEmitter (emit-form [value]))",
+                source: "(ns example.protocol) (defn emit-form [value] value)",
             },
             ModuleSource {
                 resource: "example.emit",
-                source: "(ns example.emit (:require [example.protocol :as compiler])) (defstruct Emitter []) (extend-type Emitter compiler/IEmitter (emit-form [value] value))",
+                source: "(ns example.emit (:require [example.protocol :as compiler])) (defn emit [value] (compiler/emit-form value))",
             },
         ];
         let bytes = compile_bytecode_bundle(&sources).expect("compile lazy protocol fixture");
@@ -902,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn eager_modules_load_in_their_own_namespaces() {
+    fn eager_host_module_inventory_is_empty() {
         let sources = embedded_standard_library_sources()
             .into_iter()
             .filter(|source| {
@@ -910,14 +870,11 @@ mod tests {
                     || EAGER_HAL_RESOURCES.contains(&source.resource)
             })
             .collect::<Vec<_>>();
-        let bytes = compile_bytecode_bundle(&sources).expect("compile eager modules");
+        assert!(sources.is_empty(), "the standalone host embeds no eager HAL modules");
+        let bytes = compile_bytecode_bundle(&sources).expect("compile empty eager inventory");
         let mut runtime = Runtime::core();
-        for source in &sources {
-            runtime.register_resource(source.resource, source.source);
-        }
-        eval_bytecode_bundle(&mut runtime, &bytes).expect("load eager modules");
-        assert!(runtime.use_namespace("std.foundation.string"));
-        assert_eq!(runtime.eval_native("(repeat \"x\" 3)").unwrap(), "\"xxx\"");
+        eval_bytecode_bundle(&mut runtime, &bytes).expect("load empty eager inventory");
+        assert!(runtime.namespace_registry.find("std.foundation.string").is_none());
     }
 
     #[cfg(feature = "tracing-jit")]
@@ -954,11 +911,12 @@ mod tests {
     }
 
     #[test]
-    fn embedded_bundle_contains_exact_foundation_bootstrap() {
+    fn embedded_bundle_has_no_foundation_bootstrap() {
         on_compiler_gate_stack(|| {
             let sources = embedded_standard_library_sources();
-            let bytes = compile_bytecode_bundle(&sources).expect("compile Foundation bootstrap");
-            let modules = decode(&bytes).expect("decode Foundation bootstrap");
+            assert!(sources.is_empty());
+            let bytes = compile_bytecode_bundle(&sources).expect("compile empty host bootstrap");
+            let modules = decode(&bytes).expect("decode empty host bootstrap");
             let actual = modules
                 .iter()
                 .map(|module| module.resource.as_str())
@@ -970,20 +928,16 @@ mod tests {
             );
             let mut inventory = actual.clone();
             inventory.sort_unstable();
-            let mut expected = crate::FOUNDATION_BOOTSTRAP_INVENTORY.to_vec();
-            expected.sort_unstable();
-            assert_eq!(inventory, expected);
-            assert!(!modules.iter().any(|module| module.resource == "code.test"));
-            assert!(!modules.iter().any(|module| module.resource == "lang.core"));
+            assert!(inventory.is_empty());
+            assert!(crate::FOUNDATION_BOOTSTRAP_INVENTORY.is_empty());
         });
     }
 
     #[test]
-    fn bundled_global_reads_are_bound_to_their_defining_namespaces() {
+    fn empty_host_bundle_has_no_global_reads() {
         on_compiler_gate_stack(|| {
-            let bytes = compile_embedded_foundation_bootstrap_bundle()
-                .expect("compile Foundation bootstrap bundle");
-            for module in decode(&bytes).expect("decode Foundation bootstrap bundle") {
+            let bytes = compile_bytecode_bundle(&[]).expect("compile empty host bundle");
+            for module in decode(&bytes).expect("decode empty host bundle") {
                 let program = crate::vm::decode_program(&module.artifact)
                     .unwrap_or_else(|error| panic!("decode {}: {error}", module.resource));
                 assert_eq!(program.namespace.as_deref(), Some(module.resource.as_str()));

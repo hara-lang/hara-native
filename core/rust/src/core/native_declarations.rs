@@ -170,7 +170,13 @@ pub(crate) mod declarations {
     #[hara_native(namespace = "std.native", name = "Document", methods = ["element", "text", "fragment", "annotate", "pass", "escaped", "group", "line", "break", "nest", "align", "normalize", "valid?", "render"], provider = native_document_provider)]
     struct Document;
 
-    #[hara_native(namespace = "std.native", name = "Edn", methods = ["read", "read-forms", "write", "pretty"], provider = native_edn_provider)]
+    #[hara_native(
+        namespace = "std.native",
+        name = "Edn",
+        methods = ["read", "read-forms", "read-forms-spanned", "write", "pretty"],
+        whole_wasm_methods = [("read-forms-spanned", 1)],
+        provider = native_edn_provider
+    )]
     struct Edn;
 
     #[hara_native(namespace = "std.native", name = "Json", methods = ["read", "write", "pretty"], provider = native_json_provider)]

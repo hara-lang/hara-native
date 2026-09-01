@@ -89,7 +89,8 @@ pub fn bytecode_namespace_registry() -> kernel::NamespaceRegistry<core::Value> {
 
 #[cfg(feature = "bytecode-vm")]
 pub fn compile_bytecode(source: &str) -> Result<std::rc::Rc<vm::Program>, String> {
-    vm::compile_source(source)
+    let registry = bytecode_namespace_registry();
+    vm::compile_source_with(source, &registry)
         .map(std::rc::Rc::new)
         .map_err(|error| error.to_string())
 }
@@ -97,7 +98,8 @@ pub fn compile_bytecode(source: &str) -> Result<std::rc::Rc<vm::Program>, String
 /// Executes a previously compiled and validated program.
 #[cfg(feature = "bytecode-vm")]
 pub fn execute_bytecode(program: &std::rc::Rc<vm::Program>) -> Result<String, String> {
-    vm::execute_program(program.clone())
+    let registry = bytecode_namespace_registry();
+    vm::execute_program_with_globals(program.clone(), &registry)
         .map(|value| value.display())
         .map_err(|error| error.to_string())
 }

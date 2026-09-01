@@ -31,6 +31,63 @@ public interface Parser {
 
     static final Keyword EOF = Keyword.create(null, "eof");
 
+    public record SourcePosition(int offset, int line, int column) {}
+
+    public record SpannedForm(
+        Object form,
+        SourcePosition start,
+        SourcePosition end,
+        java.util.List<SpannedForm> children) {}
+
+    private static final ThreadLocal<SpannedCollector> SPANNED_COLLECTOR = new ThreadLocal<>();
+
+    private static final class SpannedCollector {
+      private static final class Pending {
+        private final SourcePosition start;
+        private final java.util.List<SpannedForm> children = new ArrayList<>();
+
+        private Pending(SourcePosition start) {
+          this.start = start;
+        }
+      }
+
+      private final java.util.Deque<Pending> pending = new java.util.ArrayDeque<>();
+      private final java.util.List<SpannedForm> roots = new ArrayList<>();
+
+      private Pending begin(Reader reader) {
+        Pending next =
+            new Pending(
+                new SourcePosition(
+                    reader.getOffset(), reader.getLineNumber(), reader.getColumnNumber()));
+        pending.push(next);
+        return next;
+      }
+
+      private void complete(Pending current, Object form, Reader reader) {
+        if (pending.peek() != current) {
+          throw new IllegalStateException("spanned reader capture order is invalid");
+        }
+        pending.pop();
+        SpannedForm formValue =
+            new SpannedForm(
+                form,
+                current.start,
+                new SourcePosition(
+                    reader.getOffset(), reader.getLineNumber(), reader.getColumnNumber()),
+                java.util.List.copyOf(current.children));
+        if (pending.isEmpty()) roots.add(formValue);
+        else pending.peek().children.add(formValue);
+      }
+
+      private void discardLastRoot() {
+        if (!roots.isEmpty()) roots.remove(roots.size() - 1);
+      }
+
+      private java.util.List<SpannedForm> roots() {
+        return java.util.List.copyOf(roots);
+      }
+    }
+
     static BiFunction[] macros = new BiFunction[256];
     static BiFunction[] dispatchMacros = new BiFunction[256];
     static Pattern symbolPat = Pattern.compile("[:]?([\\D&&[^/]].*/)?(/|[\\D&&[^/]][^/]*)");
@@ -84,6 +141,28 @@ public interface Parser {
       return read(r, (opts == null) ? hashMap(new Object[] {}) : opts);
     }
 
+    public static java.util.List<SpannedForm> readSpannedForms(String source) {
+      Reader reader = new Reader(source);
+      Object eof = new Object();
+      SpannedCollector previous = SPANNED_COLLECTOR.get();
+      SpannedCollector collector = new SpannedCollector();
+      SPANNED_COLLECTOR.set(collector);
+      try {
+        while (true) {
+          Object form = read(reader, false, eof, false, hashMap(new Object[] {}));
+          if (form == eof) {
+            collector.discardLastRoot();
+            java.util.List<SpannedForm> forms = collector.roots();
+            if (forms.isEmpty()) throw new Ex.Runtime("source contains no forms");
+            return forms;
+          }
+        }
+      } finally {
+        if (previous == null) SPANNED_COLLECTOR.remove();
+        else SPANNED_COLLECTOR.set(previous);
+      }
+    }
+
     public static void unread(Reader r, int ch) {
       if (ch != -1) r.unreadChar((char) ch);
     }
@@ -132,9 +211,14 @@ public interface Parser {
       }
       int startLine = r.getLineNumber();
       int startColumn = r.getColumnNumber();
+      SpannedCollector collector = SPANNED_COLLECTOR.get();
+      SpannedCollector.Pending pending = collector == null ? null : collector.begin(r);
       Object value = readForm(r, eofIsError, eofValue, isRecursive, opts);
-      return attachSourceMetadata(
+      Object annotated =
+          attachSourceMetadata(
           value, startLine, startColumn, r.getLineNumber(), r.getColumnNumber());
+      if (collector != null) collector.complete(pending, annotated, r);
+      return annotated;
     }
 
     @SuppressWarnings("unchecked")
@@ -231,19 +315,9 @@ public interface Parser {
 
         if (ch == delim) break;
 
-        BiFunction macroFn = getMacro(ch);
-        if (macroFn != null) {
-          Object mret = macroFn.apply(r, opts);
-          if (mret != r) {
-            list.add(
-                attachSourceMetadata(
-                    mret, formLine, formColumn, r.getLineNumber(), r.getColumnNumber()));
-          }
-        } else {
-          unread(r, ch);
-          Object o = read(r, true, null, isRecursive, opts);
-          if (o != r) list.add(o);
-        }
+        unread(r, ch);
+        Object o = read(r, true, null, isRecursive, opts);
+        if (o != r) list.add(o);
       }
       return list;
     }

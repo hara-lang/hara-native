@@ -22,6 +22,8 @@ pub mod iconj;
 pub mod icons;
 #[path = "protocol/icontext.rs"]
 pub mod icontext;
+#[path = "protocol/icontexteval.rs"]
+pub mod icontexteval;
 #[path = "protocol/icontextlifecycle.rs"]
 pub mod icontextlifecycle;
 #[path = "protocol/icoroutine.rs"]
@@ -168,6 +170,7 @@ pub use icomponent::IComponent;
 pub use iconj::IConj;
 pub use icons::ICons;
 pub use icontext::IContext;
+pub use icontexteval::IContextEval;
 pub use icontextlifecycle::IContextLifeCycle;
 pub use icoroutine::ICoroutine;
 pub use icount::ICount;

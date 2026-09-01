@@ -26,6 +26,56 @@ fn direct_native_conforms_to_the_portable_catch_shape() {
 }
 
 #[test]
+fn direct_native_reads_spanned_forms_without_evaluation() {
+    let mut runtime = Runtime::core();
+    runtime
+        .set_execution_backend("direct-native")
+        .expect("native builds must expose the direct-native backend");
+    assert_eq!(
+        runtime
+            .eval_direct_native(
+                r#"(let [nodes (std.native.Edn/read-forms-spanned "; comment\n(defn sample [x]\n  (inc x))")
+                         node (std.protocol.ilookup.ILookup/lookup nodes 0)
+                         call (std.protocol.ilookup.ILookup/lookup (:children node) 3)
+                         metadata (std.protocol.ilookup.ILookup/lookup
+                                   (std.native.Edn/read-forms-spanned "^{:refer demo.subject/run}\n(def run [] 1)")
+                                   0)
+                         unevaluated (std.protocol.ilookup.ILookup/lookup
+                                      (std.native.Edn/read-forms-spanned "(throw (ex :host {} :ex/message \"not evaluated\"))")
+                                      0)]
+                     [(= (:form node) (quote (defn sample [x] (inc x))))
+                      (= [(:offset (:start node)) (:line (:start node)) (:column (:start node))
+                          (:offset (:end node)) (:line (:end node)) (:column (:end node))]
+                         [10 2 1 37 3 11])
+                      (= (:form call) (quote (inc x)))
+                      (= [(:offset (:start call)) (:line (:start call)) (:column (:start call))
+                          (:offset (:end call)) (:line (:end call)) (:column (:end call))]
+                         [29 3 3 36 3 10])
+                      (= (:refer (std.protocol.iobjtype.IObjType/meta (:form metadata)))
+                         (quote demo.subject/run))
+                      (= (:form unevaluated) (quote (throw (ex :host {} :ex/message "not evaluated"))))])"#,
+            )
+            .unwrap(),
+        "[true true true true true true]"
+    );
+}
+
+#[test]
+fn direct_native_spanned_reader_reports_parse_positions() {
+    let mut runtime = Runtime::core();
+    runtime
+        .set_execution_backend("direct-native")
+        .expect("native builds must expose the direct-native backend");
+    let error = runtime
+        .eval_direct_native("(std.native.Edn/read-forms-spanned \"[1\\n2\")")
+        .expect_err("the reader must reject an unterminated form");
+    assert!(
+        error.contains("read-forms-spanned failed: EOF while reading vector [line 2, column 2]"),
+        "{error}"
+    );
+}
+
+#[test]
 fn lang_values_are_qualified_and_library_snapshots_restore_the_baseline() {
     let mut runtime = Runtime::core();
     let display = runtime

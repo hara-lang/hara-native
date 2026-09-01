@@ -12,16 +12,19 @@ public class Reader {
   private final PushbackReader reader;
   private int lineNumber = 1;
   private int columnNumber = 1;
+  private int offset;
   private long anonymousFunctionId;
   private final Deque<Position> positions = new ArrayDeque<>();
 
   private static final class Position {
     private final int line;
     private final int column;
+    private final int offset;
 
-    private Position(int line, int column) {
+    private Position(int line, int column, int offset) {
       this.line = line;
       this.column = column;
+      this.offset = offset;
     }
   }
 
@@ -43,6 +46,10 @@ public class Reader {
 
   public int getColumnNumber() {
     return columnNumber;
+  }
+
+  public int getOffset() {
+    return offset;
   }
 
   long nextAnonymousFunctionId() {
@@ -68,7 +75,8 @@ public class Reader {
       if (c == -1) {
         return null;
       }
-      positions.push(new Position(lineNumber, columnNumber));
+      positions.push(new Position(lineNumber, columnNumber, offset));
+      offset++;
       if (c == '\n') {
         lineNumber++;
         columnNumber = 1;
@@ -92,6 +100,7 @@ public class Reader {
       if (previous != null) {
         lineNumber = previous.line;
         columnNumber = previous.column;
+        offset = previous.offset;
       }
     } catch (IOException e) {
       throw new RuntimeException(e);

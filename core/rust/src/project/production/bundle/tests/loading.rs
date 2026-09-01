@@ -33,6 +33,7 @@ fn rejects_non_function_entrypoints_after_loading() {
         "(ns app.main)\n(def start 42)\n",
     )];
     let build = analyzed(modules, plan("app.main/start"));
+    assert!(build.analysis.succeeded(), "{:?}", build.analysis.diagnostics);
     let compiled = compile::compile(&build).unwrap();
     let error = match load::validate_bundle(&compiled.bytes, &build.plan.entrypoints) {
         Ok(_) => panic!("non-callable production entrypoint unexpectedly loaded"),
@@ -45,9 +46,10 @@ fn rejects_non_function_entrypoints_after_loading() {
 fn invokes_mutually_recursive_entrypoint_after_pruning_declare() {
     let modules = vec![SourceModule::synthetic(
         "app.main",
-        "(ns app.main)\n(declare odd?)\n(defn even? [n] (or (= n 0) (odd? (- n 1))))\n(defn odd? [n] (and (not= n 0) (even? (- n 1))))\n(defn start [] (odd? 3))\n",
+        "(ns app.main)\n(declare odd?)\n(defn even? [n] (if (= n 0) true (odd? (- n 1))))\n(defn odd? [n] (if (= n 0) false (even? (- n 1))))\n(defn start [] (odd? 3))\n",
     )];
     let build = analyzed(modules, plan("app.main/start"));
+    assert!(build.analysis.succeeded(), "{:?}", build.analysis.diagnostics);
     let compiled = compile::compile(&build).unwrap();
     let runtime = load::validate_bundle(&compiled.bytes, &build.plan.entrypoints).unwrap();
     assert!(matches!(

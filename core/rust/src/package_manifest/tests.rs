@@ -282,11 +282,13 @@ fn schema_catalog_descriptor_is_bound_to_declared_bytes_and_canonical_admission(
                               :sha256 "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}}"#,
     )
     .unwrap();
-    let error = manifest.admit_catalog_bytes(b"{}").unwrap_err();
-    assert_eq!(error.code, "package/catalog-invalid");
-    assert!(error
-        .detail
-        .contains("canonical std.typed catalog admission"));
+    let admission = manifest.admit_catalog_bytes(b"{}").unwrap();
+    assert_eq!(admission.format, "std.typed.catalog/2");
+    assert_eq!(admission.report, "{}");
+    assert!(matches!(
+        manifest.admit_catalog_bytes(br#"{"unexpected":true}"#).unwrap_err().code,
+        "package/size-mismatch" | "package/digest-mismatch"
+    ));
 }
 
 #[test]

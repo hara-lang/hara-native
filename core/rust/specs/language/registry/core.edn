@@ -188,15 +188,11 @@
  :source "(ex :test/failure {:ex/class :io})"
  :expect {:error :invalid-exception
           :message ":ex/class must be a namespaced keyword"}}
-{:id :error/exception-legacy-class
+{:id :error/exception-reject-legacy-constructor
  :class :error
- :source "(ex-class (ex-info \"legacy\" {:ex/class :ex.class/legacy}))"
- :expect {:value :ex.class/legacy :type :keyword}}
-{:id :error/exception-reject-malformed-legacy-class
- :class :error
- :source "(ex-class (ex-info \"legacy\" {:ex/class :legacy}))"
- :expect {:error :invalid-exception
-          :message ":ex/class must be a namespaced keyword"}}
+ :source "(ex-info \"legacy\" {})"
+ :expect {:error :unbound-symbol
+          :message "unbound symbol: ex-info"}}
 {:id :error/exception-class-does-not-catch
  :class :error
  :source "(try (throw (ex :test/failure {:ex/class :ex.class/io})) (catch :ex.class/io error 0) (catch error 42))"

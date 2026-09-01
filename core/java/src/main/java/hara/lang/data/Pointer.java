@@ -4,6 +4,7 @@ import hara.lang.protocol.Constant;
 import hara.lang.protocol.IApplicable;
 import hara.lang.protocol.ICount;
 import hara.lang.protocol.IContext;
+import hara.lang.protocol.IContextEval;
 import hara.lang.protocol.IDeref;
 import hara.lang.protocol.IIter;
 import hara.lang.protocol.ILookup;
@@ -154,11 +155,7 @@ public final class Pointer
 
   @Override
   public Object applyIn(Object runtime, Object[] args) {
-    Object[] call = new Object[(args == null ? 0 : args.length) + 2];
-    call[0] = Keyword.create("pointer", "invoke");
-    call[1] = this;
-    if (args != null) System.arraycopy(args, 0, call, 2, args.length);
-    return requireRuntime(runtime).call(call);
+    return requireRuntime(runtime).invokePtr(this, args == null ? new Object[0] : args);
   }
 
   @Override
@@ -204,9 +201,11 @@ public final class Pointer
     return Objects.hash(context, values);
   }
 
-  private IContext requireRuntime(Object runtime) {
-    if (runtime instanceof IContext) return (IContext) runtime;
-    throw new IllegalArgumentException("Pointer application requires an IContext runtime");
+  private IContextEval requireRuntime(Object runtime) {
+    if (runtime instanceof IContext && runtime instanceof IContextEval) {
+      return (IContextEval) runtime;
+    }
+    throw new IllegalArgumentException("Pointer application requires an IContextEval runtime");
   }
 
   @Override
