@@ -3,9 +3,9 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "7ce4d6cccaa258ed0f4234981d04db59766c52db8e4e55c5e669733e92383baa"
- :binary-sha256 "c22cfbc07fdcc49096769ab56fb8082d512cdff4e0b8b2854f77f724aacfd7b0"
- :case-count 389
+ :source-sha256 "2fa0096b1d3df2f9ad597f4ef5770edc45e75044e2639290cea5155a5334cd76"
+ :binary-sha256 "e072aada2a1f444bc3e20c8fde171fa14fcdacf6cba2ff78746b5de885cecee5"
+ :case-count 420
  :suites
  [{:id :native
   :setup nil
@@ -134,7 +134,7 @@
     :program (let [text (std.native.Document/text "hello") line (std.native.Document/line) fragment (std.native.Document/fragment text line (std.native.Document/text "world"))] (= [true "hello" "hello\nworld" [:p "hello"] [:document/annotate :tag "hello"] [:document/pass "hello"] [:document/escaped "<x>"] [:document/group "hello"] [:document/line] [:document/break] [:document/nest 2 "hello"] [:document/align 2 "hello"] "hello"] [(std.native.Document/valid? text) (std.native.Document/render text) (std.native.Document/render fragment) (std.native.Document/element :p text) (std.native.Document/annotate :tag text) (std.native.Document/pass text) (std.native.Document/escaped "<x>") (std.native.Document/group text) line (std.native.Document/break) (std.native.Document/nest 2 text) (std.native.Document/align 2 text) (std.native.Document/normalize text)]))
     :expect {:display "true"}}
    {:id :native/codec-pretty-and-read-forms-boundaries
-    :program (= [{:a 1} "{:a 1}" "{:a 1}" {"a" 1} "{\"a\":1}" "{\n  \"a\": 1\n}" true] [(std.native.Edn/read "{:a 1}") (std.native.Edn/write {:a 1}) (std.native.Edn/pretty {:a 1} {}) (std.native.Json/read "{\"a\":1}") (std.native.Json/write {"a" 1}) (std.native.Json/pretty {"a" 1} {}) (try (std.native.Edn/read-forms "fixture.txt") false (catch error true))])
+    :program (= [{:a 1} "{:a 1}" "{:a 1}" {"a" 1} "{\"a\":1}" "{\n  \"a\": 1\n}" true true] [(std.native.Edn/read "{:a 1}") (std.native.Edn/write {:a 1}) (std.native.Edn/pretty {:a 1} {}) (std.native.Json/read "{\"a\":1}") (std.native.Json/write {"a" 1}) (std.native.Json/pretty {"a" 1} {}) (try (std.native.Edn/read-forms "fixture.txt") false (catch error true)) (try (std.native.Edn/read-forms-spanned "(+ 1 2)") true (catch error false))])
     :expect {:display "true"}}
    {:id :native/instrument-invalid-artifact-boundaries
     :program (= [:std.native.Keyword true true true true true] [(std.native.Base/type (std.protocol.ilookup.ILookup/lookup (std.native.Instrument/provider) :provider/id)) (try (std.native.Instrument/validate :hbc (std.native.Base/bytes)) false (catch error true)) (try (std.native.Instrument/inspect :hbc (std.native.Base/bytes)) false (catch error true)) (try (std.native.Instrument/disassemble (std.native.Base/bytes)) false (catch error true)) (try (std.native.Instrument/transform :unknown :unknown "" {}) false (catch error true)) (try (std.native.Instrument/execute :hbc (std.native.Base/bytes) {}) false (catch error true))])
@@ -180,6 +180,9 @@
     :expect {:error :protocol/arity}}
    {:id :protocol/native-collection-and-watch-semantics
     :program (let [cell (std.native.Base/atom 1) seen (std.native.Base/atom nil) _ (std.protocol.iwatch.IWatch/watch-add cell :log (fn [key reference old-value new-value] (std.protocol.ireset.IReset/reset seen [key old-value new-value]))) _ (std.protocol.ireset.IReset/reset cell 2)] (= [2 [1 2] {:a 1} [1 2] [1] [] {:a 1} [2 [:log 1 2]]] [(std.protocol.icount.ICount/count [1 2]) (std.protocol.iconj.IConj/conj [1] 2) (std.protocol.idissoc.IDissoc/dissoc {:a 1 :b 2} :b) (std.protocol.ipushlast.IPushLast/push-last [1] 2) (std.protocol.ipoplast.IPopLast/pop-last [1 2]) (std.protocol.iempty.IEmpty/empty [1]) (std.protocol.iassoc.IAssoc/assoc {} :a 1) [(std.protocol.ideref.IDeref/deref cell) (std.protocol.ideref.IDeref/deref seen)]]))
+    :expect {:display "true"}}
+   {:id :protocol/context-eval-pointer-bridge
+    :program (let [target (std.native.Base/namespace (quote hnc.context-eval)) fixture-type (std.native.Base/struct target (quote Fixture) (std.native.Base/vector)) context-space (std.native.Base/namespace (quote std.lib.context.space)) context-protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontext.IContext))) eval-protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) lifecycle-protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture-type context-protocol {(quote call) (fn [& values] [:call (std.native.Base/vec values)]) (quote has-ptr?) (fn [runtime pointer] (= :fixture (std.protocol.ipointer.IPointer/ptr-context pointer)))}) _ (std.native.Base/extend target fixture-type eval-protocol {(quote evaluate) (fn [runtime request options] [:evaluate request options]) (quote evaluate-raw) (fn [runtime request options] [:evaluate-raw request options]) (quote eval-ptr) (fn [runtime pointer arguments options] [:eval-ptr pointer arguments options]) (quote eval-await-ptr) (fn [runtime pointer arguments options] [:eval-await-ptr pointer arguments options]) (quote tags-ptr) (fn [runtime pointer] [:fixture :tag]) (quote deref-ptr) (fn [runtime pointer] [:deref-ptr pointer]) (quote display-ptr) (fn [runtime pointer] "fixture-pointer") (quote invoke-ptr) (fn [runtime pointer arguments] (std.protocol.icontexteval.IContextEval/eval-await-ptr runtime pointer arguments {})) (quote transform-in-ptr) (fn [runtime pointer arguments] [:in arguments]) (quote transform-out-ptr) (fn [runtime pointer value] [:out value])}) _ (std.native.Base/extend target fixture-type lifecycle-protocol {(quote has-module?) (fn [runtime module] false) (quote setup-module) (fn [runtime module] :setup-module) (quote teardown-module) (fn [runtime module] :teardown-module) (quote setup-ptr) (fn [runtime pointer] :setup-ptr) (quote teardown-ptr) (fn [runtime pointer] :teardown-ptr)}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture))) runtime (constructor) _ (std.native.Base/def context-space (quote space:rt-current) (fn [context] runtime) nil) pointer (std.native.Base/pointer {:context :fixture :id :demo})] (= [[:call [runtime :request]] true [:evaluate :request {:mode :value}] [:evaluate-raw :request {:mode :raw}] [:eval-ptr pointer [1] {:mode :async}] [:eval-await-ptr pointer [1] {:mode :await}] [:fixture :tag] [:deref-ptr pointer] "fixture-pointer" [:eval-await-ptr pointer [1] {}] [:in [1]] [:out :result] false :setup-module :teardown-module :setup-ptr :teardown-ptr [:eval-await-ptr pointer [1] {}] [:deref-ptr pointer] [:out [:eval-await-ptr pointer [:in [1]] {}]] "![:fixture :fixture :tag]\nfixture-pointer"] [(std.protocol.icontext.IContext/call runtime :request) (std.protocol.icontext.IContext/has-ptr? runtime pointer) (std.protocol.icontexteval.IContextEval/evaluate runtime :request {:mode :value}) (std.protocol.icontexteval.IContextEval/evaluate-raw runtime :request {:mode :raw}) (std.protocol.icontexteval.IContextEval/eval-ptr runtime pointer [1] {:mode :async}) (std.protocol.icontexteval.IContextEval/eval-await-ptr runtime pointer [1] {:mode :await}) (std.protocol.icontexteval.IContextEval/tags-ptr runtime pointer) (std.protocol.icontexteval.IContextEval/deref-ptr runtime pointer) (std.protocol.icontexteval.IContextEval/display-ptr runtime pointer) (std.protocol.icontexteval.IContextEval/invoke-ptr runtime pointer [1]) (std.protocol.icontexteval.IContextEval/transform-in-ptr runtime pointer [1]) (std.protocol.icontexteval.IContextEval/transform-out-ptr runtime pointer :result) (std.protocol.icontextlifecycle.IContextLifeCycle/has-module? runtime :module) (std.protocol.icontextlifecycle.IContextLifeCycle/setup-module runtime :module) (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-module runtime :module) (std.protocol.icontextlifecycle.IContextLifeCycle/setup-ptr runtime pointer) (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-ptr runtime pointer) (std.protocol.iapplicable.IApplicable/apply-in pointer runtime [1]) (std.protocol.ideref.IDeref/deref pointer) (pointer 1) (std.protocol.idisplay.IDisplay/display pointer)]))
     :expect {:display "true"}}
    {:id :protocol/extension-replacement-and-parent-dispatch
     :program (let [target (std.native.Base/namespace (quote hnc.protocol.lifecycle)) immutable (std.native.Base/struct target (quote Immutable) (std.native.Base/vector (quote value))) mutable (std.native.Base/mutable target (quote Mutable) (std.native.Base/vector (quote value))) read-protocol (std.native.Base/protocol target (quote IRead) {(quote read) 1} (std.native.Base/vector)) coroutine (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) close (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iclose.IClose))) _ (std.native.Base/extend target immutable read-protocol {(quote read) (fn [receiver] 41)}) _ (std.native.Base/extend target mutable read-protocol {(quote read) (fn [receiver] (std.native.Base/field receiver :value))}) _ (std.native.Base/extend target immutable coroutine {(quote status) (fn [receiver] :ready) (quote resume) (fn [& values] :resumed)}) _ (std.native.Base/extend target immutable close {(quote close) (fn [receiver] :closed)}) immutable-value ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Immutable))) 41) mutable-value ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Mutable))) 42) immutable-before ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote read))) immutable-value) mutable-before ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote read))) mutable-value) _ (std.native.Base/extend target immutable read-protocol {(quote read) (fn [receiver] 42)})] (= [41 42 42 :ready :resumed :closed] [immutable-before mutable-before ((std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote read))) immutable-value) (std.protocol.icoroutine.ICoroutine/status immutable-value) (std.protocol.icoroutine.ICoroutine/resume immutable-value) (std.protocol.iclose.IClose/close immutable-value)]))
@@ -376,8 +379,107 @@
    {:id :protocol-variadic-icontext-call
     :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.20)) fixture (std.native.Base/struct target (quote Fixture20) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontext.IContext))) _ (std.native.Base/extend target fixture protocol {(quote call) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture20))) receiver (constructor)] (std.protocol.icontext.IContext/call receiver nil))
     :expect {:display "2"}}
+   {:id :protocol-functional-icontext-has-ptr?
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.21)) fixture (std.native.Base/struct target (quote Fixture21) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontext.IContext))) _ (std.native.Base/extend target fixture protocol {(quote has-ptr?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture21))) receiver (constructor)] (std.protocol.icontext.IContext/has-ptr? receiver nil))
+    :expect {:display "2"}}
+   {:id :protocol-arity-icontext-has-ptr?
+    :program (std.protocol.icontext.IContext/has-ptr?)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontext-has-ptr?
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontext.IContext)))] (std.protocol.icontext.IContext/has-ptr? receiver nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-evaluate
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.22)) fixture (std.native.Base/struct target (quote Fixture22) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote evaluate) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture22))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/evaluate receiver nil nil))
+    :expect {:display "3"}}
+   {:id :protocol-arity-icontexteval-evaluate
+    :program (std.protocol.icontexteval.IContextEval/evaluate)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-evaluate
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/evaluate receiver nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-evaluate-raw
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.23)) fixture (std.native.Base/struct target (quote Fixture23) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote evaluate-raw) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture23))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/evaluate-raw receiver nil nil))
+    :expect {:display "3"}}
+   {:id :protocol-arity-icontexteval-evaluate-raw
+    :program (std.protocol.icontexteval.IContextEval/evaluate-raw)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-evaluate-raw
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/evaluate-raw receiver nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-eval-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.24)) fixture (std.native.Base/struct target (quote Fixture24) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote eval-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture24))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/eval-ptr receiver nil nil nil))
+    :expect {:display "4"}}
+   {:id :protocol-arity-icontexteval-eval-ptr
+    :program (std.protocol.icontexteval.IContextEval/eval-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-eval-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/eval-ptr receiver nil nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-eval-await-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.25)) fixture (std.native.Base/struct target (quote Fixture25) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote eval-await-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture25))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/eval-await-ptr receiver nil nil nil))
+    :expect {:display "4"}}
+   {:id :protocol-arity-icontexteval-eval-await-ptr
+    :program (std.protocol.icontexteval.IContextEval/eval-await-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-eval-await-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/eval-await-ptr receiver nil nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-tags-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.26)) fixture (std.native.Base/struct target (quote Fixture26) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote tags-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture26))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/tags-ptr receiver nil))
+    :expect {:display "2"}}
+   {:id :protocol-arity-icontexteval-tags-ptr
+    :program (std.protocol.icontexteval.IContextEval/tags-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-tags-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/tags-ptr receiver nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-deref-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.27)) fixture (std.native.Base/struct target (quote Fixture27) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote deref-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture27))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/deref-ptr receiver nil))
+    :expect {:display "2"}}
+   {:id :protocol-arity-icontexteval-deref-ptr
+    :program (std.protocol.icontexteval.IContextEval/deref-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-deref-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/deref-ptr receiver nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-display-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.28)) fixture (std.native.Base/struct target (quote Fixture28) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote display-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture28))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/display-ptr receiver nil))
+    :expect {:display "2"}}
+   {:id :protocol-arity-icontexteval-display-ptr
+    :program (std.protocol.icontexteval.IContextEval/display-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-display-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/display-ptr receiver nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-invoke-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.29)) fixture (std.native.Base/struct target (quote Fixture29) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote invoke-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture29))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/invoke-ptr receiver nil nil))
+    :expect {:display "3"}}
+   {:id :protocol-arity-icontexteval-invoke-ptr
+    :program (std.protocol.icontexteval.IContextEval/invoke-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-invoke-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/invoke-ptr receiver nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-transform-in-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.30)) fixture (std.native.Base/struct target (quote Fixture30) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote transform-in-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture30))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/transform-in-ptr receiver nil nil))
+    :expect {:display "3"}}
+   {:id :protocol-arity-icontexteval-transform-in-ptr
+    :program (std.protocol.icontexteval.IContextEval/transform-in-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-transform-in-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/transform-in-ptr receiver nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
+   {:id :protocol-functional-icontexteval-transform-out-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.31)) fixture (std.native.Base/struct target (quote Fixture31) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval))) _ (std.native.Base/extend target fixture protocol {(quote transform-out-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture31))) receiver (constructor)] (std.protocol.icontexteval.IContextEval/transform-out-ptr receiver nil nil))
+    :expect {:display "3"}}
+   {:id :protocol-arity-icontexteval-transform-out-ptr
+    :program (std.protocol.icontexteval.IContextEval/transform-out-ptr)
+    :expect {:error :protocol/arity}}
+   {:id :protocol-unsupported-icontexteval-transform-out-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontexteval.IContextEval)))] (std.protocol.icontexteval.IContextEval/transform-out-ptr receiver nil nil))
+    :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-icontextlifecycle-has-module?
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.21)) fixture (std.native.Base/struct target (quote Fixture21) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote has-module?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture21))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/has-module? receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.32)) fixture (std.native.Base/struct target (quote Fixture32) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote has-module?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture32))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/has-module? receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-icontextlifecycle-has-module?
     :program (std.protocol.icontextlifecycle.IContextLifeCycle/has-module?)
@@ -386,7 +488,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/has-module? receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-icontextlifecycle-setup-module
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.22)) fixture (std.native.Base/struct target (quote Fixture22) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote setup-module) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture22))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-module receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.33)) fixture (std.native.Base/struct target (quote Fixture33) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote setup-module) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture33))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-module receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-icontextlifecycle-setup-module
     :program (std.protocol.icontextlifecycle.IContextLifeCycle/setup-module)
@@ -395,7 +497,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-module receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-icontextlifecycle-teardown-module
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.23)) fixture (std.native.Base/struct target (quote Fixture23) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote teardown-module) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture23))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-module receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.34)) fixture (std.native.Base/struct target (quote Fixture34) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote teardown-module) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture34))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-module receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-icontextlifecycle-teardown-module
     :program (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-module)
@@ -403,35 +505,26 @@
    {:id :protocol-unsupported-icontextlifecycle-teardown-module
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-module receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
-   {:id :protocol-functional-icontextlifecycle-has-pointer?
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.24)) fixture (std.native.Base/struct target (quote Fixture24) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote has-pointer?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture24))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/has-pointer? receiver nil))
+   {:id :protocol-functional-icontextlifecycle-setup-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.35)) fixture (std.native.Base/struct target (quote Fixture35) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote setup-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture35))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-ptr receiver nil))
     :expect {:display "2"}}
-   {:id :protocol-arity-icontextlifecycle-has-pointer?
-    :program (std.protocol.icontextlifecycle.IContextLifeCycle/has-pointer?)
+   {:id :protocol-arity-icontextlifecycle-setup-ptr
+    :program (std.protocol.icontextlifecycle.IContextLifeCycle/setup-ptr)
     :expect {:error :protocol/arity}}
-   {:id :protocol-unsupported-icontextlifecycle-has-pointer?
-    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/has-pointer? receiver nil))
+   {:id :protocol-unsupported-icontextlifecycle-setup-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-ptr receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
-   {:id :protocol-functional-icontextlifecycle-setup-pointer
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.25)) fixture (std.native.Base/struct target (quote Fixture25) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote setup-pointer) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture25))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-pointer receiver nil))
+   {:id :protocol-functional-icontextlifecycle-teardown-ptr
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.36)) fixture (std.native.Base/struct target (quote Fixture36) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote teardown-ptr) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture36))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-ptr receiver nil))
     :expect {:display "2"}}
-   {:id :protocol-arity-icontextlifecycle-setup-pointer
-    :program (std.protocol.icontextlifecycle.IContextLifeCycle/setup-pointer)
+   {:id :protocol-arity-icontextlifecycle-teardown-ptr
+    :program (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-ptr)
     :expect {:error :protocol/arity}}
-   {:id :protocol-unsupported-icontextlifecycle-setup-pointer
-    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/setup-pointer receiver nil))
-    :expect {:error :protocol/unsupported-receiver}}
-   {:id :protocol-functional-icontextlifecycle-teardown-pointer
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.26)) fixture (std.native.Base/struct target (quote Fixture26) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle))) _ (std.native.Base/extend target fixture protocol {(quote teardown-pointer) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture26))) receiver (constructor)] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-pointer receiver nil))
-    :expect {:display "2"}}
-   {:id :protocol-arity-icontextlifecycle-teardown-pointer
-    :program (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-pointer)
-    :expect {:error :protocol/arity}}
-   {:id :protocol-unsupported-icontextlifecycle-teardown-pointer
-    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-pointer receiver nil))
+   {:id :protocol-unsupported-icontextlifecycle-teardown-ptr
+    :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icontextlifecycle.IContextLifeCycle)))] (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-ptr receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-icoroutine-status
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.27)) fixture (std.native.Base/struct target (quote Fixture27) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) _ (std.native.Base/extend target fixture protocol {(quote status) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture27))) receiver (constructor)] (std.protocol.icoroutine.ICoroutine/status receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.37)) fixture (std.native.Base/struct target (quote Fixture37) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) _ (std.native.Base/extend target fixture protocol {(quote status) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture37))) receiver (constructor)] (std.protocol.icoroutine.ICoroutine/status receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-icoroutine-status
     :program (std.protocol.icoroutine.ICoroutine/status)
@@ -440,7 +533,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine)))] (std.protocol.icoroutine.ICoroutine/status receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-icoroutine-resume
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.28)) fixture (std.native.Base/struct target (quote Fixture28) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) _ (std.native.Base/extend target fixture protocol {(quote resume) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture28))) receiver (constructor)] (std.protocol.icoroutine.ICoroutine/resume receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.38)) fixture (std.native.Base/struct target (quote Fixture38) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) _ (std.native.Base/extend target fixture protocol {(quote resume) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture38))) receiver (constructor)] (std.protocol.icoroutine.ICoroutine/resume receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-icoroutine-resume
     :program (std.protocol.icoroutine.ICoroutine/resume)
@@ -449,10 +542,10 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine)))] (std.protocol.icoroutine.ICoroutine/resume receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-variadic-icoroutine-resume
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.28)) fixture (std.native.Base/struct target (quote Fixture28) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) _ (std.native.Base/extend target fixture protocol {(quote resume) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture28))) receiver (constructor)] (std.protocol.icoroutine.ICoroutine/resume receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.38)) fixture (std.native.Base/struct target (quote Fixture38) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icoroutine.ICoroutine))) _ (std.native.Base/extend target fixture protocol {(quote resume) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture38))) receiver (constructor)] (std.protocol.icoroutine.ICoroutine/resume receiver nil))
     :expect {:display "2"}}
    {:id :protocol-functional-icount-count
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.29)) fixture (std.native.Base/struct target (quote Fixture29) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icount.ICount))) _ (std.native.Base/extend target fixture protocol {(quote count) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture29))) receiver (constructor)] (std.protocol.icount.ICount/count receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.39)) fixture (std.native.Base/struct target (quote Fixture39) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icount.ICount))) _ (std.native.Base/extend target fixture protocol {(quote count) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture39))) receiver (constructor)] (std.protocol.icount.ICount/count receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-icount-count
     :program (std.protocol.icount.ICount/count)
@@ -461,7 +554,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.icount.ICount)))] (std.protocol.icount.ICount/count receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ideps-dep-get
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.30)) fixture (std.native.Base/struct target (quote Fixture30) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps))) _ (std.native.Base/extend target fixture protocol {(quote dep-get) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture30))) receiver (constructor)] (std.protocol.ideps.IDeps/dep-get receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.40)) fixture (std.native.Base/struct target (quote Fixture40) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps))) _ (std.native.Base/extend target fixture protocol {(quote dep-get) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture40))) receiver (constructor)] (std.protocol.ideps.IDeps/dep-get receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ideps-dep-get
     :program (std.protocol.ideps.IDeps/dep-get)
@@ -470,7 +563,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps)))] (std.protocol.ideps.IDeps/dep-get receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ideps-dep-entries
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.31)) fixture (std.native.Base/struct target (quote Fixture31) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps))) _ (std.native.Base/extend target fixture protocol {(quote dep-entries) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture31))) receiver (constructor)] (std.protocol.ideps.IDeps/dep-entries receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.41)) fixture (std.native.Base/struct target (quote Fixture41) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps))) _ (std.native.Base/extend target fixture protocol {(quote dep-entries) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture41))) receiver (constructor)] (std.protocol.ideps.IDeps/dep-entries receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ideps-dep-entries
     :program (std.protocol.ideps.IDeps/dep-entries)
@@ -479,7 +572,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps)))] (std.protocol.ideps.IDeps/dep-entries receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ideps-dep-keys
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.32)) fixture (std.native.Base/struct target (quote Fixture32) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps))) _ (std.native.Base/extend target fixture protocol {(quote dep-keys) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture32))) receiver (constructor)] (std.protocol.ideps.IDeps/dep-keys receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.42)) fixture (std.native.Base/struct target (quote Fixture42) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps))) _ (std.native.Base/extend target fixture protocol {(quote dep-keys) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture42))) receiver (constructor)] (std.protocol.ideps.IDeps/dep-keys receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ideps-dep-keys
     :program (std.protocol.ideps.IDeps/dep-keys)
@@ -488,7 +581,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideps.IDeps)))] (std.protocol.ideps.IDeps/dep-keys receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ideref-deref
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.33)) fixture (std.native.Base/struct target (quote Fixture33) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideref.IDeref))) _ (std.native.Base/extend target fixture protocol {(quote deref) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture33))) receiver (constructor)] (std.protocol.ideref.IDeref/deref receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.43)) fixture (std.native.Base/struct target (quote Fixture43) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideref.IDeref))) _ (std.native.Base/extend target fixture protocol {(quote deref) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture43))) receiver (constructor)] (std.protocol.ideref.IDeref/deref receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ideref-deref
     :program (std.protocol.ideref.IDeref/deref)
@@ -497,7 +590,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ideref.IDeref)))] (std.protocol.ideref.IDeref/deref receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-idereftimeout-deref-timeout
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.34)) fixture (std.native.Base/struct target (quote Fixture34) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idereftimeout.IDerefTimeout))) _ (std.native.Base/extend target fixture protocol {(quote deref-timeout) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture34))) receiver (constructor)] (std.protocol.idereftimeout.IDerefTimeout/deref-timeout receiver nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.44)) fixture (std.native.Base/struct target (quote Fixture44) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idereftimeout.IDerefTimeout))) _ (std.native.Base/extend target fixture protocol {(quote deref-timeout) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture44))) receiver (constructor)] (std.protocol.idereftimeout.IDerefTimeout/deref-timeout receiver nil nil))
     :expect {:display "3"}}
    {:id :protocol-arity-idereftimeout-deref-timeout
     :program (std.protocol.idereftimeout.IDerefTimeout/deref-timeout)
@@ -506,7 +599,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idereftimeout.IDerefTimeout)))] (std.protocol.idereftimeout.IDerefTimeout/deref-timeout receiver nil nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-idisplay-display
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.35)) fixture (std.native.Base/struct target (quote Fixture35) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idisplay.IDisplay))) _ (std.native.Base/extend target fixture protocol {(quote display) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture35))) receiver (constructor)] (std.protocol.idisplay.IDisplay/display receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.45)) fixture (std.native.Base/struct target (quote Fixture45) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idisplay.IDisplay))) _ (std.native.Base/extend target fixture protocol {(quote display) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture45))) receiver (constructor)] (std.protocol.idisplay.IDisplay/display receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-idisplay-display
     :program (std.protocol.idisplay.IDisplay/display)
@@ -515,7 +608,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idisplay.IDisplay)))] (std.protocol.idisplay.IDisplay/display receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-idissoc-dissoc
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.36)) fixture (std.native.Base/struct target (quote Fixture36) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idissoc.IDissoc))) _ (std.native.Base/extend target fixture protocol {(quote dissoc) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture36))) receiver (constructor)] (std.protocol.idissoc.IDissoc/dissoc receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.46)) fixture (std.native.Base/struct target (quote Fixture46) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idissoc.IDissoc))) _ (std.native.Base/extend target fixture protocol {(quote dissoc) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture46))) receiver (constructor)] (std.protocol.idissoc.IDissoc/dissoc receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-idissoc-dissoc
     :program (std.protocol.idissoc.IDissoc/dissoc)
@@ -524,7 +617,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.idissoc.IDissoc)))] (std.protocol.idissoc.IDissoc/dissoc receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iempty-empty
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.37)) fixture (std.native.Base/struct target (quote Fixture37) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iempty.IEmpty))) _ (std.native.Base/extend target fixture protocol {(quote empty) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture37))) receiver (constructor)] (std.protocol.iempty.IEmpty/empty receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.47)) fixture (std.native.Base/struct target (quote Fixture47) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iempty.IEmpty))) _ (std.native.Base/extend target fixture protocol {(quote empty) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture47))) receiver (constructor)] (std.protocol.iempty.IEmpty/empty receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iempty-empty
     :program (std.protocol.iempty.IEmpty/empty)
@@ -533,13 +626,13 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iempty.IEmpty)))] (std.protocol.iempty.IEmpty/empty receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodable-encode-with
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.38)) fixture (std.native.Base/struct target (quote Fixture38) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodable.IEncodable))) _ (std.native.Base/extend target fixture protocol {(quote encode-with) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture38))) receiver (constructor)] (std.protocol.iencodable.IEncodable/encode-with receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.48)) fixture (std.native.Base/struct target (quote Fixture48) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodable.IEncodable))) _ (std.native.Base/extend target fixture protocol {(quote encode-with) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture48))) receiver (constructor)] (std.protocol.iencodable.IEncodable/encode-with receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodable-encode-with
     :program (std.protocol.iencodable.IEncodable/encode-with)
     :expect {:error :protocol/arity}}
    {:id :protocol-functional-iencode-encode
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.39)) fixture (std.native.Base/struct target (quote Fixture39) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencode.IEncode))) _ (std.native.Base/extend target fixture protocol {(quote encode) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture39))) receiver (constructor)] (std.protocol.iencode.IEncode/encode receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.49)) fixture (std.native.Base/struct target (quote Fixture49) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencode.IEncode))) _ (std.native.Base/extend target fixture protocol {(quote encode) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture49))) receiver (constructor)] (std.protocol.iencode.IEncode/encode receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencode-encode
     :program (std.protocol.iencode.IEncode/encode)
@@ -548,7 +641,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencode.IEncode)))] (std.protocol.iencode.IEncode/encode receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-nil
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.40)) fixture (std.native.Base/struct target (quote Fixture40) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-nil) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture40))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-nil receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.50)) fixture (std.native.Base/struct target (quote Fixture50) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-nil) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture50))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-nil receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iencodevisitor-visit-nil
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-nil)
@@ -557,7 +650,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-nil receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-boolean
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.41)) fixture (std.native.Base/struct target (quote Fixture41) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-boolean) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture41))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-boolean receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.51)) fixture (std.native.Base/struct target (quote Fixture51) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-boolean) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture51))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-boolean receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-boolean
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-boolean)
@@ -566,7 +659,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-boolean receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-number
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.42)) fixture (std.native.Base/struct target (quote Fixture42) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-number) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture42))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-number receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.52)) fixture (std.native.Base/struct target (quote Fixture52) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-number) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture52))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-number receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-number
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-number)
@@ -575,7 +668,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-number receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-character
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.43)) fixture (std.native.Base/struct target (quote Fixture43) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-character) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture43))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-character receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.53)) fixture (std.native.Base/struct target (quote Fixture53) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-character) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture53))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-character receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-character
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-character)
@@ -584,7 +677,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-character receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-string
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.44)) fixture (std.native.Base/struct target (quote Fixture44) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-string) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture44))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-string receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.54)) fixture (std.native.Base/struct target (quote Fixture54) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-string) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture54))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-string receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-string
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-string)
@@ -593,7 +686,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-string receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-keyword
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.45)) fixture (std.native.Base/struct target (quote Fixture45) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-keyword) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture45))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-keyword receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.55)) fixture (std.native.Base/struct target (quote Fixture55) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-keyword) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture55))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-keyword receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-keyword
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-keyword)
@@ -602,7 +695,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-keyword receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-symbol
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.46)) fixture (std.native.Base/struct target (quote Fixture46) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-symbol) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture46))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-symbol receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.56)) fixture (std.native.Base/struct target (quote Fixture56) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-symbol) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture56))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-symbol receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-symbol
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-symbol)
@@ -611,7 +704,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-symbol receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-seq
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.47)) fixture (std.native.Base/struct target (quote Fixture47) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-seq) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture47))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-seq receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.57)) fixture (std.native.Base/struct target (quote Fixture57) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-seq) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture57))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-seq receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-seq
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-seq)
@@ -620,7 +713,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-seq receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-vector
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.48)) fixture (std.native.Base/struct target (quote Fixture48) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-vector) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture48))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-vector receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.58)) fixture (std.native.Base/struct target (quote Fixture58) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-vector) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture58))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-vector receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-vector
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-vector)
@@ -629,7 +722,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-vector receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-map
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.49)) fixture (std.native.Base/struct target (quote Fixture49) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-map) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture49))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-map receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.59)) fixture (std.native.Base/struct target (quote Fixture59) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-map) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture59))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-map receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-map
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-map)
@@ -638,7 +731,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-map receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-set
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.50)) fixture (std.native.Base/struct target (quote Fixture50) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-set) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture50))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-set receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.60)) fixture (std.native.Base/struct target (quote Fixture60) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-set) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture60))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-set receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-set
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-set)
@@ -647,7 +740,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-set receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-tagged
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.51)) fixture (std.native.Base/struct target (quote Fixture51) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-tagged) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture51))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-tagged receiver nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.61)) fixture (std.native.Base/struct target (quote Fixture61) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-tagged) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture61))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-tagged receiver nil nil))
     :expect {:display "3"}}
    {:id :protocol-arity-iencodevisitor-visit-tagged
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-tagged)
@@ -656,7 +749,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-tagged receiver nil nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iencodevisitor-visit-unknown
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.52)) fixture (std.native.Base/struct target (quote Fixture52) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-unknown) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture52))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-unknown receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.62)) fixture (std.native.Base/struct target (quote Fixture62) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor))) _ (std.native.Base/extend target fixture protocol {(quote visit-unknown) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture62))) receiver (constructor)] (std.protocol.iencodevisitor.IEncodeVisitor/visit-unknown receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iencodevisitor-visit-unknown
     :program (std.protocol.iencodevisitor.IEncodeVisitor/visit-unknown)
@@ -665,7 +758,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iencodevisitor.IEncodeVisitor)))] (std.protocol.iencodevisitor.IEncodeVisitor/visit-unknown receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iequality-equality
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.53)) fixture (std.native.Base/struct target (quote Fixture53) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iequality.IEquality))) _ (std.native.Base/extend target fixture protocol {(quote equality) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture53))) receiver (constructor)] (std.protocol.iequality.IEquality/equality receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.63)) fixture (std.native.Base/struct target (quote Fixture63) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iequality.IEquality))) _ (std.native.Base/extend target fixture protocol {(quote equality) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture63))) receiver (constructor)] (std.protocol.iequality.IEquality/equality receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iequality-equality
     :program (std.protocol.iequality.IEquality/equality)
@@ -674,7 +767,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iequality.IEquality)))] (std.protocol.iequality.IEquality/equality receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iexinfo-data
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.54)) fixture (std.native.Base/struct target (quote Fixture54) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iexinfo.IExInfo))) _ (std.native.Base/extend target fixture protocol {(quote data) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture54))) receiver (constructor)] (std.protocol.iexinfo.IExInfo/data receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.64)) fixture (std.native.Base/struct target (quote Fixture64) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iexinfo.IExInfo))) _ (std.native.Base/extend target fixture protocol {(quote data) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture64))) receiver (constructor)] (std.protocol.iexinfo.IExInfo/data receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iexinfo-data
     :program (std.protocol.iexinfo.IExInfo/data)
@@ -683,7 +776,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iexinfo.IExInfo)))] (std.protocol.iexinfo.IExInfo/data receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ifind-find
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.55)) fixture (std.native.Base/struct target (quote Fixture55) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifind.IFind))) _ (std.native.Base/extend target fixture protocol {(quote find) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture55))) receiver (constructor)] (std.protocol.ifind.IFind/find receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.65)) fixture (std.native.Base/struct target (quote Fixture65) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifind.IFind))) _ (std.native.Base/extend target fixture protocol {(quote find) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture65))) receiver (constructor)] (std.protocol.ifind.IFind/find receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ifind-find
     :program (std.protocol.ifind.IFind/find)
@@ -692,7 +785,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifind.IFind)))] (std.protocol.ifind.IFind/find receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ifn-invoke
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.56)) fixture (std.native.Base/struct target (quote Fixture56) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifn.IFn))) _ (std.native.Base/extend target fixture protocol {(quote invoke) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture56))) receiver (constructor)] (std.protocol.ifn.IFn/invoke receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.66)) fixture (std.native.Base/struct target (quote Fixture66) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifn.IFn))) _ (std.native.Base/extend target fixture protocol {(quote invoke) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture66))) receiver (constructor)] (std.protocol.ifn.IFn/invoke receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ifn-invoke
     :program (std.protocol.ifn.IFn/invoke)
@@ -701,10 +794,10 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifn.IFn)))] (std.protocol.ifn.IFn/invoke receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-variadic-ifn-invoke
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.56)) fixture (std.native.Base/struct target (quote Fixture56) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifn.IFn))) _ (std.native.Base/extend target fixture protocol {(quote invoke) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture56))) receiver (constructor)] (std.protocol.ifn.IFn/invoke receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.66)) fixture (std.native.Base/struct target (quote Fixture66) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ifn.IFn))) _ (std.native.Base/extend target fixture protocol {(quote invoke) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture66))) receiver (constructor)] (std.protocol.ifn.IFn/invoke receiver nil))
     :expect {:display "2"}}
    {:id :protocol-functional-ihash-hash
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.57)) fixture (std.native.Base/struct target (quote Fixture57) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihash.IHash))) _ (std.native.Base/extend target fixture protocol {(quote hash) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture57))) receiver (constructor)] (std.protocol.ihash.IHash/hash receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.67)) fixture (std.native.Base/struct target (quote Fixture67) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihash.IHash))) _ (std.native.Base/extend target fixture protocol {(quote hash) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture67))) receiver (constructor)] (std.protocol.ihash.IHash/hash receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ihash-hash
     :program (std.protocol.ihash.IHash/hash)
@@ -713,7 +806,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihash.IHash)))] (std.protocol.ihash.IHash/hash receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ihashcached-hash-current
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.58)) fixture (std.native.Base/struct target (quote Fixture58) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihashcached.IHashCached))) _ (std.native.Base/extend target fixture protocol {(quote hash-current) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture58))) receiver (constructor)] (std.protocol.ihashcached.IHashCached/hash-current receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.68)) fixture (std.native.Base/struct target (quote Fixture68) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihashcached.IHashCached))) _ (std.native.Base/extend target fixture protocol {(quote hash-current) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture68))) receiver (constructor)] (std.protocol.ihashcached.IHashCached/hash-current receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ihashcached-hash-current
     :program (std.protocol.ihashcached.IHashCached/hash-current)
@@ -722,7 +815,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihashcached.IHashCached)))] (std.protocol.ihashcached.IHashCached/hash-current receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ihashcached-hash-put
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.59)) fixture (std.native.Base/struct target (quote Fixture59) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihashcached.IHashCached))) _ (std.native.Base/extend target fixture protocol {(quote hash-put) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture59))) receiver (constructor)] (std.protocol.ihashcached.IHashCached/hash-put receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.69)) fixture (std.native.Base/struct target (quote Fixture69) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihashcached.IHashCached))) _ (std.native.Base/extend target fixture protocol {(quote hash-put) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture69))) receiver (constructor)] (std.protocol.ihashcached.IHashCached/hash-put receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ihashcached-hash-put
     :program (std.protocol.ihashcached.IHashCached/hash-put)
@@ -731,7 +824,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ihashcached.IHashCached)))] (std.protocol.ihashcached.IHashCached/hash-put receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iindexed-index-of
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.60)) fixture (std.native.Base/struct target (quote Fixture60) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexed.IIndexed))) _ (std.native.Base/extend target fixture protocol {(quote index-of) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture60))) receiver (constructor)] (std.protocol.iindexed.IIndexed/index-of receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.70)) fixture (std.native.Base/struct target (quote Fixture70) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexed.IIndexed))) _ (std.native.Base/extend target fixture protocol {(quote index-of) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture70))) receiver (constructor)] (std.protocol.iindexed.IIndexed/index-of receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iindexed-index-of
     :program (std.protocol.iindexed.IIndexed/index-of)
@@ -740,7 +833,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexed.IIndexed)))] (std.protocol.iindexed.IIndexed/index-of receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iindexedkv-index-of-key
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.61)) fixture (std.native.Base/struct target (quote Fixture61) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexedkv.IIndexedKV))) _ (std.native.Base/extend target fixture protocol {(quote index-of-key) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture61))) receiver (constructor)] (std.protocol.iindexedkv.IIndexedKV/index-of-key receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.71)) fixture (std.native.Base/struct target (quote Fixture71) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexedkv.IIndexedKV))) _ (std.native.Base/extend target fixture protocol {(quote index-of-key) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture71))) receiver (constructor)] (std.protocol.iindexedkv.IIndexedKV/index-of-key receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iindexedkv-index-of-key
     :program (std.protocol.iindexedkv.IIndexedKV/index-of-key)
@@ -749,7 +842,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexedkv.IIndexedKV)))] (std.protocol.iindexedkv.IIndexedKV/index-of-key receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iindexedkv-index-of-val
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.62)) fixture (std.native.Base/struct target (quote Fixture62) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexedkv.IIndexedKV))) _ (std.native.Base/extend target fixture protocol {(quote index-of-val) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture62))) receiver (constructor)] (std.protocol.iindexedkv.IIndexedKV/index-of-val receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.72)) fixture (std.native.Base/struct target (quote Fixture72) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexedkv.IIndexedKV))) _ (std.native.Base/extend target fixture protocol {(quote index-of-val) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture72))) receiver (constructor)] (std.protocol.iindexedkv.IIndexedKV/index-of-val receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iindexedkv-index-of-val
     :program (std.protocol.iindexedkv.IIndexedKV/index-of-val)
@@ -758,7 +851,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iindexedkv.IIndexedKV)))] (std.protocol.iindexedkv.IIndexedKV/index-of-val receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iinvokein-invoke-in
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.63)) fixture (std.native.Base/struct target (quote Fixture63) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iinvokein.IInvokeIn))) _ (std.native.Base/extend target fixture protocol {(quote invoke-in) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture63))) receiver (constructor)] (std.protocol.iinvokein.IInvokeIn/invoke-in receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.73)) fixture (std.native.Base/struct target (quote Fixture73) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iinvokein.IInvokeIn))) _ (std.native.Base/extend target fixture protocol {(quote invoke-in) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture73))) receiver (constructor)] (std.protocol.iinvokein.IInvokeIn/invoke-in receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iinvokein-invoke-in
     :program (std.protocol.iinvokein.IInvokeIn/invoke-in)
@@ -767,10 +860,10 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iinvokein.IInvokeIn)))] (std.protocol.iinvokein.IInvokeIn/invoke-in receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-variadic-iinvokein-invoke-in
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.63)) fixture (std.native.Base/struct target (quote Fixture63) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iinvokein.IInvokeIn))) _ (std.native.Base/extend target fixture protocol {(quote invoke-in) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture63))) receiver (constructor)] (std.protocol.iinvokein.IInvokeIn/invoke-in receiver nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.73)) fixture (std.native.Base/struct target (quote Fixture73) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iinvokein.IInvokeIn))) _ (std.native.Base/extend target fixture protocol {(quote invoke-in) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture73))) receiver (constructor)] (std.protocol.iinvokein.IInvokeIn/invoke-in receiver nil nil))
     :expect {:display "3"}}
    {:id :protocol-functional-iiter-iter
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.64)) fixture (std.native.Base/struct target (quote Fixture64) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiter.IIter))) _ (std.native.Base/extend target fixture protocol {(quote iter) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture64))) receiver (constructor)] (std.protocol.iiter.IIter/iter receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.74)) fixture (std.native.Base/struct target (quote Fixture74) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiter.IIter))) _ (std.native.Base/extend target fixture protocol {(quote iter) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture74))) receiver (constructor)] (std.protocol.iiter.IIter/iter receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iiter-iter
     :program (std.protocol.iiter.IIter/iter)
@@ -779,7 +872,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiter.IIter)))] (std.protocol.iiter.IIter/iter receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iiterator-iter-next
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.65)) fixture (std.native.Base/struct target (quote Fixture65) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiterator.IIterator))) _ (std.native.Base/extend target fixture protocol {(quote iter-next) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture65))) receiver (constructor)] (std.protocol.iiterator.IIterator/iter-next receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.75)) fixture (std.native.Base/struct target (quote Fixture75) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiterator.IIterator))) _ (std.native.Base/extend target fixture protocol {(quote iter-next) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture75))) receiver (constructor)] (std.protocol.iiterator.IIterator/iter-next receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iiterator-iter-next
     :program (std.protocol.iiterator.IIterator/iter-next)
@@ -788,7 +881,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiterator.IIterator)))] (std.protocol.iiterator.IIterator/iter-next receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iiterator-iter-next?
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.66)) fixture (std.native.Base/struct target (quote Fixture66) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiterator.IIterator))) _ (std.native.Base/extend target fixture protocol {(quote iter-next?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture66))) receiver (constructor)] (std.protocol.iiterator.IIterator/iter-next? receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.76)) fixture (std.native.Base/struct target (quote Fixture76) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiterator.IIterator))) _ (std.native.Base/extend target fixture protocol {(quote iter-next?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture76))) receiver (constructor)] (std.protocol.iiterator.IIterator/iter-next? receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iiterator-iter-next?
     :program (std.protocol.iiterator.IIterator/iter-next?)
@@ -797,7 +890,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iiterator.IIterator)))] (std.protocol.iiterator.IIterator/iter-next? receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ilookup-lookup
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.67)) fixture (std.native.Base/struct target (quote Fixture67) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup))) _ (std.native.Base/extend target fixture protocol {(quote lookup) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture67))) receiver (constructor)] (std.protocol.ilookup.ILookup/lookup receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.77)) fixture (std.native.Base/struct target (quote Fixture77) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup))) _ (std.native.Base/extend target fixture protocol {(quote lookup) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture77))) receiver (constructor)] (std.protocol.ilookup.ILookup/lookup receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ilookup-lookup
     :program (std.protocol.ilookup.ILookup/lookup)
@@ -806,10 +899,10 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup)))] (std.protocol.ilookup.ILookup/lookup receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-variadic-ilookup-lookup
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.67)) fixture (std.native.Base/struct target (quote Fixture67) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup))) _ (std.native.Base/extend target fixture protocol {(quote lookup) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture67))) receiver (constructor)] (std.protocol.ilookup.ILookup/lookup receiver nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.77)) fixture (std.native.Base/struct target (quote Fixture77) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup))) _ (std.native.Base/extend target fixture protocol {(quote lookup) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture77))) receiver (constructor)] (std.protocol.ilookup.ILookup/lookup receiver nil nil))
     :expect {:display "3"}}
    {:id :protocol-functional-imetadata-metatype
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.68)) fixture (std.native.Base/struct target (quote Fixture68) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.imetadata.IMetadata))) _ (std.native.Base/extend target fixture protocol {(quote metatype) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture68))) receiver (constructor)] (std.protocol.imetadata.IMetadata/metatype receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.78)) fixture (std.native.Base/struct target (quote Fixture78) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.imetadata.IMetadata))) _ (std.native.Base/extend target fixture protocol {(quote metatype) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture78))) receiver (constructor)] (std.protocol.imetadata.IMetadata/metatype receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-imetadata-metatype
     :program (std.protocol.imetadata.IMetadata/metatype)
@@ -818,7 +911,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.imetadata.IMetadata)))] (std.protocol.imetadata.IMetadata/metatype receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-inamespaced-name
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.69)) fixture (std.native.Base/struct target (quote Fixture69) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inamespaced.INamespaced))) _ (std.native.Base/extend target fixture protocol {(quote name) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture69))) receiver (constructor)] (std.protocol.inamespaced.INamespaced/name receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.79)) fixture (std.native.Base/struct target (quote Fixture79) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inamespaced.INamespaced))) _ (std.native.Base/extend target fixture protocol {(quote name) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture79))) receiver (constructor)] (std.protocol.inamespaced.INamespaced/name receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-inamespaced-name
     :program (std.protocol.inamespaced.INamespaced/name)
@@ -827,7 +920,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inamespaced.INamespaced)))] (std.protocol.inamespaced.INamespaced/name receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-inamespaced-namespace
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.70)) fixture (std.native.Base/struct target (quote Fixture70) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inamespaced.INamespaced))) _ (std.native.Base/extend target fixture protocol {(quote namespace) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture70))) receiver (constructor)] (std.protocol.inamespaced.INamespaced/namespace receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.80)) fixture (std.native.Base/struct target (quote Fixture80) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inamespaced.INamespaced))) _ (std.native.Base/extend target fixture protocol {(quote namespace) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture80))) receiver (constructor)] (std.protocol.inamespaced.INamespaced/namespace receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-inamespaced-namespace
     :program (std.protocol.inamespaced.INamespaced/namespace)
@@ -836,7 +929,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inamespaced.INamespaced)))] (std.protocol.inamespaced.INamespaced/namespace receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-inth-nth
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.71)) fixture (std.native.Base/struct target (quote Fixture71) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inth.INth))) _ (std.native.Base/extend target fixture protocol {(quote nth) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture71))) receiver (constructor)] (std.protocol.inth.INth/nth receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.81)) fixture (std.native.Base/struct target (quote Fixture81) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inth.INth))) _ (std.native.Base/extend target fixture protocol {(quote nth) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture81))) receiver (constructor)] (std.protocol.inth.INth/nth receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-inth-nth
     :program (std.protocol.inth.INth/nth)
@@ -845,7 +938,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.inth.INth)))] (std.protocol.inth.INth/nth receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iobjtype-meta
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.72)) fixture (std.native.Base/struct target (quote Fixture72) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iobjtype.IObjType))) _ (std.native.Base/extend target fixture protocol {(quote meta) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture72))) receiver (constructor)] (std.protocol.iobjtype.IObjType/meta receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.82)) fixture (std.native.Base/struct target (quote Fixture82) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iobjtype.IObjType))) _ (std.native.Base/extend target fixture protocol {(quote meta) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture82))) receiver (constructor)] (std.protocol.iobjtype.IObjType/meta receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iobjtype-meta
     :program (std.protocol.iobjtype.IObjType/meta)
@@ -854,7 +947,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iobjtype.IObjType)))] (std.protocol.iobjtype.IObjType/meta receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iobjtype-with-meta
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.73)) fixture (std.native.Base/struct target (quote Fixture73) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iobjtype.IObjType))) _ (std.native.Base/extend target fixture protocol {(quote with-meta) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture73))) receiver (constructor)] (std.protocol.iobjtype.IObjType/with-meta receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.83)) fixture (std.native.Base/struct target (quote Fixture83) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iobjtype.IObjType))) _ (std.native.Base/extend target fixture protocol {(quote with-meta) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture83))) receiver (constructor)] (std.protocol.iobjtype.IObjType/with-meta receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iobjtype-with-meta
     :program (std.protocol.iobjtype.IObjType/with-meta)
@@ -863,7 +956,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iobjtype.IObjType)))] (std.protocol.iobjtype.IObjType/with-meta receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipair-key
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.74)) fixture (std.native.Base/struct target (quote Fixture74) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipair.IPair))) _ (std.native.Base/extend target fixture protocol {(quote key) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture74))) receiver (constructor)] (std.protocol.ipair.IPair/key receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.84)) fixture (std.native.Base/struct target (quote Fixture84) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipair.IPair))) _ (std.native.Base/extend target fixture protocol {(quote key) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture84))) receiver (constructor)] (std.protocol.ipair.IPair/key receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipair-key
     :program (std.protocol.ipair.IPair/key)
@@ -872,7 +965,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipair.IPair)))] (std.protocol.ipair.IPair/key receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipair-value
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.75)) fixture (std.native.Base/struct target (quote Fixture75) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipair.IPair))) _ (std.native.Base/extend target fixture protocol {(quote value) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture75))) receiver (constructor)] (std.protocol.ipair.IPair/value receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.85)) fixture (std.native.Base/struct target (quote Fixture85) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipair.IPair))) _ (std.native.Base/extend target fixture protocol {(quote value) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture85))) receiver (constructor)] (std.protocol.ipair.IPair/value receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipair-value
     :program (std.protocol.ipair.IPair/value)
@@ -881,7 +974,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipair.IPair)))] (std.protocol.ipair.IPair/value receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipeekfirst-peek-first
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.76)) fixture (std.native.Base/struct target (quote Fixture76) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipeekfirst.IPeekFirst))) _ (std.native.Base/extend target fixture protocol {(quote peek-first) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture76))) receiver (constructor)] (std.protocol.ipeekfirst.IPeekFirst/peek-first receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.86)) fixture (std.native.Base/struct target (quote Fixture86) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipeekfirst.IPeekFirst))) _ (std.native.Base/extend target fixture protocol {(quote peek-first) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture86))) receiver (constructor)] (std.protocol.ipeekfirst.IPeekFirst/peek-first receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipeekfirst-peek-first
     :program (std.protocol.ipeekfirst.IPeekFirst/peek-first)
@@ -890,7 +983,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipeekfirst.IPeekFirst)))] (std.protocol.ipeekfirst.IPeekFirst/peek-first receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipeeklast-peek-last
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.77)) fixture (std.native.Base/struct target (quote Fixture77) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipeeklast.IPeekLast))) _ (std.native.Base/extend target fixture protocol {(quote peek-last) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture77))) receiver (constructor)] (std.protocol.ipeeklast.IPeekLast/peek-last receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.87)) fixture (std.native.Base/struct target (quote Fixture87) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipeeklast.IPeekLast))) _ (std.native.Base/extend target fixture protocol {(quote peek-last) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture87))) receiver (constructor)] (std.protocol.ipeeklast.IPeekLast/peek-last receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipeeklast-peek-last
     :program (std.protocol.ipeeklast.IPeekLast/peek-last)
@@ -899,7 +992,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipeeklast.IPeekLast)))] (std.protocol.ipeeklast.IPeekLast/peek-last receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipointer-ptr-context
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.78)) fixture (std.native.Base/struct target (quote Fixture78) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipointer.IPointer))) _ (std.native.Base/extend target fixture protocol {(quote ptr-context) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture78))) receiver (constructor)] (std.protocol.ipointer.IPointer/ptr-context receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.88)) fixture (std.native.Base/struct target (quote Fixture88) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipointer.IPointer))) _ (std.native.Base/extend target fixture protocol {(quote ptr-context) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture88))) receiver (constructor)] (std.protocol.ipointer.IPointer/ptr-context receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipointer-ptr-context
     :program (std.protocol.ipointer.IPointer/ptr-context)
@@ -908,7 +1001,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipointer.IPointer)))] (std.protocol.ipointer.IPointer/ptr-context receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipopfirst-pop-first
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.79)) fixture (std.native.Base/struct target (quote Fixture79) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipopfirst.IPopFirst))) _ (std.native.Base/extend target fixture protocol {(quote pop-first) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture79))) receiver (constructor)] (std.protocol.ipopfirst.IPopFirst/pop-first receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.89)) fixture (std.native.Base/struct target (quote Fixture89) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipopfirst.IPopFirst))) _ (std.native.Base/extend target fixture protocol {(quote pop-first) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture89))) receiver (constructor)] (std.protocol.ipopfirst.IPopFirst/pop-first receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipopfirst-pop-first
     :program (std.protocol.ipopfirst.IPopFirst/pop-first)
@@ -917,7 +1010,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipopfirst.IPopFirst)))] (std.protocol.ipopfirst.IPopFirst/pop-first receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipoplast-pop-last
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.80)) fixture (std.native.Base/struct target (quote Fixture80) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipoplast.IPopLast))) _ (std.native.Base/extend target fixture protocol {(quote pop-last) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture80))) receiver (constructor)] (std.protocol.ipoplast.IPopLast/pop-last receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.90)) fixture (std.native.Base/struct target (quote Fixture90) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipoplast.IPopLast))) _ (std.native.Base/extend target fixture protocol {(quote pop-last) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture90))) receiver (constructor)] (std.protocol.ipoplast.IPopLast/pop-last receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipoplast-pop-last
     :program (std.protocol.ipoplast.IPopLast/pop-last)
@@ -926,7 +1019,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipoplast.IPopLast)))] (std.protocol.ipoplast.IPopLast/pop-last receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipromise-state
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.81)) fixture (std.native.Base/struct target (quote Fixture81) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote state) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture81))) receiver (constructor)] (std.protocol.ipromise.IPromise/state receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.91)) fixture (std.native.Base/struct target (quote Fixture91) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote state) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture91))) receiver (constructor)] (std.protocol.ipromise.IPromise/state receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipromise-state
     :program (std.protocol.ipromise.IPromise/state)
@@ -935,7 +1028,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise)))] (std.protocol.ipromise.IPromise/state receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipromise-value
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.82)) fixture (std.native.Base/struct target (quote Fixture82) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote value) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture82))) receiver (constructor)] (std.protocol.ipromise.IPromise/value receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.92)) fixture (std.native.Base/struct target (quote Fixture92) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote value) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture92))) receiver (constructor)] (std.protocol.ipromise.IPromise/value receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipromise-value
     :program (std.protocol.ipromise.IPromise/value)
@@ -944,7 +1037,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise)))] (std.protocol.ipromise.IPromise/value receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipromise-then
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.83)) fixture (std.native.Base/struct target (quote Fixture83) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote then) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture83))) receiver (constructor)] (std.protocol.ipromise.IPromise/then receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.93)) fixture (std.native.Base/struct target (quote Fixture93) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote then) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture93))) receiver (constructor)] (std.protocol.ipromise.IPromise/then receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ipromise-then
     :program (std.protocol.ipromise.IPromise/then)
@@ -953,7 +1046,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise)))] (std.protocol.ipromise.IPromise/then receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipromise-catch
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.84)) fixture (std.native.Base/struct target (quote Fixture84) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote catch) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture84))) receiver (constructor)] (std.protocol.ipromise.IPromise/catch receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.94)) fixture (std.native.Base/struct target (quote Fixture94) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote catch) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture94))) receiver (constructor)] (std.protocol.ipromise.IPromise/catch receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ipromise-catch
     :program (std.protocol.ipromise.IPromise/catch)
@@ -962,7 +1055,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise)))] (std.protocol.ipromise.IPromise/catch receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipromise-finally
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.85)) fixture (std.native.Base/struct target (quote Fixture85) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote finally) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture85))) receiver (constructor)] (std.protocol.ipromise.IPromise/finally receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.95)) fixture (std.native.Base/struct target (quote Fixture95) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote finally) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture95))) receiver (constructor)] (std.protocol.ipromise.IPromise/finally receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ipromise-finally
     :program (std.protocol.ipromise.IPromise/finally)
@@ -971,7 +1064,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise)))] (std.protocol.ipromise.IPromise/finally receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipromise-cancel
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.86)) fixture (std.native.Base/struct target (quote Fixture86) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote cancel) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture86))) receiver (constructor)] (std.protocol.ipromise.IPromise/cancel receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.96)) fixture (std.native.Base/struct target (quote Fixture96) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise))) _ (std.native.Base/extend target fixture protocol {(quote cancel) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture96))) receiver (constructor)] (std.protocol.ipromise.IPromise/cancel receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ipromise-cancel
     :program (std.protocol.ipromise.IPromise/cancel)
@@ -980,7 +1073,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipromise.IPromise)))] (std.protocol.ipromise.IPromise/cancel receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipushfirst-push-first
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.87)) fixture (std.native.Base/struct target (quote Fixture87) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipushfirst.IPushFirst))) _ (std.native.Base/extend target fixture protocol {(quote push-first) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture87))) receiver (constructor)] (std.protocol.ipushfirst.IPushFirst/push-first receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.97)) fixture (std.native.Base/struct target (quote Fixture97) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipushfirst.IPushFirst))) _ (std.native.Base/extend target fixture protocol {(quote push-first) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture97))) receiver (constructor)] (std.protocol.ipushfirst.IPushFirst/push-first receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ipushfirst-push-first
     :program (std.protocol.ipushfirst.IPushFirst/push-first)
@@ -989,7 +1082,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipushfirst.IPushFirst)))] (std.protocol.ipushfirst.IPushFirst/push-first receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ipushlast-push-last
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.88)) fixture (std.native.Base/struct target (quote Fixture88) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipushlast.IPushLast))) _ (std.native.Base/extend target fixture protocol {(quote push-last) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture88))) receiver (constructor)] (std.protocol.ipushlast.IPushLast/push-last receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.98)) fixture (std.native.Base/struct target (quote Fixture98) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipushlast.IPushLast))) _ (std.native.Base/extend target fixture protocol {(quote push-last) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture98))) receiver (constructor)] (std.protocol.ipushlast.IPushLast/push-last receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ipushlast-push-last
     :program (std.protocol.ipushlast.IPushLast/push-last)
@@ -998,7 +1091,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ipushlast.IPushLast)))] (std.protocol.ipushlast.IPushLast/push-last receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-irealize-realized?
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.89)) fixture (std.native.Base/struct target (quote Fixture89) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.irealize.IRealize))) _ (std.native.Base/extend target fixture protocol {(quote realized?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture89))) receiver (constructor)] (std.protocol.irealize.IRealize/realized? receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.99)) fixture (std.native.Base/struct target (quote Fixture99) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.irealize.IRealize))) _ (std.native.Base/extend target fixture protocol {(quote realized?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture99))) receiver (constructor)] (std.protocol.irealize.IRealize/realized? receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-irealize-realized?
     :program (std.protocol.irealize.IRealize/realized?)
@@ -1007,7 +1100,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.irealize.IRealize)))] (std.protocol.irealize.IRealize/realized? receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-irealize-realize
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.90)) fixture (std.native.Base/struct target (quote Fixture90) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.irealize.IRealize))) _ (std.native.Base/extend target fixture protocol {(quote realize) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture90))) receiver (constructor)] (std.protocol.irealize.IRealize/realize receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.100)) fixture (std.native.Base/struct target (quote Fixture100) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.irealize.IRealize))) _ (std.native.Base/extend target fixture protocol {(quote realize) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture100))) receiver (constructor)] (std.protocol.irealize.IRealize/realize receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-irealize-realize
     :program (std.protocol.irealize.IRealize/realize)
@@ -1016,7 +1109,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.irealize.IRealize)))] (std.protocol.irealize.IRealize/realize receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ireduce-reduce
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.91)) fixture (std.native.Base/struct target (quote Fixture91) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireduce.IReduce))) _ (std.native.Base/extend target fixture protocol {(quote reduce) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture91))) receiver (constructor)] (std.protocol.ireduce.IReduce/reduce receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.101)) fixture (std.native.Base/struct target (quote Fixture101) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireduce.IReduce))) _ (std.native.Base/extend target fixture protocol {(quote reduce) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture101))) receiver (constructor)] (std.protocol.ireduce.IReduce/reduce receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ireduce-reduce
     :program (std.protocol.ireduce.IReduce/reduce)
@@ -1025,10 +1118,10 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireduce.IReduce)))] (std.protocol.ireduce.IReduce/reduce receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-variadic-ireduce-reduce
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.91)) fixture (std.native.Base/struct target (quote Fixture91) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireduce.IReduce))) _ (std.native.Base/extend target fixture protocol {(quote reduce) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture91))) receiver (constructor)] (std.protocol.ireduce.IReduce/reduce receiver nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.101)) fixture (std.native.Base/struct target (quote Fixture101) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireduce.IReduce))) _ (std.native.Base/extend target fixture protocol {(quote reduce) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture101))) receiver (constructor)] (std.protocol.ireduce.IReduce/reduce receiver nil nil))
     :expect {:display "3"}}
    {:id :protocol-functional-ireset-reset
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.92)) fixture (std.native.Base/struct target (quote Fixture92) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireset.IReset))) _ (std.native.Base/extend target fixture protocol {(quote reset) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture92))) receiver (constructor)] (std.protocol.ireset.IReset/reset receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.102)) fixture (std.native.Base/struct target (quote Fixture102) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireset.IReset))) _ (std.native.Base/extend target fixture protocol {(quote reset) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture102))) receiver (constructor)] (std.protocol.ireset.IReset/reset receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ireset-reset
     :program (std.protocol.ireset.IReset/reset)
@@ -1037,7 +1130,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ireset.IReset)))] (std.protocol.ireset.IReset/reset receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-context-set
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.93)) fixture (std.native.Base/struct target (quote Fixture93) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-set) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture93))) receiver (constructor)] (std.protocol.ispace.ISpace/context-set receiver nil nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.103)) fixture (std.native.Base/struct target (quote Fixture103) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-set) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture103))) receiver (constructor)] (std.protocol.ispace.ISpace/context-set receiver nil nil nil))
     :expect {:display "4"}}
    {:id :protocol-arity-ispace-context-set
     :program (std.protocol.ispace.ISpace/context-set)
@@ -1046,7 +1139,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/context-set receiver nil nil nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-context-unset
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.94)) fixture (std.native.Base/struct target (quote Fixture94) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-unset) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture94))) receiver (constructor)] (std.protocol.ispace.ISpace/context-unset receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.104)) fixture (std.native.Base/struct target (quote Fixture104) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-unset) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture104))) receiver (constructor)] (std.protocol.ispace.ISpace/context-unset receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-context-unset
     :program (std.protocol.ispace.ISpace/context-unset)
@@ -1055,7 +1148,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/context-unset receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-context-list
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.95)) fixture (std.native.Base/struct target (quote Fixture95) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-list) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture95))) receiver (constructor)] (std.protocol.ispace.ISpace/context-list receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.105)) fixture (std.native.Base/struct target (quote Fixture105) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-list) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture105))) receiver (constructor)] (std.protocol.ispace.ISpace/context-list receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ispace-context-list
     :program (std.protocol.ispace.ISpace/context-list)
@@ -1064,7 +1157,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/context-list receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-context-get
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.96)) fixture (std.native.Base/struct target (quote Fixture96) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-get) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture96))) receiver (constructor)] (std.protocol.ispace.ISpace/context-get receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.106)) fixture (std.native.Base/struct target (quote Fixture106) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote context-get) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture106))) receiver (constructor)] (std.protocol.ispace.ISpace/context-get receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-context-get
     :program (std.protocol.ispace.ISpace/context-get)
@@ -1073,7 +1166,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/context-get receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-rt-active
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.97)) fixture (std.native.Base/struct target (quote Fixture97) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-active) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture97))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-active receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.107)) fixture (std.native.Base/struct target (quote Fixture107) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-active) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture107))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-active receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-ispace-rt-active
     :program (std.protocol.ispace.ISpace/rt-active)
@@ -1082,7 +1175,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/rt-active receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-rt-get
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.98)) fixture (std.native.Base/struct target (quote Fixture98) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-get) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture98))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-get receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.108)) fixture (std.native.Base/struct target (quote Fixture108) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-get) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture108))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-get receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-rt-get
     :program (std.protocol.ispace.ISpace/rt-get)
@@ -1091,7 +1184,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/rt-get receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-rt-start
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.99)) fixture (std.native.Base/struct target (quote Fixture99) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-start) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture99))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-start receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.109)) fixture (std.native.Base/struct target (quote Fixture109) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-start) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture109))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-start receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-rt-start
     :program (std.protocol.ispace.ISpace/rt-start)
@@ -1100,7 +1193,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/rt-start receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-rt-started?
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.100)) fixture (std.native.Base/struct target (quote Fixture100) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-started?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture100))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-started? receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.110)) fixture (std.native.Base/struct target (quote Fixture110) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-started?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture110))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-started? receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-rt-started?
     :program (std.protocol.ispace.ISpace/rt-started?)
@@ -1109,7 +1202,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/rt-started? receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-rt-stopped?
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.101)) fixture (std.native.Base/struct target (quote Fixture101) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-stopped?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture101))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-stopped? receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.111)) fixture (std.native.Base/struct target (quote Fixture111) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-stopped?) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture111))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-stopped? receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-rt-stopped?
     :program (std.protocol.ispace.ISpace/rt-stopped?)
@@ -1118,7 +1211,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/rt-stopped? receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-ispace-rt-stop
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.102)) fixture (std.native.Base/struct target (quote Fixture102) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-stop) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture102))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-stop receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.112)) fixture (std.native.Base/struct target (quote Fixture112) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace))) _ (std.native.Base/extend target fixture protocol {(quote rt-stop) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture112))) receiver (constructor)] (std.protocol.ispace.ISpace/rt-stop receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-ispace-rt-stop
     :program (std.protocol.ispace.ISpace/rt-stop)
@@ -1127,7 +1220,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ispace.ISpace)))] (std.protocol.ispace.ISpace/rt-stop receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-istream-next
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.103)) fixture (std.native.Base/struct target (quote Fixture103) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.istream.IStream))) _ (std.native.Base/extend target fixture protocol {(quote next) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture103))) receiver (constructor)] (std.protocol.istream.IStream/next receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.113)) fixture (std.native.Base/struct target (quote Fixture113) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.istream.IStream))) _ (std.native.Base/extend target fixture protocol {(quote next) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture113))) receiver (constructor)] (std.protocol.istream.IStream/next receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-istream-next
     :program (std.protocol.istream.IStream/next)
@@ -1136,7 +1229,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.istream.IStream)))] (std.protocol.istream.IStream/next receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-itomutable-to-mutable
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.104)) fixture (std.native.Base/struct target (quote Fixture104) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.itomutable.IToMutable))) _ (std.native.Base/extend target fixture protocol {(quote to-mutable) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture104))) receiver (constructor)] (std.protocol.itomutable.IToMutable/to-mutable receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.114)) fixture (std.native.Base/struct target (quote Fixture114) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.itomutable.IToMutable))) _ (std.native.Base/extend target fixture protocol {(quote to-mutable) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture114))) receiver (constructor)] (std.protocol.itomutable.IToMutable/to-mutable receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-itomutable-to-mutable
     :program (std.protocol.itomutable.IToMutable/to-mutable)
@@ -1145,7 +1238,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.itomutable.IToMutable)))] (std.protocol.itomutable.IToMutable/to-mutable receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-itopersistent-to-persistent
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.105)) fixture (std.native.Base/struct target (quote Fixture105) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.itopersistent.IToPersistent))) _ (std.native.Base/extend target fixture protocol {(quote to-persistent) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture105))) receiver (constructor)] (std.protocol.itopersistent.IToPersistent/to-persistent receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.115)) fixture (std.native.Base/struct target (quote Fixture115) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.itopersistent.IToPersistent))) _ (std.native.Base/extend target fixture protocol {(quote to-persistent) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture115))) receiver (constructor)] (std.protocol.itopersistent.IToPersistent/to-persistent receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-itopersistent-to-persistent
     :program (std.protocol.itopersistent.IToPersistent/to-persistent)
@@ -1154,7 +1247,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.itopersistent.IToPersistent)))] (std.protocol.itopersistent.IToPersistent/to-persistent receiver))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iwatch-watch-add
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.106)) fixture (std.native.Base/struct target (quote Fixture106) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch))) _ (std.native.Base/extend target fixture protocol {(quote watch-add) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture106))) receiver (constructor)] (std.protocol.iwatch.IWatch/watch-add receiver nil nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.116)) fixture (std.native.Base/struct target (quote Fixture116) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch))) _ (std.native.Base/extend target fixture protocol {(quote watch-add) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture116))) receiver (constructor)] (std.protocol.iwatch.IWatch/watch-add receiver nil nil))
     :expect {:display "3"}}
    {:id :protocol-arity-iwatch-watch-add
     :program (std.protocol.iwatch.IWatch/watch-add)
@@ -1163,7 +1256,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch)))] (std.protocol.iwatch.IWatch/watch-add receiver nil nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iwatch-watch-remove
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.107)) fixture (std.native.Base/struct target (quote Fixture107) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch))) _ (std.native.Base/extend target fixture protocol {(quote watch-remove) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture107))) receiver (constructor)] (std.protocol.iwatch.IWatch/watch-remove receiver nil))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.117)) fixture (std.native.Base/struct target (quote Fixture117) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch))) _ (std.native.Base/extend target fixture protocol {(quote watch-remove) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture117))) receiver (constructor)] (std.protocol.iwatch.IWatch/watch-remove receiver nil))
     :expect {:display "2"}}
    {:id :protocol-arity-iwatch-watch-remove
     :program (std.protocol.iwatch.IWatch/watch-remove)
@@ -1172,7 +1265,7 @@
     :program (let [receiver (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch)))] (std.protocol.iwatch.IWatch/watch-remove receiver nil))
     :expect {:error :protocol/unsupported-receiver}}
    {:id :protocol-functional-iwatch-watch-list
-    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.108)) fixture (std.native.Base/struct target (quote Fixture108) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch))) _ (std.native.Base/extend target fixture protocol {(quote watch-list) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture108))) receiver (constructor)] (std.protocol.iwatch.IWatch/watch-list receiver))
+    :program (let [target (std.native.Base/namespace (quote hnc.protocol.functional.118)) fixture (std.native.Base/struct target (quote Fixture118) (std.native.Base/vector)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.iwatch.IWatch))) _ (std.native.Base/extend target fixture protocol {(quote watch-list) (fn [& values] (std.protocol.icount.ICount/count values))}) constructor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve target (quote ->Fixture118))) receiver (constructor)] (std.protocol.iwatch.IWatch/watch-list receiver))
     :expect {:display "1"}}
    {:id :protocol-arity-iwatch-watch-list
     :program (std.protocol.iwatch.IWatch/watch-list)

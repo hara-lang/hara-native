@@ -584,7 +584,7 @@ fn machine_catches_hand_built_throw() {
     validate(&program).expect("hand-built handler program validates");
     let value = super::machine::execute_program(std::rc::Rc::new(program))
         .expect("catch handles the throw");
-    assert_eq!(value.display(), "#error[\"failed\" 41]");
+    assert_eq!(value.display(), "#ex[\"failed\" 41]");
 }
 
 #[test]
@@ -598,7 +598,7 @@ fn machine_uncaught_throw_reports_original_message() {
     validate(&program).expect("validates");
     let error = super::machine::execute_program(std::rc::Rc::new(program))
         .expect_err("uncaught throw fails");
-    assert_eq!(error.message, "thrown: #error[\"failed\" nil]");
+    assert_eq!(error.message, "thrown: #ex[\"failed\" nil]");
     assert_eq!(error.instruction, 1);
 }
 
@@ -678,7 +678,7 @@ fn disassembler_renders_try_table() {
     let expected = "\
 == program: 1 constants, 1 functions, entry 0 ==
 == fn 0 <anonymous> (arity=0, captures=0, locals=1, max_stack=1) ==
-0000  Constant 0  ; #error[\"failed\" 41]
+0000  Constant 0  ; #ex[\"failed\" 41]
 0001  Throw
 0002  LoadLocal 0
 0003  Return

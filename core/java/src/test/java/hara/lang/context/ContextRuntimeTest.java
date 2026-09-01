@@ -8,7 +8,9 @@ import static org.junit.Assert.assertTrue;
 import hara.lang.data.Pointer;
 import hara.lang.protocol.IComponent;
 import hara.lang.protocol.IContext;
+import hara.lang.protocol.IContextEval;
 import hara.lang.protocol.IMetadata;
+import hara.lang.protocol.IPointer;
 import hara.lang.resource.ResourceMode;
 import hara.lang.resource.ResourceRegistry;
 import hara.lang.resource.ResourceSpec;
@@ -81,10 +83,10 @@ public class ContextRuntimeTest {
         pointer);
     assertEquals(42, pointer.lookup(hara.lang.data.Keyword.create("value")));
     assertEquals(1, pointer.count());
-    assertEquals(5, pointer.applyIn(runtime, new Object[] {1, 2, 3}));
+    assertEquals(3, pointer.applyIn(runtime, new Object[] {1, 2, 3}));
   }
 
-  private static final class CountingRuntime implements IContext, IComponent {
+  private static final class CountingRuntime implements IContext, IContextEval, IComponent {
     int starts;
     int stops;
     boolean started;
@@ -95,9 +97,54 @@ public class ContextRuntimeTest {
     }
 
     @Override
+    public Object evaluate(Object request, Object options) {
+      return request;
+    }
+
+    @Override
+    public Object evaluateRaw(Object request, Object options) {
+      return request;
+    }
+
+    @Override
+    public Object evalPtr(IPointer pointer, Object arguments, Object options) {
+      return arguments;
+    }
+
+    @Override
+    public Object evalAwaitPtr(IPointer pointer, Object arguments, Object options) {
+      return arguments;
+    }
+
+    @Override
+    public Object tagsPtr(IPointer pointer) {
+      return new Object[0];
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
-    public Object derefPtr(hara.lang.protocol.IPointer pointer) {
+    public Object derefPtr(IPointer pointer) {
       return ((hara.lang.protocol.ILookup<Object, Object>) pointer).lookup("value");
+    }
+
+    @Override
+    public Object displayPtr(IPointer pointer) {
+      return pointer;
+    }
+
+    @Override
+    public Object invokePtr(IPointer pointer, Object arguments) {
+      return ((Object[]) arguments).length;
+    }
+
+    @Override
+    public Object transformInPtr(IPointer pointer, Object arguments) {
+      return arguments;
+    }
+
+    @Override
+    public Object transformOutPtr(IPointer pointer, Object value) {
+      return value;
     }
 
     @Override

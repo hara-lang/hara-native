@@ -37,9 +37,9 @@ target_call(target, slots, arity, result-mode) -> value
 `operation_declarations()` in `whole_wasm/bridge.rs` is the declaration
 inventory. It is built from the native declaration metadata and the protocol
 methods explicitly marked as HNW0-supported; it owns the target symbol, kind,
-arity, and artifact-local ID. The current experimental HNW0 ABI is 0 and its seven-entry
+arity, and artifact-local ID. The current experimental HNW0 ABI is 0 and its eight-entry
 operation registry has the fixed digest
-`d8b2cd6097d17600d5a534186d27ea2744f4c8057b779b2c6d0b7f9727623e2a`.
+`174848faa965b96248af2b122a3c7731b09f5a59974b340837ff6f008a7d9525`.
 `target_table()` writes that declaration into HNW0; artifact decoding validates
 the table before Wasm instantiation; both the Wasmtime and browser hosts
 dispatch from the decoded descriptor. Code generation and representation

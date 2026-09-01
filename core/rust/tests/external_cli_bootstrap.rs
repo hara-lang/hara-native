@@ -33,7 +33,7 @@ fn boots_external_project_without_repository_or_lite_project() {
     .unwrap();
     fs::write(
         project.join("src/tool/cli/main.hal"),
-        "(ns tool.cli.main)\n\n(defn main [& _] (throw (ex-info \"consumer CLI shadowed Hara\" {})))\n",
+        "(ns tool.cli.main)\n\n(defn main [& _] (throw (ex :generic {} :ex/message \"consumer CLI shadowed Hara\")))\n",
     )
     .unwrap();
 

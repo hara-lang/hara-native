@@ -466,10 +466,19 @@ fn dynamic_operation<'a>(
         return None;
     }
     match resolve_existing_symbol(runtime, module, operator) {
-        Some(resolved) if resolved == format!("std.foundation/{operation}") => Some(operation),
+        Some(resolved)
+            if resolved == format!("std.foundation/{operation}")
+                || resolved == format!("std.native.Base/{operation}") =>
+        {
+            Some(operation)
+        }
         Some(_) => None,
         None if !operator.contains('/') => Some(operation),
-        None if operator == format!("std.foundation/{operation}") => Some(operation),
+        None if operator == format!("std.foundation/{operation}")
+            || operator == format!("std.native.Base/{operation}") =>
+        {
+            Some(operation)
+        }
         None => None,
     }
 }

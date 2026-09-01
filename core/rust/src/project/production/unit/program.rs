@@ -175,12 +175,16 @@ fn classify_native_edge(name: &str, analysis: &mut UnitAnalysis) {
         analysis.native_types.insert(namespace.to_owned());
     }
     if namespace.starts_with("std.protocol.") {
-        analysis.native_roots.protocols.insert(namespace.to_owned());
+        let protocol = namespace
+            .rsplit_once('.')
+            .map(|(protocol, _)| protocol)
+            .unwrap_or(namespace);
+        analysis.native_roots.protocols.insert(protocol.to_owned());
         analysis
             .native_roots
             .protocol_methods
             .insert(name.to_owned());
-        analysis.native_protocols.insert(namespace.to_owned());
+        analysis.native_protocols.insert(protocol.to_owned());
     }
 }
 

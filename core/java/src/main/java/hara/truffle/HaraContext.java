@@ -451,7 +451,7 @@ public final class HaraContext {
       // before child modules so every public source definition is interned;
       // the HBX inventory selects modules but never gates individual Vars.
       requiredNamespace(FOUNDATION_NAMESPACE);
-      if (bytecodeLibrary.available()) {
+      if (bytecodeLibrary.provides(FOUNDATION_NAMESPACE)) {
         for (HbxBundleLibrary.Module module : bytecodeLibrary.eagerModules()) {
           requiredNamespace(module.namespace());
         }
@@ -1028,6 +1028,9 @@ public final class HaraContext {
         Object[] callArguments = new Object[arguments.length + 1];
         callArguments[0] = receiver;
         System.arraycopy(arguments, 0, callArguments, 1, arguments.length);
+        if (function instanceof HbcMachine.HbcClosure closure) {
+          return HaraBox.unwrap(closure.invokeInterpreted(callArguments));
+        }
         return invokeCallable(function, callArguments);
       }
     };
@@ -2087,7 +2090,7 @@ public final class HaraContext {
     String previousNamespace = currentNamespace.name();
     HaraVar.Origin previousOrigin = definitionOrigin;
     try {
-      for (String dependency : module.descriptor().dependencies()) {
+      for (String dependency : bytecodeLibrary.dependencyNamespaces(module)) {
         if (!dependency.equals(target) && requiredNamespace(dependency) == null) {
           throw new HaraException(
               "Cannot require HBX0 dependency " + dependency + " for " + target);
@@ -2582,6 +2585,55 @@ public final class HaraContext {
       return operation.get();
     } catch (RuntimeException error) {
       restore(snapshot);
+      throw error;
+    }
+  }
+
+  /**
+   * Installs a caller-supplied, verified HBX0 namespace bundle.
+   *
+   * <p>The native host never discovers or embeds a default bundle. Embeddings
+   * must explicitly choose the package bytes they authorize. Installation
+   * indexes lazy namespaces and evaluates eager modules atomically; a failed
+   * eager module restores both the runtime and the HBX index.
+   */
+  @TruffleBoundary
+  public synchronized void installBytecodeBundle(byte[] bundle) {
+    if (bundle == null) throw new HaraException("HBX0 bundle bytes must not be null");
+    HbxBundleLibrary.Installation installation = bytecodeLibrary.prepare(bundle);
+    for (HbxBundleLibrary.Module module : installation.namespaces().values()) {
+      String namespace = module.namespace();
+      if (namespace.startsWith("std.native.") || INTRINSIC_NAMESPACE.equals(namespace)) {
+        throw new HaraException("HBX0 bundle cannot replace host namespace: " + namespace);
+      }
+      if (bytecodeLibrary.provides(namespace)) {
+        throw new HaraException("HBX0 namespace is already installed: " + namespace);
+      }
+      NamespaceLoadState state = namespaceStates.get(namespace);
+      if (state == NamespaceLoadState.LOADING || state == NamespaceLoadState.LOADED) {
+        throw new HaraException("HBX0 namespace is already loaded: " + namespace);
+      }
+    }
+
+    ContextSnapshot runtimeBefore = snapshot();
+    HbxBundleLibrary.Snapshot bytecodeBefore = bytecodeLibrary.snapshot();
+    Map<String, String> failuresBefore = new LinkedHashMap<>(namespaceFailures);
+    try {
+      bytecodeLibrary.install(installation);
+      for (String namespace : installation.namespaces().keySet()) {
+        namespaceStates.put(namespace, NamespaceLoadState.UNLOADED);
+        namespaceFailures.remove(namespace);
+      }
+      for (HbxBundleLibrary.Module module : installation.eagerModules()) {
+        if (requiredNamespace(module.namespace()) == null) {
+          throw new HaraException("Unable to load eager HBX0 namespace: " + module.namespace());
+        }
+      }
+    } catch (RuntimeException error) {
+      bytecodeLibrary.restore(bytecodeBefore);
+      restore(runtimeBefore);
+      namespaceFailures.clear();
+      namespaceFailures.putAll(failuresBefore);
       throw error;
     }
   }
@@ -5397,6 +5449,9 @@ public final class HaraContext {
         "read-forms",
         new VariadicBuiltin("std.native.Edn/read-forms", this::readForms));
     edn.define(
+        "read-forms-spanned",
+        new VariadicBuiltin("std.native.Edn/read-forms-spanned", this::readFormsSpanned));
+    edn.define(
         "read",
         new UnaryBuiltin(
             "std.native.Edn/read",
@@ -7656,6 +7711,10 @@ public final class HaraContext {
     Object[] arguments = new Object[values.length - 1];
     System.arraycopy(values, 1, arguments, 0, arguments.length);
     if (receiver instanceof hara.lang.data.Pointer pointer) {
+      if ("IDisplay".equals(protocolName) && "display".equals(methodName)) {
+        requireMethodArity("IDisplay/display", arguments, 0);
+        return pointerDisplay(pointer);
+      }
       if ("IDeref".equals(protocolName) && "deref".equals(methodName)) {
         requireMethodArity("IDeref/deref", arguments, 0);
         return pointerDeref(pointer);
@@ -7667,19 +7726,17 @@ public final class HaraContext {
         }
         if ("apply-in".equals(methodName)) {
           requireMethodArity("IApplicable/apply-in", arguments, 2);
-          return pointerContextCall(
-              pointer,
-              HaraBox.unwrap(arguments[0]),
-              "pointer/invoke",
-              sequentialValues(arguments[1], "IApplicable/apply-in"));
+          sequentialValues(arguments[1], "IApplicable/apply-in");
+          return pointerInvokePtr(pointer, HaraBox.unwrap(arguments[0]), HaraBox.unwrap(arguments[1]));
         }
         if ("transform-in".equals(methodName)) {
           requireMethodArity("IApplicable/transform-in", arguments, 2);
-          return arguments[1];
+          return pointerTransformIn(
+              pointer, HaraBox.unwrap(arguments[0]), HaraBox.unwrap(arguments[1]));
         }
         if ("transform-out".equals(methodName)) {
           requireMethodArity("IApplicable/transform-out", arguments, 3);
-          return arguments[2];
+          return pointerTransformOut(pointer, HaraBox.unwrap(arguments[0]), HaraBox.unwrap(arguments[2]));
         }
       }
       if ("IInvokeIn".equals(protocolName) && "invoke-in".equals(methodName)) {
@@ -7688,8 +7745,8 @@ public final class HaraContext {
         }
         Object[] invokeArguments = new Object[arguments.length - 1];
         System.arraycopy(arguments, 1, invokeArguments, 0, invokeArguments.length);
-        return pointerContextCall(
-            pointer, HaraBox.unwrap(arguments[0]), "pointer/invoke", invokeArguments);
+        return pointerInvokePtr(
+            pointer, HaraBox.unwrap(arguments[0]), pointerArguments(invokeArguments));
       }
     }
     return protocol.invoke(methodName, receiver, arguments);
@@ -7724,17 +7781,62 @@ public final class HaraContext {
   }
 
   private Object pointerDeref(hara.lang.data.Pointer pointer) {
-    return pointerContextCall(pointer, pointerDefault(pointer), "pointer/deref", new Object[0]);
+    return pointerContextEval(pointer, pointerDefault(pointer), "deref-ptr", new Object[0]);
   }
 
   private Object pointerContextCall(
-      hara.lang.data.Pointer pointer, Object runtime, String operation, Object[] arguments) {
-    Object[] call = new Object[arguments.length + 3];
+      hara.lang.data.Pointer pointer, Object runtime, Object[] arguments) {
+    Object input = pointerTransformIn(pointer, runtime, pointerArguments(arguments));
+    Object output = pointerInvokePtr(pointer, runtime, input);
+    return pointerTransformOut(pointer, runtime, output);
+  }
+
+  private Object pointerContextEval(
+      hara.lang.data.Pointer pointer, Object runtime, String method, Object[] arguments) {
+    Object[] call = new Object[arguments.length + 2];
     call[0] = runtime;
-    call[1] = Keyword.create(operation);
-    call[2] = pointer;
-    System.arraycopy(arguments, 0, call, 3, arguments.length);
-    return protocolCall("IContext", "call", call);
+    call[1] = pointer;
+    System.arraycopy(arguments, 0, call, 2, arguments.length);
+    return protocolCall("IContextEval", method, call);
+  }
+
+  private Object pointerInvokePtr(
+      hara.lang.data.Pointer pointer, Object runtime, Object arguments) {
+    return pointerContextEval(pointer, runtime, "invoke-ptr", new Object[] {arguments});
+  }
+
+  private Object pointerTransformIn(
+      hara.lang.data.Pointer pointer, Object runtime, Object arguments) {
+    return pointerContextEval(pointer, runtime, "transform-in-ptr", new Object[] {arguments});
+  }
+
+  private Object pointerTransformOut(
+      hara.lang.data.Pointer pointer, Object runtime, Object value) {
+    return pointerContextEval(pointer, runtime, "transform-out-ptr", new Object[] {value});
+  }
+
+  private Object pointerArguments(Object[] arguments) {
+    return hara.lang.data.Vector.Standard.from(null, arguments);
+  }
+
+  private Object pointerDisplay(hara.lang.data.Pointer pointer) {
+    String fallback = pointer.display();
+    try {
+      Object runtime = pointerDefault(pointer);
+      Object tagsValue = HaraBox.unwrap(pointerContextEval(pointer, runtime, "tags-ptr", new Object[0]));
+      if (!(tagsValue instanceof ILinearType<?> tags)) {
+        throw new HaraException("IContextEval/tags-ptr must return a sequential value");
+      }
+      Object[] path = new Object[(int) tags.count() + 1];
+      path[0] = pointer.context();
+      for (int index = 0; index < tags.count(); index++) path[index + 1] = tags.nth(index);
+      Object display = HaraBox.unwrap(pointerContextEval(pointer, runtime, "display-ptr", new Object[0]));
+      return "!" + hara.lang.base.G.display(hara.lang.data.Vector.Standard.from(null, path))
+          + "\n"
+          + displayText(display);
+    } catch (RuntimeException error) {
+      return fallback;
+    }
   }
 
   public Object invokeProtocol(String protocolName, String methodName, Object... values) {
@@ -7887,6 +7989,53 @@ public final class HaraContext {
       throw new HaraException(
           "Unable to read Hara forms: " + value + " (" + error.getMessage() + ")");
     }
+  }
+
+  @TruffleBoundary
+  private Object readFormsSpanned(Object[] values) {
+    requireMethodArity("read-forms-spanned", values, 1);
+    Object value = HaraBox.unwrap(values[0]);
+    if (!(value instanceof String source)) {
+      throw new HaraException("read-forms-spanned expects one source string");
+    }
+    try {
+      java.util.List<Parser.LispReader.SpannedForm> forms =
+          Parser.LispReader.readSpannedForms(source);
+      Object[] valuesOut =
+          forms.stream().map(form -> spannedFormValue(form, source)).toArray();
+      return hara.lang.data.Vector.Standard.from(null, valuesOut);
+    } catch (HaraException error) {
+      throw error;
+    } catch (RuntimeException error) {
+      throw new HaraException("read-forms-spanned failed: " + error.getMessage());
+    }
+  }
+
+  private Object spannedFormValue(Parser.LispReader.SpannedForm form, String source) {
+    Object[] children =
+        form.children().stream().map(child -> spannedFormValue(child, source)).toArray();
+    return hara.lang.data.Map.Standard.from(
+        null,
+        Keyword.create("form"),
+        form.form(),
+        Keyword.create("start"),
+        spannedPositionValue(form.start(), source),
+        Keyword.create("end"),
+        spannedPositionValue(form.end(), source),
+        Keyword.create("children"),
+        hara.lang.data.Vector.Standard.from(null, children));
+  }
+
+  private Object spannedPositionValue(Parser.LispReader.SourcePosition position, String source) {
+    int byteOffset = source.substring(0, position.offset()).getBytes(StandardCharsets.UTF_8).length;
+    return hara.lang.data.Map.Standard.from(
+        null,
+        Keyword.create("offset"),
+        byteOffset,
+        Keyword.create("line"),
+        position.line(),
+        Keyword.create("column"),
+        position.column());
   }
 
   private String namespaceIdentifier(Object value, String operation) {
@@ -9141,7 +9290,7 @@ public final class HaraContext {
       return HaraBox.unwrap(((HbcMachine.HbcNativeCallable) function).invoke(arguments));
     }
     if (function instanceof hara.lang.data.Pointer pointer) {
-      return pointerContextCall(pointer, pointerDefault(pointer), "pointer/invoke", arguments);
+      return pointerContextCall(pointer, pointerDefault(pointer), arguments);
     }
     if (function instanceof HaraMultiFunction) {
       return HaraBox.unwrap(((HaraMultiFunction) function).invoke(arguments));

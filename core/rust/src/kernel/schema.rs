@@ -1046,12 +1046,12 @@ mod tests {
                 mutable: true,
                 fields: vec![
                     SchemaField {
-                        name: Form::Symbol("position".into()),
+                        name: Form::Keyword("position".into()),
                         properties: None,
                         value_type: SchemaType::Primitive("int".into()),
                     },
                     SchemaField {
-                        name: Form::Symbol("limit".into()),
+                        name: Form::Keyword("limit".into()),
                         properties: Some(Form::Map(vec![(
                             Form::Keyword("optional".into()),
                             Form::Bool(true),

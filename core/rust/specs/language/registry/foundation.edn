@@ -148,7 +148,7 @@
     min max min-key max-key rand-int rand-nth random-sample shuffle]
    :host-primitives
    [var-ns var-sym bound? unbound? regexp? seq? error? uuid load-string
-    ex ex-info ex-message ex-cause ex-provenance ex-class ex-native-type
+    ex ex-message ex-cause ex-provenance ex-class ex-native-type
     abs acos acosh asin asinh atan atan2 atanh
     ceil cos cosh exp floor pow sin sinh sqrt tan tanh
     quot rem parse-long parse-double nan? infinite?
@@ -240,7 +240,7 @@
 
   :root
   {:synced-both
-   [map-keys map-vals seq? ex ex-info ex-message ex-cause ex-provenance
+   [map-keys map-vals seq? ex ex-message ex-cause ex-provenance
     ex-class ex-native-type min max
     abs acos acosh asin asinh atan atan2 atanh
     ceil cos cosh exp floor pow sin sinh sqrt tan tanh
@@ -344,9 +344,11 @@
   IColl/end-string IColl/sep-string IComponent/props
   IComponent/status IComponent/started? IComponent/stopped? IComponent/start
   IComponent/stop IComponent/kill IComponent/remote? IConj/conj
-  ICons/cons IContext/call ICoroutine/status ICoroutine/resume
-  IContextLifeCycle/has-module? IContextLifeCycle/setup-module IContextLifeCycle/teardown-module IContextLifeCycle/has-pointer?
-  IContextLifeCycle/setup-pointer IContextLifeCycle/teardown-pointer ICount/count IDeref/deref
+  ICons/cons IContext/call IContext/has-ptr? IContextEval/evaluate IContextEval/evaluate-raw
+  IContextEval/eval-ptr IContextEval/eval-await-ptr IContextEval/tags-ptr IContextEval/deref-ptr
+  IContextEval/display-ptr IContextEval/invoke-ptr IContextEval/transform-in-ptr IContextEval/transform-out-ptr
+  ICoroutine/status ICoroutine/resume IContextLifeCycle/has-module? IContextLifeCycle/setup-module
+  IContextLifeCycle/teardown-module IContextLifeCycle/setup-ptr IContextLifeCycle/teardown-ptr ICount/count IDeref/deref
   IDerefTimeout/deref-timeout IDisplay/display IDissoc/dissoc IEmpty/empty
   IEquality/equality IExInfo/data IFind/find IFn/invoke
   IHash/hash IHashCached/hash-current IHashCached/hash-put
@@ -369,9 +371,11 @@
  [IApplicable/apply-default IApplicable/apply-in IApplicable/transform-in IApplicable/transform-out
   IClose/close IComponent/props IComponent/status IComponent/started?
   IComponent/stopped? IComponent/start IComponent/stop IComponent/kill
-  IComponent/remote? IContext/call ICoroutine/status ICoroutine/resume
-  IContextLifeCycle/has-module? IContextLifeCycle/setup-module IContextLifeCycle/teardown-module IContextLifeCycle/has-pointer?
-  IContextLifeCycle/setup-pointer IContextLifeCycle/teardown-pointer IDerefTimeout/deref-timeout IDisplay/display
+  IComponent/remote? IContext/call IContext/has-ptr? IContextEval/evaluate IContextEval/evaluate-raw
+  IContextEval/eval-ptr IContextEval/eval-await-ptr IContextEval/tags-ptr IContextEval/deref-ptr
+  IContextEval/display-ptr IContextEval/invoke-ptr IContextEval/transform-in-ptr IContextEval/transform-out-ptr
+  ICoroutine/status ICoroutine/resume IContextLifeCycle/has-module? IContextLifeCycle/setup-module
+  IContextLifeCycle/teardown-module IContextLifeCycle/setup-ptr IContextLifeCycle/teardown-ptr IDerefTimeout/deref-timeout IDisplay/display
   IEquality/equality IFn/invoke IHashCached/hash-current
   IHashCached/hash-put IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val
   IInvokeIn/invoke-in IIter/iter IIterator/iter-next? IIterator/iter-next
@@ -400,14 +404,14 @@
   {:dispatch IComponent/kill, :target std.lib.component/kill}
   {:dispatch IComponent/remote?, :target std.lib.component/remote?}
   {:dispatch IContext/call, :target std.lib.context/call}
+  {:dispatch IContext/has-ptr?, :target std.lib.context/has-ptr?}
   {:dispatch ICoroutine/status, :target std.foundation.coroutine/status}
   {:dispatch ICoroutine/resume, :target std.foundation.coroutine/resume}
   {:dispatch IContextLifeCycle/has-module?, :target std.lib.context/has-module?}
   {:dispatch IContextLifeCycle/setup-module, :target std.lib.context/setup-module}
   {:dispatch IContextLifeCycle/teardown-module, :target std.lib.context/teardown-module}
-  {:dispatch IContextLifeCycle/has-pointer?, :target std.lib.context/has-pointer?}
-  {:dispatch IContextLifeCycle/setup-pointer, :target std.lib.context/setup-pointer}
-  {:dispatch IContextLifeCycle/teardown-pointer, :target std.lib.context/teardown-pointer}
+  {:dispatch IContextLifeCycle/setup-ptr, :target std.lib.context/setup-ptr}
+  {:dispatch IContextLifeCycle/teardown-ptr, :target std.lib.context/teardown-ptr}
   {:dispatch IDerefTimeout/deref-timeout, :target std.foundation/deref}
   {:dispatch IDisplay/display, :target std.foundation.display/display}
   {:dispatch IEquality/equality, :target std.foundation/=}
@@ -602,6 +606,53 @@
                 :name call
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
+  {:protocol IContext :method has-ptr? :arity 2 :domain :execution-context
+   :dispatch IContext/has-ptr?
+   :foundation {:classification :direct-interface-wrapper
+                :namespace std.lib.context
+                :name has-ptr?
+                :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method evaluate :arity 3 :domain :execution-context
+   :dispatch IContextEval/evaluate
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method evaluate-raw :arity 3 :domain :execution-context
+   :dispatch IContextEval/evaluate-raw
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method eval-ptr :arity 4 :domain :execution-context
+   :dispatch IContextEval/eval-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method eval-await-ptr :arity 4 :domain :execution-context
+   :dispatch IContextEval/eval-await-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method tags-ptr :arity 2 :domain :execution-context
+   :dispatch IContextEval/tags-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method deref-ptr :arity 2 :domain :execution-context
+   :dispatch IContextEval/deref-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method display-ptr :arity 2 :domain :execution-context
+   :dispatch IContextEval/display-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method invoke-ptr :arity 3 :domain :execution-context
+   :dispatch IContextEval/invoke-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method transform-in-ptr :arity 3 :domain :execution-context
+   :dispatch IContextEval/transform-in-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
+  {:protocol IContextEval :method transform-out-ptr :arity 3 :domain :execution-context
+   :dispatch IContextEval/transform-out-ptr
+   :foundation {:classification :protocol-dispatch-only :namespace nil :name nil :status :proposed}
+   :clojure {:equivalent nil :relation :none}}
   {:protocol ICoroutine :method status :arity 1 :domain :coroutine
    :dispatch ICoroutine/status
    :foundation {:classification :direct-interface-wrapper
@@ -637,25 +688,18 @@
                 :name teardown-module
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
-  {:protocol IContextLifeCycle :method has-pointer? :arity 2 :domain :execution-context
-   :dispatch IContextLifeCycle/has-pointer?
+  {:protocol IContextLifeCycle :method setup-ptr :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/setup-ptr
    :foundation {:classification :direct-interface-wrapper
                 :namespace std.lib.context
-                :name has-pointer?
+                :name setup-ptr
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
-  {:protocol IContextLifeCycle :method setup-pointer :arity 2 :domain :execution-context
-   :dispatch IContextLifeCycle/setup-pointer
+  {:protocol IContextLifeCycle :method teardown-ptr :arity 2 :domain :execution-context
+   :dispatch IContextLifeCycle/teardown-ptr
    :foundation {:classification :direct-interface-wrapper
                 :namespace std.lib.context
-                :name setup-pointer
-                :status :proposed}
-   :clojure {:equivalent nil :relation :none}}
-  {:protocol IContextLifeCycle :method teardown-pointer :arity 2 :domain :execution-context
-   :dispatch IContextLifeCycle/teardown-pointer
-   :foundation {:classification :direct-interface-wrapper
-                :namespace std.lib.context
-                :name teardown-pointer
+                :name teardown-ptr
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
   {:protocol ICount :method count :arity 1 :domain :collection

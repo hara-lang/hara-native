@@ -170,10 +170,11 @@ pub fn hash_bytes(bytes: &[u8]) -> i32 {
     h
 }
 
-/// System hash for a long follows `BigDecimal.hashCode` at scale zero. Unlike
-/// the canonical decimal path, integer trailing zeroes remain significant.
+/// System/value hash for a long uses the canonical numeric domain. Decimal
+/// trailing zeroes are not significant: `100`, `100.0`, and `1E2` compare and
+/// hash alike.
 pub fn hash_long(n: i64) -> i32 {
-    hash_long_placement(n)
+    canonical_decimal_str_hash(&n.to_string())
 }
 
 /// CHAMP placement hash for an integral value. Java's node layout retains the

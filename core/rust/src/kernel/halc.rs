@@ -349,6 +349,27 @@ fn write_values(output: &mut Vec<u8>, values: &[Form]) {
 }
 
 #[cfg(any(test, feature = "halc-encoder"))]
+fn encoded_value(form: &Form) -> Vec<u8> {
+    let mut output = Vec::new();
+    write_value(&mut output, form);
+    output
+}
+
+#[cfg(any(test, feature = "halc-encoder"))]
+fn write_canonical_map(output: &mut Vec<u8>, entries: &[(Form, Form)]) {
+    write_count(output, entries.len() as i32);
+    let mut encoded_entries = entries
+        .iter()
+        .map(|(key, value)| (encoded_value(key), encoded_value(value)))
+        .collect::<Vec<_>>();
+    encoded_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (key, value) in encoded_entries {
+        output.extend_from_slice(&key);
+        output.extend_from_slice(&value);
+    }
+}
+
+#[cfg(any(test, feature = "halc-encoder"))]
 fn write_value(output: &mut Vec<u8>, form: &Form) {
     match form {
         Form::Metadata(metadata, value) => write_value_with_metadata(output, value, Some(metadata)),
@@ -415,12 +436,8 @@ fn write_value_with_metadata(output: &mut Vec<u8>, form: &Form, metadata: Option
             write_metadata(output, metadata);
         }
         Form::Map(entries) => {
-            output.push(ORDERED_MAP);
-            write_count(output, entries.len() as i32);
-            for (key, value) in entries {
-                write_value(output, key);
-                write_value(output, value);
-            }
+            output.push(MAP);
+            write_canonical_map(output, entries);
             write_metadata(output, metadata);
         }
         Form::Set(items) => {
@@ -888,6 +905,13 @@ mod tests {
     }
 
     #[test]
+    fn maps_use_canonical_member_order() {
+        let map_a = artifact_payload(vec![parse("{2 \"b\" 1 \"a\"}").unwrap()]);
+        let map_b = artifact_payload(vec![parse("{1 \"a\" 2 \"b\"}").unwrap()]);
+        assert_eq!(map_a, map_b);
+    }
+
+    #[test]
     fn schema_var_references_are_checked_and_namespace_canonicalized() {
         let source = "(ns demo.schema) \
                       (def Customer [:map [:id :int]]) \
@@ -1095,9 +1119,8 @@ mod tests {
 
     #[test]
     fn registry_golden_matches_rust_encoding() {
-        let source_path = crate::spec_registry::require(
-            "01-lang/009-halc/draft/conformance/complete.hal",
-        );
+        let source_path =
+            crate::spec_registry::require("01-lang/009-halc/draft/conformance/complete.hal");
         let source = std::fs::read_to_string(source_path).expect("HALC source is readable");
         let forms = crate::kernel::parse_forms(&source).expect("HALC source parses");
         let encoded = encode_halc_module(

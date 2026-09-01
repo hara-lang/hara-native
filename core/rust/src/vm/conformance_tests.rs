@@ -12,7 +12,7 @@
 //!   the spec makes compile-time rejection the canonical behavior the
 //!   evaluator converges to later.
 
-use super::{error_category, eval_source};
+use super::{compile_source_with, error_category, execute_program_with_globals};
 use crate::kernel::{self, Form};
 use crate::Runtime;
 
@@ -27,6 +27,12 @@ fn entry<'a>(entries: &'a [(Form, Form)], key: &str) -> Option<&'a Form> {
 
 fn required<'a>(entries: &'a [(Form, Form)], key: &str, id: &str) -> &'a Form {
     entry(entries, key).unwrap_or_else(|| panic!(":{id} missing :{key}"))
+}
+
+fn eval_native_vm(source: &str) -> Result<crate::core::Value, String> {
+    let registry = crate::embedding_namespace_registry();
+    let program = compile_source_with(source, &registry).map_err(|error| error.to_string())?;
+    execute_program_with_globals(std::rc::Rc::new(program), &registry).map_err(|error| error.to_string())
 }
 
 #[test]
@@ -76,7 +82,7 @@ fn bytecode_vm_conformance_corpus() {
             let reference = Runtime::new()
                 .eval_native(source)
                 .unwrap_or_else(|error| panic!(":{id} reference failed: {error}"));
-            let vm = eval_source(source)
+            let vm = eval_native_vm(source)
                 .map(|value| value.display())
                 .unwrap_or_else(|error| panic!(":{id} vm failed: {error}"));
             assert_eq!(&reference, expected, ":{id} reference display");
@@ -89,7 +95,7 @@ fn bytecode_vm_conformance_corpus() {
             let reference = Runtime::new()
                 .eval_native(source)
                 .expect_err(&format!(":{id} reference must fail"));
-            let vm = eval_source(source).expect_err(&format!(":{id} vm must fail"));
+            let vm = eval_native_vm(source).expect_err(&format!(":{id} vm must fail"));
             assert_eq!(error_category(&reference), expected, ":{id} reference");
             assert_eq!(error_category(&vm), expected, ":{id} vm");
         } else if let Some(expectation) = entry(expect, "compile-error") {

@@ -19,40 +19,38 @@ fn native_sandbox_surface_uses_the_broker_kernel() {
     install_native_kernel(&mut runtime, broker);
     let sandbox = runtime
         .eval_native(
-            "(deref (Sandbox/open {:protocol \"hara.sandbox/0-alpha\" :provider :in-process :runtime \"hara.standard/0-alpha\" :entry-namespace 'user :bundles [] :mount nil :provider-options {} :limits {:source-bytes 65536 :result-bytes 1048576 :output-bytes 1048576 :evaluation-ms 5000 :memory-bytes 67108864 :active-evaluations 1}}))",
+            "(std.protocol.ideref.IDeref/deref (std.native.Sandbox/open {:protocol \"hara.sandbox/0-alpha\" :provider :in-process :runtime \"hara.standard/0-alpha\" :entry-namespace 'user :bundles [] :mount nil :provider-options {} :limits {:source-bytes 65536 :result-bytes 1048576 :output-bytes 1048576 :evaluation-ms 5000 :memory-bytes 67108864 :active-evaluations 1}}))",
         )
         .unwrap();
     assert_eq!(sandbox, "1");
     assert_eq!(
         runtime
-            .eval_native("(deref (Sandbox/eval 1 \"(+ 40 2)\"))")
+            .eval_native("(std.protocol.ideref.IDeref/deref (std.native.Sandbox/eval 1 \"(+ 40 2)\"))")
             .unwrap(),
         "42"
     );
     assert_eq!(
         runtime
-            .eval_native("(deref (Sandbox/call 1 'std.native.Base/type [[1 2 3]]))")
+            .eval_native("(std.protocol.ideref.IDeref/deref (std.native.Sandbox/call 1 'std.native.Base/type [[1 2 3]]))")
             .unwrap(),
         ":std.native.Vector"
     );
     assert_eq!(
         runtime
-            .eval_native("(:sandbox/secure (Sandbox/status 1))")
+            .eval_native("(:sandbox/secure (std.native.Sandbox/status 1))")
             .unwrap(),
         "false"
     );
     assert_eq!(
-        runtime.eval_native("(deref (Sandbox/close 1))").unwrap(),
+        runtime
+            .eval_native("(std.protocol.ideref.IDeref/deref (std.native.Sandbox/close 1))")
+            .unwrap(),
         "nil"
     );
-    assert_eq!(
-        runtime
-            .eval_native(
-                "(try (deref (Sandbox/open {:unknown true})) (catch error (:ex/code (ex-data error))))",
-            )
-            .unwrap(),
-        ":sandbox/invalid-spec"
-    );
+    let error = runtime
+        .eval_native("(std.protocol.ideref.IDeref/deref (std.native.Sandbox/open {:unknown true}))")
+        .unwrap_err();
+    assert!(error.contains(":sandbox/invalid-spec"), "{error}");
 }
 
 #[test]

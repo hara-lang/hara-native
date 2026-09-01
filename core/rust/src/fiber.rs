@@ -1617,17 +1617,23 @@ mod tests {
     fn named_value_constructors_are_visible_to_later_forms_in_the_same_do() {
         let cases = [
             (
-                "(do (defstruct Point [x y]) \
-                 (+ (get (Point 1 2) :x) \
-                    (get (->Point 3 4) :x) \
-                    (get (map->Point {:x 5}) :x)))",
+            "(let [Point (std.native.Base/struct (std.native.Base/current-namespace) \
+                                               (std.native.Base/symbol \"Point\") \
+                                               (std.native.Base/vector (std.native.Base/symbol \"x\") (std.native.Base/symbol \"y\"))) \
+                   map->Point (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (std.native.Base/symbol \"map->Point\")))] \
+               (+ (std.protocol.ilookup.ILookup/lookup (Point 1 2) :x) \
+                  (std.protocol.ilookup.ILookup/lookup (Point 3 4) :x) \
+                  (std.protocol.ilookup.ILookup/lookup (map->Point {:x 5}) :x)))",
                 Value::Number(9),
             ),
             (
-                "(do (defmutable Cursor [x y]) \
-                 (+ (field (Cursor 1 2) :x) \
-                    (field (->Cursor 3 4) :x) \
-                    (field (map->Cursor {:x 5}) :x)))",
+            "(let [Cursor (std.native.Base/mutable (std.native.Base/current-namespace) \
+                                                 (std.native.Base/symbol \"Cursor\") \
+                                                 (std.native.Base/vector (std.native.Base/symbol \"x\") (std.native.Base/symbol \"y\"))) \
+                   map->Cursor (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (std.native.Base/symbol \"map->Cursor\")))] \
+               (+ (std.native.Base/field (Cursor 1 2) :x) \
+                  (std.native.Base/field (Cursor 3 4) :x) \
+                  (std.native.Base/field (map->Cursor {:x 5}) :x)))",
                 Value::Number(9),
             ),
         ];
@@ -1640,8 +1646,10 @@ mod tests {
     #[test]
     fn mutable_field_set_place_updates_and_returns_replacement() {
         let mut fiber = EvalFiber::start(
-            "(do (defmutable Cursor [x y]) \
-             (def cursor (Cursor 1 2)) \
+            "(let [Cursor (std.native.Base/mutable (std.native.Base/current-namespace) \
+                                                 (std.native.Base/symbol \"Cursor\") \
+                                                 (std.native.Base/vector (std.native.Base/symbol \"x\") (std.native.Base/symbol \"y\"))) \
+                   cursor (Cursor 1 2)] \
              (if (= (set! (field cursor :x) 42) 42) \
                (field cursor :x) \
                -1))",
@@ -1657,9 +1665,11 @@ mod tests {
         let mut environment = HashMap::new();
         environment.insert("replacement".into(), Value::Promise(promise.clone()));
         let mut fiber = EvalFiber::start(
-            "(do (defmutable Cursor [x]) \
-             (def cursor (Cursor 1)) \
-             (set! (field cursor :x) (deref replacement)) \
+            "(let [Cursor (std.native.Base/mutable (std.native.Base/current-namespace) \
+                                                 (std.native.Base/symbol \"Cursor\") \
+                                                 (std.native.Base/vector (std.native.Base/symbol \"x\"))) \
+                   cursor (Cursor 1)] \
+             (set! (field cursor :x) (std.protocol.ideref.IDeref/deref replacement)) \
              (field cursor :x))",
             environment,
         )
@@ -1678,12 +1688,14 @@ mod tests {
         let mut environment = HashMap::new();
         environment.insert("ready".into(), Value::Promise(ready.clone()));
         let mut fiber = EvalFiber::start(
-            "(do (def order []) \
-             (defmutable Cursor [x]) \
-             (def cursor (Cursor 1)) \
-             (set! (field (do (deref ready) cursor) :x) \
-                   (do (set! order (conj order :replacement)) 42)) \
-             [order (field cursor :x)])",
+            "(let [Cursor (std.native.Base/mutable (std.native.Base/current-namespace) \
+                                                  (std.native.Base/symbol \"Cursor\") \
+                                                  (std.native.Base/vector (std.native.Base/symbol \"x\")))] \
+               (do (def order []) \
+                   (def cursor (Cursor 1)) \
+                   (set! (field (do (std.protocol.ideref.IDeref/deref ready) cursor) :x) \
+                         (do (set! order (std.protocol.iconj.IConj/conj order :replacement)) 42)) \
+                   [order (field cursor :x)]))",
             environment,
         )
         .unwrap();
@@ -1717,7 +1729,7 @@ mod tests {
         let p = Promise::new();
         let mut e = HashMap::new();
         e.insert("p".into(), Value::Promise(p.clone()));
-        let mut f = EvalFiber::start("(let [x 1] (+ x (deref p)))", e).unwrap();
+        let mut f = EvalFiber::start("(let [x 1] (+ x (std.protocol.ideref.IDeref/deref p)))", e).unwrap();
         assert_eq!(f.state(), EvalFiberState::Suspended);
         p.resolve(Value::Number(41));
         assert_eq!(
@@ -1729,7 +1741,7 @@ mod tests {
     #[test]
     fn drive_sync_waits_for_a_deferred_promise() {
         let mut fiber =
-            EvalFiber::start("(deref (promise/delay 1 (fn [] 42)))", HashMap::new()).unwrap();
+            EvalFiber::start("(std.protocol.ideref.IDeref/deref (std.native.Promise/delay 1 (fn [] 42)))", HashMap::new()).unwrap();
         assert_eq!(fiber.drive_sync(), Ok(Value::Number(42)));
     }
 
@@ -1741,7 +1753,7 @@ mod tests {
         promise.set_cancel_hook(Rc::new(move || observed.set(true)));
         let mut environment = HashMap::new();
         environment.insert("p".into(), Value::Promise(promise));
-        let mut fiber = EvalFiber::start("(deref p)", environment).unwrap();
+        let mut fiber = EvalFiber::start("(std.protocol.ideref.IDeref/deref p)", environment).unwrap();
         assert_eq!(fiber.state(), EvalFiberState::Suspended);
         assert!(fiber.cancel());
         assert!(cancelled.get());
@@ -1753,7 +1765,7 @@ mod tests {
         let mut e = HashMap::new();
         e.insert("p".into(), Value::Promise(p.clone()));
         let mut f = EvalFiber::start(
-            "(do (def f (fn [x] (try (+ x (deref p)) (finally nil)))) (f 2))",
+            "(do (def f (fn [x] (try (+ x (std.protocol.ideref.IDeref/deref p)) (finally nil)))) (f 2))",
             e,
         )
         .unwrap();
@@ -1770,7 +1782,7 @@ mod tests {
         let mut e = HashMap::new();
         e.insert("p".into(), Value::Promise(p.clone()));
         let mut f = EvalFiber::start(
-            "(do (defn g ([x] (+ x 1)) ([x y] (+ x y (deref p)))) (g 1 2))",
+            "(do (defn g ([x] (+ x 1)) ([x y] (+ x y (std.protocol.ideref.IDeref/deref p)))) (g 1 2))",
             e,
         )
         .unwrap();
@@ -1795,7 +1807,7 @@ mod tests {
         environment.insert("p".into(), Value::Promise(promise.clone()));
         let mut fiber = EvalFiber::start(
             "(do (def entry [:task (fn [] (std.native.Coroutine/await p))]) \
-             ((nth entry 1)))",
+             ((std.protocol.inth.INth/nth entry 1)))",
             environment,
         )
         .unwrap();
@@ -1823,14 +1835,14 @@ mod tests {
     #[test]
     fn numeric_and_boolean_predicates_match_foundation_types() {
         let cases = [
-            ("(long? 42)", Value::Bool(true)),
-            ("(bigint? 9223372036854775808)", Value::Bool(true)),
-            ("(integer? 9223372036854775808)", Value::Bool(true)),
-            ("(integer? 1.0)", Value::Bool(false)),
-            ("(double? 42.0)", Value::Bool(true)),
-            ("(number? 42)", Value::Bool(true)),
-            ("(boolean? false)", Value::Bool(true)),
-            ("(boolean? nil)", Value::Bool(false)),
+            ("(std.native.Base/long? 42)", Value::Bool(true)),
+            ("(= (std.native.Base/type 9223372036854775808) :std.native.BigInteger)", Value::Bool(true)),
+            ("(= (std.native.Base/type 9223372036854775808) :std.native.BigInteger)", Value::Bool(true)),
+            ("(= (std.native.Base/type 1.0) :std.native.BigInteger)", Value::Bool(false)),
+            ("(= (std.native.Base/type 42.0) :std.native.Float)", Value::Bool(true)),
+            ("(std.native.Base/number? 42)", Value::Bool(true)),
+            ("(= (std.native.Base/type false) :std.native.Boolean)", Value::Bool(true)),
+            ("(= (std.native.Base/type nil) :std.native.Boolean)", Value::Bool(false)),
         ];
         for (source, expected) in cases {
             let fiber = EvalFiber::start(source, HashMap::new()).unwrap();
@@ -1841,8 +1853,8 @@ mod tests {
     #[test]
     fn character_predicate_matches_foundation_types() {
         let cases = [
-            ("(char? \\x)", Value::Bool(true)),
-            ("(char? \"x\")", Value::Bool(false)),
+            ("(= (std.native.Base/type \\x) :std.native.Character)", Value::Bool(true)),
+            ("(= (std.native.Base/type \"x\") :std.native.Character)", Value::Bool(false)),
         ];
         for (source, expected) in cases {
             let fiber = EvalFiber::start(source, HashMap::new()).unwrap();
@@ -1853,7 +1865,7 @@ mod tests {
     #[test]
     fn loop_recur_trampolines_large_iteration_counts() {
         let mut fiber = EvalFiber::start(
-            "(loop [i 0] (if (< i 50000) (recur (inc i)) i))",
+            "(loop [i 0] (if (< i 50000) (recur (+ i 1)) i))",
             HashMap::new(),
         )
         .unwrap();

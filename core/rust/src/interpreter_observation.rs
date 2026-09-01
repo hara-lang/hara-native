@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn pending_promise_can_be_settled_and_resumed() {
         let info = invoke(
-            r#"{"op":"start","sessionId":"fixture/await","sourceId":"await.hal","source":"(Coroutine/await (promise/new (fn [resolve reject] nil)))"}"#,
+            r#"{"op":"start","sessionId":"fixture/await","sourceId":"await.hal","source":"(std.native.Coroutine/await (std.native.Promise/new (fn [resolve reject] nil)))"}"#,
         );
         let handle = handle(&info);
         let run = invoke(&format!(

@@ -44,7 +44,7 @@
     :methods ["element" "text" "fragment" "annotate" "pass" "escaped" "group" "line" "break"
               "nest" "align" "normalize" "valid?" "render"]}
    {:type "std.native.Edn"
-    :methods ["read" "read-forms" "write" "pretty"]}
+    :methods ["read" "read-forms" "read-forms-spanned" "write" "pretty"]}
    {:type "std.native.Json"
     :methods ["read" "write" "pretty"]}
    {:type "std.native.Instrument"
@@ -733,7 +733,7 @@
      :expect {:display "true"}}
     {:id :native/codec-pretty-and-read-forms-boundaries
      :program (= [{:a 1} "{:a 1}" "{:a 1}" {"a" 1} "{\"a\":1}" "{\n  \"a\": 1\n}"
-                  true]
+                  true true]
                  [(std.native.Edn/read "{:a 1}")
                   (std.native.Edn/write {:a 1})
                   (std.native.Edn/pretty {:a 1} {})
@@ -741,7 +741,9 @@
                   (std.native.Json/write {"a" 1})
                   (std.native.Json/pretty {"a" 1} {})
                   (try (std.native.Edn/read-forms "fixture.txt") false
-                       (catch error true))])
+                       (catch error true))
+                  (try (std.native.Edn/read-forms-spanned "(+ 1 2)") true
+                       (catch error false))])
      :expect {:display "true"}}
     {:id :native/instrument-invalid-artifact-boundaries
      :program (= [:std.native.Keyword true true true true true]
@@ -1015,6 +1017,89 @@
                     (std.protocol.iassoc.IAssoc/assoc {} :a 1)
                     [(std.protocol.ideref.IDeref/deref cell)
                      (std.protocol.ideref.IDeref/deref seen)]]))
+     :expect {:display "true"}}
+    {:id :protocol/context-eval-pointer-bridge
+     :program
+     (let [target (std.native.Base/namespace 'hnc.context-eval)
+           fixture-type (std.native.Base/struct target 'Fixture (std.native.Base/vector))
+           context-space (std.native.Base/namespace 'std.lib.context.space)
+           context-protocol (std.protocol.ideref.IDeref/deref
+                             (std.native.Base/resolve 'std.protocol.icontext.IContext))
+           eval-protocol (std.protocol.ideref.IDeref/deref
+                          (std.native.Base/resolve 'std.protocol.icontexteval.IContextEval))
+           lifecycle-protocol (std.protocol.ideref.IDeref/deref
+                               (std.native.Base/resolve 'std.protocol.icontextlifecycle.IContextLifeCycle))
+           _ (std.native.Base/extend target fixture-type context-protocol
+               {'call (fn [& values] [:call (std.native.Base/vec values)])
+                'has-ptr? (fn [runtime pointer]
+                            (= :fixture (std.protocol.ipointer.IPointer/ptr-context pointer)))})
+           _ (std.native.Base/extend target fixture-type eval-protocol
+               {'evaluate (fn [runtime request options] [:evaluate request options])
+                'evaluate-raw (fn [runtime request options] [:evaluate-raw request options])
+                'eval-ptr (fn [runtime pointer arguments options] [:eval-ptr pointer arguments options])
+                'eval-await-ptr (fn [runtime pointer arguments options]
+                                  [:eval-await-ptr pointer arguments options])
+                'tags-ptr (fn [runtime pointer] [:fixture :tag])
+                'deref-ptr (fn [runtime pointer] [:deref-ptr pointer])
+                'display-ptr (fn [runtime pointer] "fixture-pointer")
+                'invoke-ptr (fn [runtime pointer arguments]
+                              (std.protocol.icontexteval.IContextEval/eval-await-ptr runtime pointer arguments {}))
+                'transform-in-ptr (fn [runtime pointer arguments] [:in arguments])
+                'transform-out-ptr (fn [runtime pointer value] [:out value])})
+           _ (std.native.Base/extend target fixture-type lifecycle-protocol
+               {'has-module? (fn [runtime module] false)
+                'setup-module (fn [runtime module] :setup-module)
+                'teardown-module (fn [runtime module] :teardown-module)
+                'setup-ptr (fn [runtime pointer] :setup-ptr)
+                'teardown-ptr (fn [runtime pointer] :teardown-ptr)})
+           constructor (std.protocol.ideref.IDeref/deref
+                        (std.native.Base/resolve target '->Fixture))
+           runtime (constructor)
+           _ (std.native.Base/def context-space 'space:rt-current
+               (fn [context] runtime) nil)
+           pointer (std.native.Base/pointer {:context :fixture :id :demo})]
+       (= [[:call [runtime :request]]
+           true
+           [:evaluate :request {:mode :value}]
+           [:evaluate-raw :request {:mode :raw}]
+           [:eval-ptr pointer [1] {:mode :async}]
+           [:eval-await-ptr pointer [1] {:mode :await}]
+           [:fixture :tag]
+           [:deref-ptr pointer]
+           "fixture-pointer"
+           [:eval-await-ptr pointer [1] {}]
+           [:in [1]]
+           [:out :result]
+           false
+           :setup-module
+           :teardown-module
+           :setup-ptr
+           :teardown-ptr
+           [:eval-await-ptr pointer [1] {}]
+           [:deref-ptr pointer]
+           [:out [:eval-await-ptr pointer [:in [1]] {}]]
+           "![:fixture :fixture :tag]\nfixture-pointer"]
+          [(std.protocol.icontext.IContext/call runtime :request)
+           (std.protocol.icontext.IContext/has-ptr? runtime pointer)
+           (std.protocol.icontexteval.IContextEval/evaluate runtime :request {:mode :value})
+           (std.protocol.icontexteval.IContextEval/evaluate-raw runtime :request {:mode :raw})
+           (std.protocol.icontexteval.IContextEval/eval-ptr runtime pointer [1] {:mode :async})
+           (std.protocol.icontexteval.IContextEval/eval-await-ptr runtime pointer [1] {:mode :await})
+           (std.protocol.icontexteval.IContextEval/tags-ptr runtime pointer)
+           (std.protocol.icontexteval.IContextEval/deref-ptr runtime pointer)
+           (std.protocol.icontexteval.IContextEval/display-ptr runtime pointer)
+           (std.protocol.icontexteval.IContextEval/invoke-ptr runtime pointer [1])
+           (std.protocol.icontexteval.IContextEval/transform-in-ptr runtime pointer [1])
+           (std.protocol.icontexteval.IContextEval/transform-out-ptr runtime pointer :result)
+           (std.protocol.icontextlifecycle.IContextLifeCycle/has-module? runtime :module)
+           (std.protocol.icontextlifecycle.IContextLifeCycle/setup-module runtime :module)
+           (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-module runtime :module)
+           (std.protocol.icontextlifecycle.IContextLifeCycle/setup-ptr runtime pointer)
+           (std.protocol.icontextlifecycle.IContextLifeCycle/teardown-ptr runtime pointer)
+           (std.protocol.iapplicable.IApplicable/apply-in pointer runtime [1])
+           (std.protocol.ideref.IDeref/deref pointer)
+           (pointer 1)
+           (std.protocol.idisplay.IDisplay/display pointer)]))
      :expect {:display "true"}}
     {:id :protocol/extension-replacement-and-parent-dispatch
      :program (let [target (std.native.Base/namespace 'hnc.protocol.lifecycle)

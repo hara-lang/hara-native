@@ -137,7 +137,7 @@ impl ResultValue {
 
     pub fn display(&self) -> String {
         format!(
-            "#hara/Result[{} {} {} {}]",
+            "#result[{} {} {} {}]",
             self.status_value().display(),
             self.data.display(),
             self.error_value().display(),
@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(preserved.message, error.message);
         assert_eq!(preserved.data.display(), error.data.display());
         assert!(result.deref_value().is_err());
-        assert!(result.display().contains("#hara/Result[:error"));
+        assert!(result.display().contains("#result[:error"));
     }
 
     #[test]

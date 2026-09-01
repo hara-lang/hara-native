@@ -104,6 +104,87 @@ public class HaraNativeLangTest {
     }
   }
 
+  @Test
+  public void nativeEdnReadsSpannedFormsWithoutEvaluation() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      assertTrue(
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(let [node (std.protocol.inth.INth/nth"
+                      + "              (std.native.Edn/read-forms-spanned \"(subject/run (stop))\") 0)"
+                      + "      start (std.protocol.ilookup.ILookup/lookup node :start)"
+                      + "      end (std.protocol.ilookup.ILookup/lookup node :end)"
+                      + "      children (std.protocol.ilookup.ILookup/lookup node :children)"
+                      + "      inner (std.protocol.inth.INth/nth children 1)"
+                      + "      stop (std.protocol.inth.INth/nth"
+                      + "            (std.protocol.ilookup.ILookup/lookup inner :children) 0)]"
+                      + " (= [(std.protocol.ilookup.ILookup/lookup start :offset)"
+                      + "     (std.protocol.ilookup.ILookup/lookup end :offset)"
+                      + "     (std.protocol.ilookup.ILookup/lookup"
+                      + "       (std.protocol.ilookup.ILookup/lookup"
+                      + "         (std.protocol.inth.INth/nth children 0) :start) :offset)"
+                      + "     (std.protocol.ilookup.ILookup/lookup"
+                      + "       (std.protocol.ilookup.ILookup/lookup stop :start) :offset)]"
+                      + "    [0 20 1 14]))")
+              .asBoolean());
+      assertTrue(
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(let [node (std.protocol.inth.INth/nth"
+                      + "              (std.native.Edn/read-forms-spanned"
+                      + "                \"^{:refer demo.subject/run}\\n(Test/check [])\") 0)"
+                      + "      children (std.protocol.ilookup.ILookup/lookup node :children)"
+                      + "      metadata (std.protocol.inth.INth/nth children 0)]"
+                      + " (= [(std.protocol.icount.ICount/count children)"
+                      + "     (std.native.Edn/write"
+                      + "       (std.protocol.ilookup.ILookup/lookup metadata :form))]"
+                      + "    [2 \"{:refer demo.subject/run}\"]))")
+              .asBoolean());
+      assertTrue(
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(let [forms (std.native.Edn/read-forms-spanned \"λ (stop)\")"
+                      + "      symbol (std.protocol.inth.INth/nth forms 0)"
+                      + "      call (std.protocol.inth.INth/nth forms 1)"
+                      + "      stop (std.protocol.inth.INth/nth"
+                      + "            (std.protocol.ilookup.ILookup/lookup call :children) 0)]"
+                      + " (= [(std.protocol.ilookup.ILookup/lookup"
+                      + "       (std.protocol.ilookup.ILookup/lookup symbol :start) :offset)"
+                      + "     (std.protocol.ilookup.ILookup/lookup"
+                      + "       (std.protocol.ilookup.ILookup/lookup symbol :end) :offset)"
+                      + "     (std.protocol.ilookup.ILookup/lookup"
+                      + "       (std.protocol.ilookup.ILookup/lookup call :start) :offset)"
+                      + "     (std.protocol.ilookup.ILookup/lookup"
+                      + "       (std.protocol.ilookup.ILookup/lookup stop :start) :offset)]"
+                      + "    [0 2 3 4]))")
+              .asBoolean());
+      assertTrue(
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(try (std.native.Edn/read-forms-spanned \"(throw (ex :demo {}))\")"
+                      + " true (catch error false))")
+              .asBoolean());
+      assertTrue(
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(try (std.native.Edn/read-forms-spanned \"(\")"
+                      + " false (catch error true))")
+              .asBoolean());
+      assertTrue(
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(try (std.native.Edn/read-forms-spanned \"  ; comment\")"
+                      + " false (catch error true))")
+              .asBoolean());
+    }
+  }
+
   @SuppressWarnings("rawtypes")
   private static long stateLong(Object library, String name) {
     IMapType state = (IMapType) HaraNativeLang.invoke("Library", "state", new Object[] {library});

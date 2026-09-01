@@ -61,8 +61,8 @@ fn macro_introduced_lexical_bindings_are_not_captures() {
     runtime
         .eval_native(
             "(defmacro if-let [binding then alternative]
-               (let [name (nth binding 0)
-                     expression (nth binding 1)]
+               (let [name (std.protocol.inth.INth/nth binding 0)
+                     expression (std.protocol.inth.INth/nth binding 1)]
                  `(let [~name ~expression]
                     (if ~name ~then ~alternative))))",
         )
@@ -74,7 +74,7 @@ fn macro_introduced_lexical_bindings_are_not_captures() {
                    (if-let [selected candidate]
                      (selected 41)
                      0))
-                 (invoke-selected inc)"
+                 (invoke-selected (fn [value] (+ value 1)))"
             )
             .unwrap(),
         "42"
@@ -317,7 +317,7 @@ fn destructuring_generated_calls_ignore_shadowing() {
                     [(even* 4) (odd* 3)])]"
             )
             .unwrap(),
-        "[[1 [2 3]] 42 [true true]]"
+        "[[1 <iterator>] 42 [true true]]"
     );
 }
 
@@ -328,9 +328,9 @@ fn static_array_calls_compile_to_native_bytecode() {
         runtime
             .eval_bytecode_native(
                 "(defn mutate-and-clone [array value]
-                   (Arr/push-last array value)
-                   (Base/vec (Arr/clone array)))
-                 (mutate-and-clone (array 1 2) 3)"
+                   (std.native.Arr/push-last array value)
+                   (std.native.Base/vec (std.native.Arr/clone array)))
+                 (mutate-and-clone (std.native.Arr/new 1 2) 3)"
             )
             .unwrap(),
         "[1 2 3]"

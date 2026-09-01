@@ -374,7 +374,7 @@ mod tests {
     fn evaluator_dispatches_the_native_crypto_static_object() {
         let mut runtime = crate::Runtime::new();
         let result = runtime
-            .eval_text("(Crypto/sha512 (bytes 97 98 99))")
+            .eval_text("(std.native.Crypto/sha512 (std.native.Base/bytes 97 98 99))")
             .unwrap();
         assert_eq!(
             result,

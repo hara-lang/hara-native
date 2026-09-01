@@ -209,11 +209,15 @@ impl Session {
     }
 }
 
-impl crate::lang::protocol::IContext<&str> for Session {
+impl crate::lang::protocol::IContext<&str, crate::core::Value> for Session {
     type Output = Result<String, String>;
 
     fn call(&mut self, source: &str) -> Self::Output {
         self.eval(source)
+    }
+
+    fn has_ptr(&self, _pointer: &crate::core::Value) -> bool {
+        false
     }
 }
 
@@ -796,7 +800,9 @@ mod authority_tests {
             let error = kernel
                 .eval(
                     &child_id,
-                    &format!("(deref (Host/capability? \"{capability}\"))"),
+                    &format!(
+                        "(std.protocol.ideref.IDeref/deref (std.native.Host/capability? \"{capability}\"))"
+                    ),
                 )
                 .unwrap_err();
             assert!(error.contains("std.native.Host/capability? requires capability :host-call"));

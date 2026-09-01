@@ -3029,7 +3029,7 @@ mod tests {
             .start_fiber(
                 5,
                 "(try \
-                   (throw (ex-info \"bad input\" {:kind :invalid})) \
+                   (throw (ex :generic {:kind :invalid} :ex/message \"bad input\")) \
                    (catch error \
                      [(ex-message error) \
                       (ex-data error)]))",
@@ -3037,7 +3037,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             completion_value(&mut runtime, 5).display(),
-            "[\"bad input\" {:kind :invalid}]"
+            "[\"bad input\" {:ex/class :ex.class/internal :ex/message \"bad input\" :kind :invalid :ex/code :hara/generic}]"
         );
         runtime
             .start_fiber(6, "(std.native.Edn/write {:answer 42})")

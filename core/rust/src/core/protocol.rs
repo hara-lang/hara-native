@@ -347,19 +347,53 @@ fn pointer_default(pointer: &PPointer) -> Result<Value, String> {
         .map_err(|error| format!("pointer/runtime-unavailable: {error}"))
 }
 
-fn pointer_context_call(
+fn pointer_context_eval(
     pointer: &PPointer,
     runtime: Value,
-    operation: &str,
+    method: &str,
     arguments: &[Value],
 ) -> Result<Value, String> {
-    let mut call = vec![
-        runtime,
-        Value::Keyword(Keyword::from(operation)),
-        Value::Pointer(pointer.clone()),
-    ];
+    let mut call = vec![runtime, Value::Pointer(pointer.clone())];
     call.extend_from_slice(arguments);
-    protocol_call("std.protocol.icontext.IContext", "call", &call)
+    protocol_call("std.protocol.icontexteval.IContextEval", method, &call)
+}
+
+fn pointer_arguments(arguments: &[Value]) -> Value {
+    Value::Vector(PVector::from_iter(arguments.iter().cloned()))
+}
+
+fn pointer_invoke_ptr(
+    pointer: &PPointer,
+    runtime: Value,
+    arguments: Value,
+) -> Result<Value, String> {
+    pointer_context_eval(pointer, runtime, "invoke-ptr", &[arguments])
+}
+
+fn pointer_transform_in(
+    pointer: &PPointer,
+    runtime: Value,
+    arguments: Value,
+) -> Result<Value, String> {
+    pointer_context_eval(pointer, runtime, "transform-in-ptr", &[arguments])
+}
+
+fn pointer_transform_out(
+    pointer: &PPointer,
+    runtime: Value,
+    value: Value,
+) -> Result<Value, String> {
+    pointer_context_eval(pointer, runtime, "transform-out-ptr", &[value])
+}
+
+pub(crate) fn pointer_invoke(
+    pointer: &PPointer,
+    runtime: Value,
+    arguments: &[Value],
+) -> Result<Value, String> {
+    let input = pointer_transform_in(pointer, runtime.clone(), pointer_arguments(arguments))?;
+    let output = pointer_invoke_ptr(pointer, runtime.clone(), input)?;
+    pointer_transform_out(pointer, runtime, output)
 }
 
 fn protocol_apply_default(arguments: &[Value]) -> Result<Value, String> {
@@ -369,37 +403,29 @@ fn protocol_apply_default(arguments: &[Value]) -> Result<Value, String> {
     }
 }
 
-fn linear_arguments(value: &Value) -> Result<Vec<Value>, String> {
-    match value {
-        Value::Vector(values) => Ok(values.iter().cloned().collect()),
-        Value::Tuple(values) => Ok(values.iter().cloned().collect()),
-        Value::List(values) => Ok(values.iter().cloned().collect()),
-        _ => Err("pointer invocation arguments must be sequential".into()),
-    }
-}
-
 fn protocol_apply_in(arguments: &[Value]) -> Result<Value, String> {
     match arguments {
-        [Value::Pointer(pointer), runtime, values] => pointer_context_call(
-            pointer,
-            runtime.clone(),
-            "pointer/invoke",
-            &linear_arguments(values)?,
-        ),
+        [Value::Pointer(pointer), runtime, values] => {
+            pointer_invoke_ptr(pointer, runtime.clone(), values.clone())
+        }
         _ => Err("IApplicable/apply-in expects a pointer, runtime, and arguments".into()),
     }
 }
 
 fn protocol_transform_in(arguments: &[Value]) -> Result<Value, String> {
     match arguments {
-        [Value::Pointer(_), _, values] => Ok(values.clone()),
+        [Value::Pointer(pointer), runtime, values] => {
+            pointer_transform_in(pointer, runtime.clone(), values.clone())
+        }
         _ => Err("IApplicable/transform-in expects a pointer, runtime, and arguments".into()),
     }
 }
 
 fn protocol_transform_out(arguments: &[Value]) -> Result<Value, String> {
     match arguments {
-        [Value::Pointer(_), _, _, value] => Ok(value.clone()),
+        [Value::Pointer(pointer), runtime, _, value] => {
+            pointer_transform_out(pointer, runtime.clone(), value.clone())
+        }
         _ => {
             Err("IApplicable/transform-out expects a pointer, runtime, arguments, and value".into())
         }
@@ -409,7 +435,7 @@ fn protocol_transform_out(arguments: &[Value]) -> Result<Value, String> {
 fn protocol_invoke_in(arguments: &[Value]) -> Result<Value, String> {
     match arguments {
         [Value::Pointer(pointer), runtime, rest @ ..] => {
-            pointer_context_call(pointer, runtime.clone(), "pointer/invoke", rest)
+            pointer_invoke_ptr(pointer, runtime.clone(), pointer_arguments(rest))
         }
         _ => Err("IInvokeIn/invoke-in expects a pointer and runtime".into()),
     }
@@ -638,9 +664,12 @@ fn protocol_deref(arguments: &[Value]) -> Result<Value, String> {
         [Value::Var(var)] => Ok(var.deref_value()),
         [Value::Promise(promise)] => promise_value_result(promise),
         [Value::Result(result)] => result.deref_value(),
-        [Value::Pointer(pointer)] => {
-            pointer_context_call(pointer, pointer_default(pointer)?, "pointer/deref", &[])
-        }
+        [Value::Pointer(pointer)] => pointer_context_eval(
+            pointer,
+            pointer_default(pointer)?,
+            "deref-ptr",
+            &[],
+        ),
         [Value::Schema(schema)] => {
             form_to_value(&crate::lang::protocol::IDeref::deref(&schema.ast))
         }
@@ -1740,6 +1769,30 @@ fn protocol_equality(arguments: &[Value]) -> Result<Value, String> {
 
 fn protocol_display(arguments: &[Value]) -> Result<Value, String> {
     match arguments {
+        [Value::Pointer(pointer)] => {
+            let fallback = Value::Pointer(pointer.clone()).display();
+            let rendered = (|| -> Result<String, String> {
+                let runtime = pointer_default(pointer)?;
+                let tags = pointer_context_eval(pointer, runtime.clone(), "tags-ptr", &[])?;
+                let tags = match tags {
+                    Value::Vector(values) => values.iter().cloned().collect::<Vec<_>>(),
+                    Value::Tuple(values) => values.iter().cloned().collect::<Vec<_>>(),
+                    Value::List(values) => values.iter().cloned().collect::<Vec<_>>(),
+                    _ => return Err("IContextEval/tags-ptr must return a sequential value".into()),
+                };
+                let display = pointer_context_eval(pointer, runtime, "display-ptr", &[])?;
+                let display = match display {
+                    Value::String(value) => value,
+                    value => value.display(),
+                };
+                let path = Value::Vector(PVector::from_iter(
+                    std::iter::once(Value::Keyword(pointer.context().clone())).chain(tags),
+                ));
+                Ok(format!("!{}\n{}", path.display(), display))
+            })()
+            .unwrap_or(fallback);
+            Ok(Value::String(rendered))
+        }
         [value] => Ok(Value::String(value.display())),
         _ => Err("IDisplay/display expects one value".into()),
     }

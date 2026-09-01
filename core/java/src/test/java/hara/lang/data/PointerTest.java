@@ -2,6 +2,8 @@ package hara.lang.data;
 
 import hara.lang.protocol.Constant;
 import hara.lang.protocol.IContext;
+import hara.lang.protocol.IContextEval;
+import hara.lang.protocol.IPointer;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.Test;
@@ -38,10 +40,10 @@ public class PointerTest {
   @Test
   public void pointerUsesAnExplicitContextRuntime() {
     Pointer pointer = new Pointer(Keyword.create("test"), Map.of(Keyword.create("value"), 42));
-    IContext runtime = args -> args.length;
+    TestRuntime runtime = new TestRuntime();
 
-    assertEquals(5, pointer.applyIn(runtime, new Object[] {1, 2, 3}));
-    assertEquals(4, pointer.invokeIn(runtime, 1, 2));
+    assertEquals(3, pointer.applyIn(runtime, new Object[] {1, 2, 3}));
+    assertEquals(2, pointer.invokeIn(runtime, 1, 2));
     assertThrows(IllegalArgumentException.class, () -> pointer.applyIn(new Object(), new Object[0]));
     assertThrows(IllegalStateException.class, pointer::deref);
     assertThrows(IllegalStateException.class, pointer::applyDefault);
@@ -67,5 +69,62 @@ public class PointerTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> new Pointer(Keyword.create("test"), Map.of("id", "x")));
+  }
+
+  private static final class TestRuntime implements IContext, IContextEval {
+    @Override
+    public Object call(Object... args) {
+      return args.length;
+    }
+
+    @Override
+    public Object evaluate(Object request, Object options) {
+      return request;
+    }
+
+    @Override
+    public Object evaluateRaw(Object request, Object options) {
+      return request;
+    }
+
+    @Override
+    public Object evalPtr(IPointer pointer, Object arguments, Object options) {
+      return arguments;
+    }
+
+    @Override
+    public Object evalAwaitPtr(IPointer pointer, Object arguments, Object options) {
+      return arguments;
+    }
+
+    @Override
+    public Object tagsPtr(IPointer pointer) {
+      return new Object[0];
+    }
+
+    @Override
+    public Object derefPtr(IPointer pointer) {
+      return pointer;
+    }
+
+    @Override
+    public Object displayPtr(IPointer pointer) {
+      return pointer;
+    }
+
+    @Override
+    public Object invokePtr(IPointer pointer, Object arguments) {
+      return ((Object[]) arguments).length;
+    }
+
+    @Override
+    public Object transformInPtr(IPointer pointer, Object arguments) {
+      return arguments;
+    }
+
+    @Override
+    public Object transformOutPtr(IPointer pointer, Object value) {
+      return value;
+    }
   }
 }

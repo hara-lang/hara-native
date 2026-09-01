@@ -5,7 +5,7 @@ const ERRORS = new Map([
   [4, "object key not found"]
 ]);
 const HNW0_OPERATION_REGISTRY_DIGEST =
-  "d8b2cd6097d17600d5a534186d27ea2744f4c8057b779b2c6d0b7f9727623e2a";
+  "174848faa965b96248af2b122a3c7731b09f5a59974b340837ff6f008a7d9525";
 const HNW0_ABI_VERSION = 0;
 
 function fallbackValue(value) {

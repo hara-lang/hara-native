@@ -370,6 +370,8 @@ fn literal_value(form: &Form) -> Result<Value, String> {
         Form::Tagged(tag, value) if tag == "uuid" => {
             crate::core::uuid_tag_value(literal_value(value)?)
         }
+        Form::Tagged(tag, value) if tag == "ex" => exception_literal_value(value),
+        Form::Tagged(tag, value) if tag == "result" => result_literal_value(value),
         Form::Tagged(tag, value) if tag == "arr" => {
             let Form::Vector(values) = value.as_ref() else {
                 return Err("#arr expects a vector literal".into());
@@ -425,6 +427,117 @@ fn literal_value(form: &Form) -> Result<Value, String> {
                 .map(|(k, v)| Ok((literal_value(k)?, literal_value(v)?)))
                 .collect::<Result<_, String>>()?,
         )),
+    }
+}
+
+fn exception_literal_value(form: &Form) -> Result<Value, String> {
+    let Form::Vector(values) = form else {
+        return Err("#ex expects a [message data] vector".into());
+    };
+    let [message, data] = values.as_slice() else {
+        return Err("#ex expects exactly a message and data value".into());
+    };
+    let Value::String(message) = literal_value(message)? else {
+        return Err("#ex message must be a string".into());
+    };
+    let data = literal_value(data)?;
+    let cause = map_entries(&data)
+        .and_then(|entries| {
+            entries.into_iter().find_map(|(key, value)| {
+                matches!(key, Value::Keyword(name) if name.as_str() == "ex/cause")
+                    .then_some(value)
+            })
+        });
+    let cause = match cause {
+        Some(Value::ExceptionInfo(value)) => Some(Box::new(Value::ExceptionInfo(value))),
+        Some(_) => return Err("#ex :ex/cause must be an Exception".into()),
+        None => None,
+    };
+    Ok(Value::ExceptionInfo(Rc::new(ExceptionInfo {
+        message,
+        data: Box::new(data),
+        cause,
+        provenance: Rc::new(RefCell::new(ExceptionProvenance::default())),
+    })))
+}
+
+fn result_literal_value(form: &Form) -> Result<Value, String> {
+    let Form::Vector(values) = form else {
+        return Err("#result expects a [status data error context] vector".into());
+    };
+    let [status, data, error, context] = values.as_slice() else {
+        return Err("#result expects exactly status, data, error, and context".into());
+    };
+    let Value::Keyword(status) = literal_value(status)? else {
+        return Err("#result status must be :success or :error".into());
+    };
+    let data = literal_value(data)?;
+    let error = literal_value(error)?;
+    let context = literal_value(context)?;
+    match status.as_str() {
+        "success" => {
+            if !matches!(error, Value::Nil) {
+                return Err("#result success must have nil error".into());
+            }
+            Ok(Value::Result(Rc::new(ResultValue::success(data, context)?)))
+        }
+        "error" => {
+            if !matches!(data, Value::Nil) {
+                return Err("#result error must have nil data".into());
+            }
+            if !matches!(error, Value::ExceptionInfo(_)) {
+                return Err("#result error must be an Exception".into());
+            }
+            Ok(Value::Result(Rc::new(ResultValue::error(error, context)?)))
+        }
+        _ => Err("#result status must be :success or :error".into()),
+    }
+}
+
+#[cfg(test)]
+mod literal_tests {
+    use super::*;
+
+    #[test]
+    fn short_exception_and_result_literals_round_trip_without_ex_info() {
+        let exception = literal_value(&Form::Tagged(
+            "ex".into(),
+            Box::new(Form::Vector(vec![
+                Form::String("boom".into()),
+                Form::Map(vec![(
+                    Form::Keyword("kind".into()),
+                    Form::Keyword("fixture".into()),
+                )]),
+            ])),
+        ))
+        .expect("#ex literal");
+        assert_eq!(exception.display(), "#ex[\"boom\" {:kind :fixture}]");
+        let forms = crate::kernel::parse_forms(&exception.display()).expect("printed #ex parses");
+        let Value::ExceptionInfo(round_trip) = literal_value(&forms[0]).expect("printed #ex reads") else {
+            panic!("#ex must read as an Exception");
+        };
+        assert_eq!(round_trip.message, "boom");
+        assert_eq!(round_trip.data.display(), "{:kind :fixture}");
+        assert!(
+            !exception_function_values()
+                .iter()
+                .any(|(name, _)| *name == "ex-info"),
+            "ex-info must not enter the Foundation prelude"
+        );
+
+        let result = Value::Result(Rc::new(
+            ResultValue::success(
+                Value::Number(42),
+                Value::Map(PMap::from_iter([(
+                    Value::Keyword("trace".into()),
+                    Value::Number(8),
+                )])),
+            )
+            .expect("Result value"),
+        ));
+        assert_eq!(result.display(), "#result[:success 42 nil {:trace 8}]");
+        let forms = crate::kernel::parse_forms(&result.display()).expect("printed #result parses");
+        assert_eq!(literal_value(&forms[0]).expect("printed #result reads"), result);
     }
 }
 
@@ -886,12 +999,7 @@ pub(crate) fn call_value(callable: Value, arguments: Vec<Value>) -> Result<Value
             protocol_arguments.extend(arguments);
             protocol_call("std.protocol.ifn.IFn", "invoke", &protocol_arguments)
         }
-        Value::Pointer(pointer) => pointer_context_call(
-            &pointer,
-            pointer_default(&pointer)?,
-            "pointer/invoke",
-            &arguments,
-        ),
+        Value::Pointer(pointer) => pointer_invoke(&pointer, pointer_default(&pointer)?, &arguments),
         Value::Keyword(keyword) => match arguments.as_slice() {
             [target] => lookup(target, &Value::Keyword(keyword), Value::Nil),
             [target, fallback] => lookup(target, &Value::Keyword(keyword), fallback.clone()),

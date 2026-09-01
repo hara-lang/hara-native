@@ -11,10 +11,8 @@ pub trait IContextLifeCycle<M, P> {
     fn setup_module(&mut self, module: M);
     #[hara_method(value = "teardown-module", arity = 2)]
     fn teardown_module(&mut self, module: &M);
-    #[hara_method(value = "has-pointer?", arity = 2)]
-    fn has_pointer(&self, pointer: &P) -> bool;
-    #[hara_method(value = "setup-pointer", arity = 2)]
-    fn setup_pointer(&mut self, pointer: P);
-    #[hara_method(value = "teardown-pointer", arity = 2)]
-    fn teardown_pointer(&mut self, pointer: &P);
+    #[hara_method(value = "setup-ptr", arity = 2)]
+    fn setup_ptr(&mut self, pointer: P);
+    #[hara_method(value = "teardown-ptr", arity = 2)]
+    fn teardown_ptr(&mut self, pointer: &P);
 }

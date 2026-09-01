@@ -16,17 +16,66 @@ use std::rc::Rc;
 mod bindings;
 
 fn eval(source: &str) -> String {
-    eval_source(source)
-        .map(|value| value.display())
-        .expect("evaluation must succeed")
+    eval_native(source)
 }
 
-fn eval_embedded_foundation(source: &str) -> String {
+fn eval_error(source: &str) -> String {
+    let registry = crate::embedding_namespace_registry();
+    match compile_source_with(source, &registry) {
+        Ok(program) => execute_program_with_globals(Rc::new(program), &registry)
+            .expect_err("evaluation must fail")
+            .to_string(),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// The standalone native host has no embedded HAL prelude. Test expressions
+/// therefore use explicit std.native and std.protocol paths against its
+/// embedding registry.
+fn eval_native(source: &str) -> String {
     let registry = crate::embedding_namespace_registry();
     let program = compile_source_with(source, &registry).expect("evaluation must compile");
     execute_program_with_globals(Rc::new(program), &registry)
         .map(|value| value.display())
         .expect("evaluation must succeed")
+}
+
+fn native_struct_source(body: &str) -> String {
+    format!(
+        "(let [Point (std.native.Base/struct \
+                         (std.native.Base/current-namespace) \
+                         (std.native.Base/symbol \"Point\") \
+                         (std.native.Base/vector \
+                           (std.native.Base/symbol \"x\") \
+                           (std.native.Base/symbol \"y\"))) \
+                map->Point (std.protocol.ideref.IDeref/deref \
+                             (std.native.Base/resolve \
+                               (std.native.Base/symbol \"map->Point\")))] \
+           {body})"
+    )
+}
+
+fn eval_native_struct(body: &str) -> String {
+    eval(&native_struct_source(body))
+}
+
+fn native_mutable_source(body: &str) -> String {
+    format!(
+        "(let [Cursor (std.native.Base/mutable \
+                          (std.native.Base/current-namespace) \
+                          (std.native.Base/symbol \"Cursor\") \
+                          (std.native.Base/vector \
+                            (std.native.Base/symbol \"x\") \
+                            (std.native.Base/symbol \"y\"))) \
+                map->Cursor (std.protocol.ideref.IDeref/deref \
+                              (std.native.Base/resolve \
+                                (std.native.Base/symbol \"map->Cursor\")))] \
+           {body})"
+    )
+}
+
+fn eval_native_mutable(body: &str) -> String {
+    eval(&native_mutable_source(body))
 }
 
 #[test]
@@ -44,10 +93,10 @@ fn protocol_count_executes_in_bytecode() {
 }
 
 #[test]
-fn source_owned_string_alias_compiles_without_a_local_require() {
+fn native_string_method_compiles_without_a_source_alias() {
     let registry = crate::embedding_namespace_registry();
-    let program = compile_source_with("(str/length \"hara\")", &registry)
-        .expect("the loaded string namespace owns the global str alias");
+    let program = compile_source_with("(std.native.String/length \"hara\")", &registry)
+        .expect("native String methods compile against the registry");
     assert_eq!(
         execute_program_with_globals(Rc::new(program), &registry)
             .unwrap()
@@ -59,13 +108,9 @@ fn source_owned_string_alias_compiles_without_a_local_require() {
 #[test]
 fn assoc_accepts_a_bytecode_closure_as_the_replacement() {
     assert_eq!(
-        eval("(let [f (fn [value] (+ value 1)) m (assoc {} :f f)] ((get m :f) 41))"),
+        eval("(let [f (fn [value] (+ value 1)) m (std.protocol.iassoc.IAssoc/assoc {} :f f)] ((std.protocol.ilookup.ILookup/lookup m :f) 41))"),
         "42"
     );
-}
-
-fn eval_error(source: &str) -> String {
-    eval_source(source).expect_err("evaluation must fail")
 }
 
 /// Runtime errors append `(instruction NNNN)` to the display; compare the
@@ -147,37 +192,32 @@ fn uuid_reader_tag_constructs_and_displays_uuid_values() {
 
 #[test]
 fn dynamic_collections_and_short_circuit_forms() {
+    assert_eq!(eval("(let [x 19 y 23] [x y])"), "[19 23]");
     assert_eq!(
-        eval_embedded_foundation("(let [x 19 y 23] [x y])"),
-        "[19 23]"
-    );
-    assert_eq!(
-        eval_embedded_foundation(
-            "[(type []) (vector? []) (pair? [1 2]) \
-               (type [1 2 3 4 5 6 7 8]) (map-entry? (pair 1 2)) \
-               (type [1 2 3 4 5 6 7 8 9]) (vector? [1 2 3 4 5 6 7 8 9]) \
-               (pair? [1 2 3 4 5 6 7 8 9])]"
+        eval(
+            "[(std.native.Base/type []) \
+               (= :std.native.Vector (std.native.Base/type [])) \
+               (= :std.native.MapEntry (std.native.Base/type [1 2])) \
+               (std.native.Base/type [1 2 3 4 5 6 7 8]) \
+               (= :std.native.MapEntry (std.native.Base/type (std.native.Base/map-entry 1 2))) \
+               (std.native.Base/type [1 2 3 4 5 6 7 8 9]) \
+               (= :std.native.Vector (std.native.Base/type [1 2 3 4 5 6 7 8 9])) \
+               (= :std.native.MapEntry (std.native.Base/type [1 2 3 4 5 6 7 8 9]))]"
         ),
         "[:std.native.Vector true false :std.native.Vector true :std.native.Vector true false]"
     );
     assert_eq!(
-        eval_embedded_foundation("[(get [1 2] 1) (get [] 0 :missing)]"),
+        eval("[(std.protocol.ilookup.ILookup/lookup [1 2] 1) (std.protocol.ilookup.ILookup/lookup [] 0 :missing)]"),
         "[2 :missing]"
     );
-    assert_eq!(
-        eval_embedded_foundation("(let [x 42] {:answer x})"),
-        "{:answer 42}"
-    );
-    assert_eq!(eval_embedded_foundation("(let [x 42] #{x 1})"), "#{42 1}");
-    assert_eq!(eval_embedded_foundation("(and true 42)"), "42");
-    assert_eq!(eval_embedded_foundation("(and 19 false (/ 1 0))"), "false");
-    assert_eq!(eval_embedded_foundation("(or nil false 42)"), "42");
-    assert_eq!(eval_embedded_foundation("(or 42 (/ 1 0))"), "42");
-    assert_eq!(
-        eval_embedded_foundation("(cond false 1 (= 1 1) 42 :else 0)"),
-        "42"
-    );
-    assert_eq!(eval_embedded_foundation("'(a [1 2])"), "(a [1 2])");
+    assert_eq!(eval("(let [x 42] {:answer x})"), "{:answer 42}");
+    assert_eq!(eval("(let [x 42] #{x 1})"), "#{42 1}");
+    assert_eq!(eval("(and true 42)"), "42");
+    assert_eq!(eval("(and 19 false (/ 1 0))"), "false");
+    assert_eq!(eval("(or nil false 42)"), "42");
+    assert_eq!(eval("(or 42 (/ 1 0))"), "42");
+    assert_eq!(eval("(cond false 1 (= 1 1) 42 :else 0)"), "42");
+    assert_eq!(eval("'(a [1 2])"), "(a [1 2])");
 }
 
 #[test]
@@ -222,22 +262,13 @@ fn runtime_native_array_and_object_calls_lower_to_vm_primitives() {
                     (std.native.Obj/set o \"count\" 11) \
                     [(std.native.Arr/get a 0) \
                      (std.native.Obj/get o \"count\") \
-                     (number? (std.native.Arr/get a 0))])";
+                     (std.native.Base/number? (std.native.Arr/get a 0))])";
     let program = runtime
         .compile_bytecode(source)
         .expect("native calls must compile");
     let disassembly = crate::vm::disassemble(&program);
-    for operator in [
-        "std.native.Arr/new",
-        "std.native.Arr/get",
-        "std.native.Arr/set",
-        "std.native.Obj/new",
-        "std.native.Obj/get",
-        "std.native.Obj/set",
-        "number?",
-    ] {
-        assert!(disassembly.contains(operator), "{operator}:\n{disassembly}");
-    }
+    assert!(disassembly.matches("IntrinsicCall target").count() >= 7, "{disassembly}");
+    assert!(!disassembly.contains("GetGlobal"), "{disassembly}");
     assert_eq!(
         runtime
             .execute_compiled_bytecode_registry_value(program)
@@ -281,7 +312,12 @@ fn base_def_macro_registers_and_expands_from_its_explicit_namespace() {
 fn bytecode_variadic_macro_forwards_rest_to_helper_in_order() {
     let mut runtime = Runtime::core();
     assert_eq!(
-        runtime.eval_bytecode_native("(defn third-form [forms] (first (rest (rest forms))))"),
+        runtime.eval_bytecode_native(
+            "(defn third-form [forms] \
+               (std.protocol.ipeekfirst.IPeekFirst/peek-first \
+                 (std.protocol.ipopfirst.IPopFirst/pop-first \
+                   (std.protocol.ipopfirst.IPopFirst/pop-first forms))))",
+        ),
         Ok("#'user/third-form".into())
     );
     assert_eq!(
@@ -540,7 +576,10 @@ fn unbound_symbols_are_compile_errors_with_positions() {
     let (kind, message) = compile_error("(let [x 1] (+ x y))");
     assert_eq!(kind, CompileErrorKind::UnboundSymbol);
     assert_eq!(message, "unbound symbol: y [line 1, column 17]");
-    assert_eq!(eval("(first [1 2])"), "1");
+    assert_eq!(
+        eval("(std.protocol.ipeekfirst.IPeekFirst/peek-first [1 2])"),
+        "1"
+    );
 }
 
 #[test]
@@ -548,13 +587,19 @@ fn literal_collections_and_collection_primitives() {
     assert_eq!(eval("[1 2 3]"), "[1 2 3]");
     assert_eq!(eval("{:a 1}"), "{:a 1}");
     assert_eq!(eval("#{1 2}"), "#{1 2}");
-    assert_eq!(eval("(nth [10 20 30] 1)"), "20");
-    assert_eq!(eval("(assoc {} :answer 42)"), "{:answer 42}");
+    assert_eq!(eval("(std.protocol.inth.INth/nth [10 20 30] 1)"), "20");
     assert_eq!(
-        eval("(let [before {:a 1} after (assoc before :b 2)] (+ (if (= nil (get before :b)) 40 0) (get after :b)))"),
+        eval("(std.protocol.iassoc.IAssoc/assoc {} :answer 42)"),
+        "{:answer 42}"
+    );
+    assert_eq!(
+        eval("(let [before {:a 1} after (std.protocol.iassoc.IAssoc/assoc before :b 2)] (+ (if (= nil (std.protocol.ilookup.ILookup/lookup before :b)) 40 0) (std.protocol.ilookup.ILookup/lookup after :b)))"),
         "42"
     );
-    assert_eq!(eval("(first (rest [1 2]))"), "2");
+    assert_eq!(
+        eval("(std.protocol.ipeekfirst.IPeekFirst/peek-first (std.protocol.ipopfirst.IPopFirst/pop-first [1 2]))"),
+        "2"
+    );
 }
 
 #[test]
@@ -564,9 +609,9 @@ fn tail_recur_assoc_moves_dead_local_without_mutating_persistent_aliases() {
             "(let [original {:seed 1}
                    built (loop [i 0 value original]
                            (if (< i 500)
-                             (recur (+ i 1) (assoc value i (+ i 1)))
+                             (recur (+ i 1) (std.protocol.iassoc.IAssoc/assoc value i (+ i 1)))
                              value))]
-               [(count original) (get original 499) (count built) (get built 499)])"
+               [(std.protocol.icount.ICount/count original) (std.protocol.ilookup.ILookup/lookup original 499) (std.protocol.icount.ICount/count built) (std.protocol.ilookup.ILookup/lookup built 499)])"
         ),
         "[1 nil 501 500]"
     );
@@ -576,19 +621,19 @@ fn tail_recur_assoc_moves_dead_local_without_mutating_persistent_aliases() {
 fn mutable_collections_build_in_place_and_freeze_once() {
     assert_eq!(
         eval(
-            "(let [m (to-mutable {})]
+            "(let [m (std.protocol.itomutable.IToMutable/to-mutable {})]
                 (do
                   (loop [i 0]
                     (if (< i 500)
-                      (do (assoc m i (+ i 1)) (recur (+ i 1)))
+                      (do (std.protocol.iassoc.IAssoc/assoc m i (+ i 1)) (recur (+ i 1)))
                       nil))
-                  (let [p (to-persistent m)]
-                    (+ (count p) (get p 499)))))"
+                  (let [p (std.protocol.itopersistent.IToPersistent/to-persistent m)]
+                    (+ (std.protocol.icount.ICount/count p) (std.protocol.ilookup.ILookup/lookup p 499)))))"
         ),
         "1000"
     );
     assert_eval_error(
-        "(let [m (to-mutable {}) p (to-persistent m)] (do p (assoc m :late 1)))",
+        "(let [m (std.protocol.itomutable.IToMutable/to-mutable {}) p (std.protocol.itopersistent.IToPersistent/to-persistent m)] (do p (std.protocol.iassoc.IAssoc/assoc m :late 1)))",
         "mutable collection used after to-persistent",
     );
 }
@@ -596,16 +641,26 @@ fn mutable_collections_build_in_place_and_freeze_once() {
 #[test]
 fn mutable_conversion_is_not_constant_folded_across_executions() {
     let program = Rc::new(
-        compile_source(
-            "(loop [i 0 m (to-mutable {})]
+        compile_source_with(
+            "(loop [i 0 m (std.protocol.itomutable.IToMutable/to-mutable {})]
            (if (< i 10)
-             (recur (+ i 1) (assoc m i (+ i 1)))
-             (get (to-persistent m) 9)))",
+             (recur (+ i 1) (std.protocol.iassoc.IAssoc/assoc m i (+ i 1)))
+             (std.protocol.ilookup.ILookup/lookup (std.protocol.itopersistent.IToPersistent/to-persistent m) 9)))",
+            &crate::embedding_namespace_registry(),
         )
         .unwrap(),
     );
-    assert_eq!(execute_program(program.clone()).unwrap().display(), "10");
-    assert_eq!(execute_program(program).unwrap().display(), "10");
+    let registry = crate::embedding_namespace_registry();
+    assert_eq!(
+        execute_program_with_globals(program.clone(), &registry)
+            .unwrap()
+            .display(),
+        "10"
+    );
+    assert_eq!(
+        execute_program_with_globals(program, &registry).unwrap().display(),
+        "10"
+    );
 }
 
 #[test]
@@ -625,7 +680,7 @@ fn immediate_fixed_arity_closures_inline_into_lexical_slots() {
     let program = compile_source("((fn [x] (+ x 1)) 41)").expect("compiles");
     let listing = disassemble(&program);
     assert!(!listing.contains("Closure"), "{listing}");
-    assert!(!listing.contains("Call"), "{listing}");
+    assert!(!listing.contains("\nCall "), "{listing}");
     assert!(listing.contains("StoreLocal"), "{listing}");
     assert_eq!(eval("((fn [x] (+ x 1)) 41)"), "42");
     assert_eq!(eval("(let [x 40] ((fn [x y] (+ x y)) 19 23))"), "42");
@@ -681,14 +736,14 @@ fn defn_lowering_binds_direct_calls() {
 #[test]
 fn inline_metadata_lowers_forwarding_calls_to_the_declared_target() {
     let program = compile_source(
-        "(do (defn target [x] (+ x 1)) (defn ^{:inline true} shim [x] (target x)) (shim 41))",
+        "(do (defn target [x] (+ x 1)) (defn ^:inline shim [x] (target x)) (shim 41))",
     )
     .unwrap();
     let listing = disassemble(&program);
-    assert_eq!(listing.matches("GetGlobal 1").count(), 2, "{listing}");
-    assert!(!listing.contains("GetGlobal 2"), "{listing}");
+    assert_eq!(listing.matches("GetGlobal 2").count(), 2, "{listing}");
+    assert!(!listing.contains("GetGlobal 3"), "{listing}");
     assert_eq!(
-        eval("(do (defn target [x] (+ x 1)) (defn ^{:inline true} shim [x] (target x)) (shim 41))"),
+        eval("(do (defn target [x] (+ x 1)) (defn ^:inline shim [x] (target x)) (shim 41))"),
         "42"
     );
 }
@@ -696,7 +751,7 @@ fn inline_metadata_lowers_forwarding_calls_to_the_declared_target() {
 #[test]
 fn comment_compiles_to_nil_without_compiling_its_contents() {
     assert_eq!(
-        eval("(comment missing-symbol (throw (ex-info \"boom\" {})) (def leaked 1))"),
+        eval("(comment missing-symbol (throw (ex :generic {} :ex/message \"boom\")) (def leaked 1))"),
         "nil"
     );
     assert!(compile_source("(do (comment (def leaked 1)) leaked)").is_err());
@@ -706,7 +761,9 @@ fn comment_compiles_to_nil_without_compiling_its_contents() {
 fn native_result_calls_execute_in_bytecode() {
     let registry = crate::embedding_namespace_registry();
     let program = compile_source_with(
-        "[(= (type (Result/create :success 42)) :std.native.Result) (Result/status (Result/create :success 42)) (Result/data (Result/create :success 42))]",
+        "[(= (std.native.Base/type (std.native.Result/create :success 42)) :std.native.Result) \
+          (std.native.Result/status (std.native.Result/create :success 42)) \
+          (std.native.Result/data (std.native.Result/create :success 42))]",
         &registry,
     )
     .expect("Result native methods compile against the embedded registry");
@@ -966,9 +1023,14 @@ fn try_compile_errors() {
 
 #[test]
 fn uncaught_throw_carries_position() {
-    let program =
-        compile_source("(try 1 (finally 0)) (throw (ex :test/failed {}))").expect("compiles");
-    let error = execute_program(std::rc::Rc::new(program)).expect_err("uncaught throw");
+    let registry = crate::embedding_namespace_registry();
+    let program = compile_source_with(
+        "(try 1 (finally 0)) (throw (std.native.Exception/new \"failed\" {}))",
+        &registry,
+    )
+    .expect("compiles");
+    let error = execute_program_with_globals(std::rc::Rc::new(program), &registry)
+        .expect_err("uncaught throw");
     let text = error.to_string();
     assert!(text.contains("[line 1, column 21]"), "{text}");
     assert!(text.contains("(instruction"), "{text}");
@@ -1010,64 +1072,92 @@ fn global_forms_issue_223() {
 }
 
 #[test]
-fn defstruct_forms_issue_223() {
-    assert_eq!(eval("(do (defstruct Point [x y]) nil)"), "nil");
+fn native_struct_forms_issue_223() {
     assert_eq!(
-        eval("(do (defstruct Point [x y]) (:y (->Point 19 23)))"),
-        "23"
+        eval_native_struct("(std.native.Base/type Point)"),
+        ":std.native.StructType"
     );
+    assert_eq!(eval_native_struct("(:y (Point 19 23))"), "23");
     assert_eq!(
-        eval("(do (defstruct Point [x y]) (let [point (map->Point {:x 1 :extra 9})] [(:x point) (:missing point 7) (:extra point) (type point)]))"),
+        eval_native_struct(
+            "(let [point (map->Point {:x 1 :extra 9})] \
+               [(:x point) (:missing point 7) (:extra point) (std.native.Base/type point)])",
+        ),
         "[1 7 nil :user.Point]"
     );
     assert_eq!(
-        eval("(do (defstruct Point [x y]) [(let [{:keys [x y missing] :or {missing 7} :as point} (Point 1 2)] [x y missing (type point)]) ((fn [{:keys [x y]}] [x y]) (Point 3 4))])"),
+        eval_native_struct(
+            "[(let [{:keys [x y missing] :or {missing 7} :as point} (Point 1 2)] \
+                [x y missing (std.native.Base/type point)]) \
+              ((fn [{:keys [x y]}] [x y]) (Point 3 4))]",
+        ),
         "[[1 2 7 :user.Point] [3 4]]"
     );
     assert_eq!(
-        eval("(do (defstruct Point [x y]) [(get (map->Point {:x 1 :extra 9}) :x) (get (map->Point {:x 1 :extra 9}) :y)])"),
+        eval_native_struct(
+            "[(std.protocol.ilookup.ILookup/lookup (map->Point {:x 1 :extra 9}) :x) \
+              (std.protocol.ilookup.ILookup/lookup (map->Point {:x 1 :extra 9}) :y)]",
+        ),
         "[1 nil]"
     );
     assert_eq!(
-        eval("(do (defstruct Point [x y]) (let [original (Point 1 2) updated (assoc original :x 10)] [(:x original) (:x updated) (instance? Point updated)]))"),
+        eval_native_struct(
+            "(let [original (Point 1 2) \
+                   updated (std.protocol.iassoc.IAssoc/assoc original :x 10)] \
+               [(:x original) (:x updated) (std.native.Base/instance? Point updated)])",
+        ),
         "[1 10 true]"
     );
     assert_eq!(
-        eval("(do (defstruct Point [x y]) (instance? Point (->Point 1 2)))"),
+        eval_native_struct("(std.native.Base/instance? Point (Point 1 2))"),
         "true"
     );
     assert_eq!(
-        eval("(do (defstruct Point [x y]) (instance? Point 42))"),
+        eval_native_struct("(std.native.Base/instance? Point 42)"),
         "false"
     );
-    // Constructor vars are ordinary globals: late-bound and replaceable.
-    assert_eq!(
-        eval("(do (defstruct Point [x y]) (def make ->Point) (:x (make 1 2)))"),
-        "1"
-    );
+    assert_eq!(eval_native_struct("(:x (Point 1 2))"), "1");
 }
 
 #[test]
-fn defmutable_forms_use_reference_identity_and_settable_fields() {
-    assert_eq!(eval("(do (defmutable Cursor [x y]) nil)"), "nil");
+fn native_mutable_forms_use_reference_identity_and_settable_fields() {
     assert_eq!(
-        eval("(do (defmutable Cursor [x y]) (field (->Cursor 19 23) :y))"),
+        eval_native_mutable("(std.native.Base/type Cursor)"),
+        ":std.native.MutableType"
+    );
+    assert_eq!(
+        eval_native_mutable("(std.native.Base/field (Cursor 19 23) :y)"),
         "23"
     );
     assert_eq!(
-        eval("(do (defmutable Cursor [x y]) (let [cursor (map->Cursor {:x 1 :extra 9})] [(get cursor :x) (:y cursor) (count cursor)]))"),
+        eval_native_mutable(
+            "(let [cursor (map->Cursor {:x 1 :extra 9})] \
+               [(std.protocol.ilookup.ILookup/lookup cursor :x) \
+                (:y cursor) \
+                (std.protocol.icount.ICount/count cursor)])",
+        ),
         "[1 nil 2]"
     );
     assert_eq!(
-        eval("(do (defmutable Cursor [x]) (let [cursor (Cursor 1) alias cursor result (set! (field cursor :x) 10)] [result (field alias :x) (= cursor alias) (= cursor (Cursor 10))]))"),
+        eval_native_mutable(
+            "(let [cursor (Cursor 1 0) alias cursor \
+                   result (set! (field cursor :x) 10)] \
+               [result (std.native.Base/field alias :x) (= cursor alias) (= cursor (Cursor 10 0))])",
+        ),
         "[10 10 true false]"
     );
     assert_eq!(
-        eval("(do (def order []) (defmutable Cursor [x]) (def cursor (Cursor 1)) (set! (field (do (set! order (conj order :receiver)) cursor) :x) (do (set! order (conj order :replacement)) 10)) [order (field cursor :x)])"),
+        eval_native_mutable(
+            "(do (def order []) \
+                 (def cursor (Cursor 1 0)) \
+                 (set! (field (do (set! order (std.protocol.iconj.IConj/conj order :receiver)) cursor) :x) \
+                       (do (set! order (std.protocol.iconj.IConj/conj order :replacement)) 10)) \
+                 [order (std.native.Base/field cursor :x)])",
+        ),
         "[[:receiver :replacement] 10]"
     );
     assert_eq!(
-        eval("(do (defmutable Cursor [x]) (instance? Cursor (Cursor 1)))"),
+        eval_native_mutable("(std.native.Base/instance? Cursor (Cursor 1 0))"),
         "true"
     );
 }
@@ -1075,11 +1165,18 @@ fn defmutable_forms_use_reference_identity_and_settable_fields() {
 #[test]
 fn mutable_field_set_inside_function_preserves_order_identity_and_result() {
     assert_eq!(
-        eval("(do (def order []) (defmutable Cursor [x]) (defn replace! [cursor] (set! (field (do (set! order (conj order :receiver)) cursor) :x) (do (set! order (conj order :replacement)) 10))) (def cursor (Cursor 1)) [(replace! cursor) order (field cursor :x)])"),
+        eval_native_mutable(
+            "(do (def order []) \
+                 (defn replace! [cursor] \
+                   (set! (field (do (set! order (std.protocol.iconj.IConj/conj order :receiver)) cursor) :x) \
+                         (do (set! order (std.protocol.iconj.IConj/conj order :replacement)) 10))) \
+                 (def cursor (Cursor 1 0)) \
+                 [(replace! cursor) order (std.native.Base/field cursor :x)])",
+        ),
         "[10 [:receiver :replacement] 10]"
     );
     assert_eq!(
-        eval("(do (defmutable Cursor [x]) ((fn [cursor] (field cursor x)) (Cursor 7)))"),
+        eval_native_mutable("((fn [cursor] (field cursor x)) (Cursor 7 0))"),
         "7"
     );
 }
@@ -1116,13 +1213,13 @@ fn variadic_and_multi_arity_issue_223() {
 }
 
 #[test]
-fn defonce_is_predeclared_like_every_other_top_level_definition() {
+fn def_is_predeclared_for_later_top_level_definitions() {
     let registry = crate::embedding_namespace_registry();
     compile_source_with(
-        "(defonce bytecode-defonce-registry (atom {}))\n(defn bytecode-defonce-value [] bytecode-defonce-registry)\n(= bytecode-defonce-registry (bytecode-defonce-value))",
+        "(def bytecode-registry (std.native.Base/atom {}))\n(defn bytecode-value [] bytecode-registry)\n(= bytecode-registry (bytecode-value))",
         &registry,
     )
-    .expect("defonce is visible to later definitions during compilation");
+    .expect("def is visible to later definitions during compilation");
 }
 
 #[test]
@@ -1137,42 +1234,43 @@ fn global_form_errors_issue_223() {
     assert!(message.contains("set! targets a global var"), "{message}");
     // Mutable-field errors surface at runtime, not compile time.
     assert_eval_error(
-        "(do (defmutable P [x]) (field (->P 1) :z))",
+        &native_mutable_source("(std.native.Base/field (Cursor 1 0) :z)"),
         "unknown mutable field: z",
     );
     assert_eval_error(
-        "(do (defstruct P [x]) (field (->P 1) :x))",
+        &native_struct_source("(std.native.Base/field (Point 1 0) :x)"),
         "field expects a mutable value",
     );
     assert_eval_error(
-        "(do (defmutable P [x]) (field 42 :x))",
+        &native_mutable_source("(std.native.Base/field 42 :x)"),
         "field expects a mutable value",
     );
     assert_eval_error(
-        "(do (defmutable P [x]) (set! (field (P 1) :z) 2))",
+        &native_mutable_source("(set! (field (Cursor 1 0) :z) 2)"),
         "unknown mutable field: z",
     );
     assert_eval_error(
-        "(do (defmutable P [x]) (assoc (P 1) :x 2))",
-        "assoc does not support mutable values",
+        &native_mutable_source(
+            "(std.protocol.iassoc.IAssoc/assoc (Cursor 1 0) :x 2)",
+        ),
+        "protocol/unsupported-receiver: missing protocol implementation: std.protocol.iassoc.IAssoc/assoc",
     );
     assert_eval_error(
-        "(do (defmutable P [x]) (dissoc (P 1) :x))",
-        "dissoc does not support mutable values",
+        &native_mutable_source(
+            "(std.protocol.idissoc.IDissoc/dissoc (Cursor 1 0) :x)",
+        ),
+        "protocol/unsupported-receiver: missing protocol implementation: std.protocol.idissoc.IDissoc/dissoc",
     );
     assert_eval_error(
-        "(do (defstruct P [x]) (instance? 42 1))",
-        "instance? expects a struct or mutable type",
+        "(std.native.Base/instance? 42 1)",
+        "Base/instance? expects a type descriptor and value",
     );
-    // Referred Foundation Vars require explicit namespace omission before
-    // they can be replaced by a local definition.
+    // The standalone host has no referred Foundation Vars, so a local
+    // definition of identity compiles and executes normally.
     let mut runtime = Runtime::new();
-    let error = runtime
-        .compile_bytecode_artifact("(do (defn identity [n] 42) (identity 5))")
-        .unwrap_err();
-    assert!(
-        error.contains("Cannot replace referred Var without ns omission: identity"),
-        "{error}"
+    assert_eq!(
+        runtime.eval_bytecode_native("(do (defn identity [n] 42) (identity 5))"),
+        Ok("42".into())
     );
     // Uninitialized let-style errors keep their shape.
     let (_, message) = compile_error("(fn [a &] a)");
@@ -1321,7 +1419,13 @@ fn async_calls_always_return_settled_promises_on_the_fast_path() {
         crate::core::PromiseState::Fulfilled(Value::Number(42))
     );
 
-    let value = eval_source("(do (defn ^:async fail [] (throw (ex :test/boom {}))) (fail))")
+    let registry = crate::embedding_namespace_registry();
+    let program = compile_source_with(
+        "(do (defn ^:async fail [] (throw (std.native.Exception/new \"boom\" {}))) (fail))",
+        &registry,
+    )
+    .expect("async failure source compiles");
+    let value = execute_program_with_globals(Rc::new(program), &registry)
         .expect("async throw rejects rather than escaping");
     let Value::Promise(promise) = value else {
         panic!("async call returned {value:?}");
