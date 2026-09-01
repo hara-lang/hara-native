@@ -98,7 +98,26 @@ pub fn compile_package_bytecode_bundle(
 ) -> Result<Vec<u8>, String> {
     let mut runtime = Runtime::new();
     let ordered = foundation_root_first(sources);
+    for source in context {
+        runtime.register_resource(source.resource, source.source);
+    }
+    if package_needs_foundation_bootstrap(context, &ordered) {
+        runtime.bootstrap_source_foundation()?;
+    }
     compile_bytecode_bundle_with_runtime(&mut runtime, context, &ordered)
+}
+
+fn package_needs_foundation_bootstrap(
+    context: &[ModuleSource<'_>],
+    sources: &[ModuleSource<'_>],
+) -> bool {
+    let emits_foundation = sources
+        .iter()
+        .any(|source| source.resource == "std.foundation");
+    !emits_foundation
+        && context
+            .iter()
+            .any(|source| source.resource == "std.foundation")
 }
 
 fn foundation_root_first<'a>(sources: &[ModuleSource<'a>]) -> Vec<ModuleSource<'a>> {
@@ -717,6 +736,26 @@ mod tests {
             .expect("load forward package module");
         assert!(runtime.use_namespace("demo.forward"));
         assert_eq!(runtime.eval_native("(answer)").unwrap(), "42");
+    }
+
+    #[test]
+    fn package_bundle_bootstraps_context_foundation_for_an_isolated_package() {
+        let context = [
+            ModuleSource {
+                resource: "std.foundation",
+                source: "(ns std.foundation) (defn atom [value] (Base/atom value)) (defmacro foundation-identity [value] value)",
+            },
+            ModuleSource {
+                resource: "demo.config",
+                source: "(ns demo.config) (def state (foundation-identity (atom {})))",
+            },
+        ];
+        let sources = [context[1]];
+        let bytes = compile_package_bytecode_bundle(&context, &sources)
+            .expect("compile package with intrinsic Foundation context");
+        let modules = decode(&bytes).expect("decode isolated package bundle");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].resource, "demo.config");
     }
 
     #[test]
