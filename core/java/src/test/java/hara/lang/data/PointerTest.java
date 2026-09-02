@@ -43,7 +43,6 @@ public class PointerTest {
     TestRuntime runtime = new TestRuntime();
 
     assertEquals(3, pointer.applyIn(runtime, new Object[] {1, 2, 3}));
-    assertEquals(2, pointer.invokeIn(runtime, 1, 2));
     assertThrows(IllegalArgumentException.class, () -> pointer.applyIn(new Object(), new Object[0]));
     assertThrows(IllegalStateException.class, pointer::deref);
     assertThrows(IllegalStateException.class, pointer::applyDefault);

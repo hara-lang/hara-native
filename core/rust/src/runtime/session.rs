@@ -278,15 +278,6 @@ impl<'a> crate::lang::protocol::IApplicable<Session, &'a str> for Session {
     }
 }
 
-impl<'a> crate::lang::protocol::IInvokeIn<Session, &'a str> for Session {
-    type Output = Result<String, String>;
-
-    fn invoke_in(&self, context: &mut Session, source: &'a str) -> Self::Output {
-        self.ensure_active()?;
-        crate::lang::protocol::IContext::call(context, source)
-    }
-}
-
 struct FilesystemMount {
     provider: Rc<dyn core::FileProvider>,
     kind: &'static str,

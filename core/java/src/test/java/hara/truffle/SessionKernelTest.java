@@ -11,7 +11,6 @@ import hara.kernel.Conn;
 import hara.lang.protocol.IApplicable;
 import hara.lang.protocol.IComponent;
 import hara.lang.protocol.IContext;
-import hara.lang.protocol.IInvokeIn;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -89,7 +88,6 @@ public class SessionKernelTest {
       assertTrue(alpha instanceof IContext);
       assertTrue(alpha instanceof IComponent);
       assertTrue(alpha instanceof IApplicable);
-      assertTrue(alpha instanceof IInvokeIn);
       assertTrue(alpha.isStarted());
       assertEquals("user", ((SessionModel.SessionStatus) alpha.getProps()).namespace());
       assertEquals("zero", ((SessionModel.SessionStatus) alpha.getProps()).authority().profile());
@@ -99,7 +97,6 @@ public class SessionKernelTest {
       assertEquals("user", beta.currentNamespace());
       assertSame(alpha, alpha.applyDefault());
       assertEquals(42L, alpha.applyIn(beta, new Object[] {"(+ 20 22)"}));
-      assertEquals(42L, alpha.invokeIn(beta, "(+ 40 2)"));
       Object[] arguments = new Object[] {"answer"};
       assertSame(arguments, alpha.transformIn(beta, arguments));
       assertEquals(41L, alpha.transformOut(beta, arguments, 41L));

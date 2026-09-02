@@ -69,17 +69,6 @@ fn variadic_annotations_preserve_runtime_ranges() {
             maximum: Some(3)
         }
     );
-    let invoke_in = find_protocol("IInvokeIn")
-        .unwrap()
-        .method("invoke-in")
-        .unwrap();
-    assert_eq!(
-        invoke_in.arity,
-        ProtocolArity::Variadic {
-            minimum: 2,
-            maximum: None
-        }
-    );
 }
 
 #[derive(Debug)]

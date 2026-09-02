@@ -66,8 +66,6 @@ pub mod ihashcached;
 pub mod iindexed;
 #[path = "protocol/iindexedkv.rs"]
 pub mod iindexedkv;
-#[path = "protocol/iinvokein.rs"]
-pub mod iinvokein;
 #[path = "protocol/imaptype.rs"]
 pub mod imaptype;
 #[path = "protocol/iiter.rs"]
@@ -192,7 +190,6 @@ pub use ihash::{HashType, IHash};
 pub use ihashcached::IHashCached;
 pub use iindexed::IIndexed;
 pub use iindexedkv::IIndexedKV;
-pub use iinvokein::IInvokeIn;
 pub use imaptype::IMapType;
 pub use iiter::IIter;
 pub use iiterator::IIterator;
