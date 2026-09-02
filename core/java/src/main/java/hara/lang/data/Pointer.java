@@ -25,7 +25,6 @@ public final class Pointer
         ILookup<Object, Object>,
         ICount,
         IIter<java.util.Map.Entry<Object, Object>>,
-        hara.lang.protocol.IInvokeIn,
         IObjType {
   private static final Keyword CONTEXT_KEY = Keyword.create("context");
 
@@ -156,11 +155,6 @@ public final class Pointer
   @Override
   public Object applyIn(Object runtime, Object[] args) {
     return requireRuntime(runtime).invokePtr(this, args == null ? new Object[0] : args);
-  }
-
-  @Override
-  public Object invokeIn(IContext runtime, Object... args) {
-    return applyIn(runtime, args);
   }
 
   @Override

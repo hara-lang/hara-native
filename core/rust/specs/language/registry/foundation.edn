@@ -352,7 +352,7 @@
   IDerefTimeout/deref-timeout IDisplay/display IDissoc/dissoc IEmpty/empty
   IEquality/equality IExInfo/data IFind/find IFn/invoke
   IHash/hash IHashCached/hash-current IHashCached/hash-put
-  IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val IInvokeIn/invoke-in
+  IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val
   IIter/iter IIterator/iter-next? IIterator/iter-next ILookup/lookup
   IMetadata/metatype INamespaced/name INamespaced/namespace INth/nth
   IObjType/meta IObjType/with-meta IPair/key IPair/value
@@ -378,7 +378,7 @@
   IContextLifeCycle/teardown-module IContextLifeCycle/setup-ptr IContextLifeCycle/teardown-ptr IDerefTimeout/deref-timeout IDisplay/display
   IEquality/equality IFn/invoke IHashCached/hash-current
   IHashCached/hash-put IIndexed/index-of IIndexedKV/index-of-key IIndexedKV/index-of-val
-  IInvokeIn/invoke-in IIter/iter IIterator/iter-next? IIterator/iter-next
+  IIter/iter IIterator/iter-next? IIterator/iter-next
   ILookup/lookup IMetadata/metatype IPeekFirst/peek-first IPeekLast/peek-last
   IPromise/state IPromise/value IPromise/then IPromise/catch
   IPromise/finally IPromise/cancel IPointer/ptr-context
@@ -421,7 +421,6 @@
   {:dispatch IIndexed/index-of, :target std.foundation/index-of}
   {:dispatch IIndexedKV/index-of-key, :target std.foundation/index-of-key}
   {:dispatch IIndexedKV/index-of-val, :target std.foundation/index-of-val}
-  {:dispatch IInvokeIn/invoke-in, :target std.lib.context/invoke-in}
   {:dispatch IIter/iter, :target std.foundation/iter}
   {:dispatch IIterator/iter-next?, :target std.foundation/iter-next?}
   {:dispatch IIterator/iter-next, :target std.foundation/iter-next}
@@ -813,13 +812,6 @@
    :foundation {:classification :direct-interface-wrapper
                 :namespace std.foundation
                 :name index-of-val
-                :status :proposed}
-   :clojure {:equivalent nil :relation :none}}
-  {:protocol IInvokeIn :method invoke-in :arity -1 :domain :execution-context
-   :dispatch IInvokeIn/invoke-in
-   :foundation {:classification :direct-interface-wrapper
-                :namespace std.lib.context
-                :name invoke-in
                 :status :proposed}
    :clojure {:equivalent nil :relation :none}}
   {:protocol IIter :method iter :arity 1 :domain :iteration

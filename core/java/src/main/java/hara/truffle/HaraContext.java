@@ -7749,15 +7749,6 @@ public final class HaraContext {
           return pointerTransformOut(pointer, HaraBox.unwrap(arguments[0]), HaraBox.unwrap(arguments[2]));
         }
       }
-      if ("IInvokeIn".equals(protocolName) && "invoke-in".equals(methodName)) {
-        if (arguments.length < 1) {
-          throw new HaraException("IInvokeIn/invoke-in expects a pointer and runtime");
-        }
-        Object[] invokeArguments = new Object[arguments.length - 1];
-        System.arraycopy(arguments, 1, invokeArguments, 0, invokeArguments.length);
-        return pointerInvokePtr(
-            pointer, HaraBox.unwrap(arguments[0]), pointerArguments(invokeArguments));
-      }
     }
     return protocol.invoke(methodName, receiver, arguments);
   }
