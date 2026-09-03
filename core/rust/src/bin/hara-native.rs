@@ -1792,6 +1792,8 @@ mod tests {
         let result = (|| -> Result<(), String> {
             fs::create_dir_all(runtime.join("src/std")).map_err(|error| error.to_string())?;
             fs::create_dir_all(client.join("src/demo")).map_err(|error| error.to_string())?;
+            fs::create_dir_all(client.join("checkouts/helper/src/demo"))
+                .map_err(|error| error.to_string())?;
             fs::write(
                 runtime.join("project.edn"),
                 "{:hara/type :project :hara/version \"1.0.0\" :project/id hara/foundation :project/version \"0.1.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main std.foundation :project/capabilities #{}}\n",
@@ -1804,12 +1806,22 @@ mod tests {
             .map_err(|error| error.to_string())?;
             fs::write(
                 client.join("project.edn"),
-                "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/client :project/version \"0.1.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main demo.app :project/capabilities #{}}\n",
+                "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/client :project/version \"0.1.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main demo.app :project/capabilities #{} :project/dependencies {\"hara:demo/helper\" {:version \"=1.0.0\"}}}\n",
             )
             .map_err(|error| error.to_string())?;
             fs::write(
                 client.join("src/demo/app.hal"),
-                "(ns demo.app)\n(defn answer [] 42)\n",
+                "(ns demo.app (:require [demo.helper :as helper]))\n(defn answer [] (helper/answer))\n",
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(
+                client.join("checkouts/helper/project.edn"),
+                "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/helper\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}\n",
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(
+                client.join("checkouts/helper/src/demo/helper.hal"),
+                "(ns demo.helper)\n(defn answer [] 42)\n",
             )
             .map_err(|error| error.to_string())?;
             let arguments = vec![

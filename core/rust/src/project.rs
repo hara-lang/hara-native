@@ -225,6 +225,60 @@ pub fn discover(start: &Path) -> Result<Project, String> {
     }
 }
 
+/// Returns the direct local dependency checkouts for a project.
+///
+/// Checkouts intentionally follow Leiningen's development convention: every
+/// immediate child beneath `checkouts/` is an independent project, and its
+/// declared `:project/id` is the coordinate it can satisfy.  The directory
+/// name is only a human-facing label; coordinates are never inferred from it.
+/// Children without a `project.edn` are ignored so editor metadata and other
+/// non-project files do not become dependencies.
+pub fn checkout_projects(project: &Project) -> Result<Vec<Project>, String> {
+    let directory = project.root.join("checkouts");
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths = fs::read_dir(&directory)
+        .map_err(|error| {
+            format!(
+                "cannot read checkout directory {}: {error}",
+                directory.display()
+            )
+        })?
+        .map(|entry| entry.map(|value| value.path()).map_err(io))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+
+    let mut projects = Vec::new();
+    let mut coordinates = BTreeMap::<String, PathBuf>::new();
+    for path in paths {
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest = path.join("project.edn");
+        if !manifest.is_file() {
+            continue;
+        }
+        let checkout =
+            read(&manifest).map_err(|error| format!("checkout {}: {error}", path.display()))?;
+        let coordinate = normalize_coordinate(&checkout.id).map_err(|error| {
+            format!(
+                "checkout {} has an invalid project id: {error}",
+                path.display()
+            )
+        })?;
+        if let Some(previous) = coordinates.insert(coordinate.clone(), path.clone()) {
+            return Err(format!(
+                "multiple checkouts provide {coordinate}: {} and {}",
+                previous.display(),
+                path.display()
+            ));
+        }
+        projects.push(checkout);
+    }
+    Ok(projects)
+}
+
 pub fn read(input: &Path) -> Result<Project, String> {
     let manifest_path = if input.is_dir() {
         input.join("project.edn")

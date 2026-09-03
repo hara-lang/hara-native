@@ -1,6 +1,6 @@
 use crate::kernel::{parse, Form};
 use crate::package_manifest::PackageManifest;
-use crate::project::{normalize_coordinate, read, Project};
+use crate::project::{checkout_projects, normalize_coordinate, read, Project};
 use semver::{Version, VersionReq};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -11,10 +11,18 @@ pub(super) struct InstalledProject {
     pub coordinate: String,
     pub version: Version,
     pub project: Project,
+    pub origin: ResolutionOrigin,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum ResolutionOrigin {
+    Checkout(PathBuf),
+    Installed(PathBuf),
 }
 
 #[derive(Debug, Clone)]
 struct Pending {
+    owner: Project,
     coordinate: String,
     requirement: String,
     chain: Vec<String>,
@@ -38,6 +46,7 @@ pub(super) fn resolve(
         .dependencies
         .iter()
         .map(|(coordinate, requirement)| Pending {
+            owner: project.clone(),
             coordinate: coordinate.clone(),
             requirement: requirement.clone(),
             chain: vec![root_coordinate.clone()],
@@ -82,7 +91,12 @@ fn solve(
         return Err(conflict(&coordinate, constraints, &[]));
     }
 
-    let candidates = candidates(distribution_root, &coordinate, constraints)?;
+    let candidates = candidates(
+        &requirement.owner,
+        distribution_root,
+        &coordinate,
+        constraints,
+    )?;
     if candidates.is_empty() {
         return Err(conflict(
             &coordinate,
@@ -99,6 +113,7 @@ fn solve(
         chain.push(coordinate.clone());
         for (dependency, version) in candidate.project.dependencies.iter().rev() {
             next.push_front(Pending {
+                owner: candidate.project.clone(),
                 coordinate: dependency.clone(),
                 requirement: version.clone(),
                 chain: chain.clone(),
@@ -106,7 +121,12 @@ fn solve(
         }
         match solve(next, trial, distribution_root) {
             Ok(resolved) => return Ok(resolved),
-            Err(error) => failures.push(format!("{}@{}: {error}", coordinate, candidate.version)),
+            Err(error) => failures.push(format!(
+                "{}@{} ({}): {error}",
+                coordinate,
+                candidate.version,
+                origin_label(&candidate.origin)
+            )),
         }
     }
     Err(failures.join("; "))
@@ -121,11 +141,40 @@ fn matches_all(version: &Version, constraints: &[String]) -> Result<bool, String
         .map_err(|error| error.to_string())
 }
 
+fn origin_label(origin: &ResolutionOrigin) -> String {
+    match origin {
+        ResolutionOrigin::Checkout(path) => format!("checkout {}", path.display()),
+        ResolutionOrigin::Installed(path) => format!("installed {}", path.display()),
+    }
+}
+
 fn candidates(
+    owner: &Project,
     distribution_root: &Path,
     coordinate: &str,
     constraints: &[String],
 ) -> Result<Vec<InstalledProject>, String> {
+    let checkouts = checkout_projects(owner)?;
+    if let Some(checkout) = checkouts.into_iter().find(|checkout| {
+        normalize_coordinate(&checkout.id)
+            .map(|candidate| candidate == coordinate)
+            .unwrap_or(false)
+    }) {
+        let version = checkout.version.clone();
+        if !matches_all(&version, constraints)? {
+            return Err(format!(
+                "checkout {} provides {coordinate}@{version}, which does not satisfy [{}]",
+                checkout.root.display(),
+                constraints.join(", ")
+            ));
+        }
+        return Ok(vec![InstalledProject {
+            coordinate: coordinate.to_owned(),
+            version,
+            origin: ResolutionOrigin::Checkout(checkout.root.clone()),
+            project: checkout,
+        }]);
+    }
     let mut output = Vec::new();
     for version in installed_versions(distribution_root, coordinate)? {
         if matches_all(&version, constraints)? {
@@ -221,6 +270,7 @@ fn read_registration(
     Ok(InstalledProject {
         coordinate: coordinate.to_owned(),
         version: version.clone(),
+        origin: ResolutionOrigin::Installed(package_root),
         project,
     })
 }
