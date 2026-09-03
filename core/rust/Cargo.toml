@@ -1,6 +1,6 @@
 [package]
 name = "hara-native"
-version = "0.1.21"
+version = "0.1.22"
 edition = "2021"
 description = "HAL-free native host runtime and package launcher for Hara"
 license = "Apache-2.0"
@@ -99,7 +99,7 @@ panic = "abort"
 strip = "symbols"
 
 [dependencies]
-hara-protocol-macros = { version = "0.1.21", path = "crates/protocol-macros" }
+hara-protocol-macros = { version = "0.1.22", path = "crates/protocol-macros" }
 wasm-bindgen = "0.2"
 inventory = "0.3"
 md5 = "0.8"
@@ -116,7 +116,7 @@ num-bigint = "0.4"
 num-integer = "0.1"
 num-traits = "0.2"
 semver = "1.0"
-hara-abi = { version = "0.1.21", path = "crates/abi" }
+hara-abi = { version = "0.1.22", path = "crates/abi" }
 wasm-encoder = "0.41.2"
 zeroize = "1.8"
 
@@ -177,4 +177,4 @@ name = "native-lang"
 path = "tests/native_lang.rs"
 
 [dev-dependencies]
-hara-hta = { version = "0.1.21", path = "crates/hta-codec" }
+hara-hta = { version = "0.1.22", path = "crates/hta-codec" }
