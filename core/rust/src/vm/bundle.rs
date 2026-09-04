@@ -131,6 +131,7 @@ fn compile_package_bytecode_bundle_inner(
     // eager context closure, plus the language-spec roots used by the lazy
     // grammar registry, before compiling the selected package. Selected
     // modules remain bytecode-owned and are evaluated below as artifacts.
+    #[cfg(not(target_arch = "wasm32"))]
     for source in context_modules_to_load(context, &ordered)? {
         #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
         let result = core::without_direct_native_execution(|| {
