@@ -1,6 +1,6 @@
 use super::{declared_namespace, files_in, Project};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -104,6 +104,85 @@ impl SourceCatalog {
         Ok(digest.finalize().into())
     }
 
+    /// Returns a content address for source namespaces selected by a family
+    /// prefix.  Artifact owners use this instead of the whole-project index
+    /// when unrelated application source must not invalidate their cache.
+    pub fn content_fingerprint_prefixes(
+        &self,
+        prefixes: &[&str],
+    ) -> Result<[u8; 32], String> {
+        let mut selected = BTreeSet::new();
+        for (namespace, path) in self.entries() {
+            if prefixes.iter().any(|prefix| {
+                namespace == *prefix
+                    || namespace
+                        .strip_prefix(prefix)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            }) {
+                selected.insert((namespace, path));
+            }
+        }
+
+        let mut digest = Sha256::new();
+        digest.update(b"hara-source-content-family-v1\0");
+        for (namespace, path) in selected {
+            let source = fs::read(&path)
+                .map_err(|error| format!("cannot read source file {}: {error}", path.display()))?;
+            digest.update(namespace.as_bytes());
+            digest.update([0]);
+            digest.update(source.len().to_le_bytes());
+            digest.update(source);
+        }
+        Ok(digest.finalize().into())
+    }
+
+    /// Returns a content address for one namespace and its declarative source
+    /// dependency closure. Unlike family fingerprints, this resolves only the
+    /// namespaces that an artifact can load, so a JavaScript Book is not
+    /// invalidated by unrelated Python, Lua, or application source.
+    pub fn content_fingerprint_dependencies(
+        &self,
+        roots: &[&str],
+    ) -> Result<[u8; 32], String> {
+        let requested = roots
+            .iter()
+            .map(|namespace| (*namespace).to_owned())
+            .collect::<BTreeSet<_>>();
+        let mut pending = requested.clone();
+        let mut selected = BTreeMap::new();
+
+        while let Some(namespace) = pending.iter().next().cloned() {
+            pending.remove(&namespace);
+            if selected.contains_key(&namespace) {
+                continue;
+            }
+            let Some(path) = self.path(&namespace) else {
+                if requested.contains(&namespace) {
+                    return Err(format!("cannot resolve source namespace {namespace}"));
+                }
+                continue;
+            };
+            let source = fs::read(&path)
+                .map_err(|error| format!("cannot read source file {}: {error}", path.display()))?;
+            for dependency in source_namespace_dependencies(&source, &path)? {
+                if !selected.contains_key(&dependency) {
+                    pending.insert(dependency);
+                }
+            }
+            selected.insert(namespace, source);
+        }
+
+        let mut digest = Sha256::new();
+        digest.update(b"hara-source-content-closure-v1\0");
+        for (namespace, source) in selected {
+            digest.update(namespace.as_bytes());
+            digest.update([0]);
+            digest.update(source.len().to_le_bytes());
+            digest.update(source);
+        }
+        Ok(digest.finalize().into())
+    }
+
     pub(crate) fn cached_namespaces(&self) -> Vec<String> {
         self.entries
             .lock()
@@ -178,17 +257,30 @@ impl SourceCatalog {
             return None;
         }
         for root in self.roots.iter().rev() {
-            let mut candidate = root.to_path_buf();
-            for segment in &segments[..segments.len().saturating_sub(1)] {
-                candidate.push(segment);
-            }
-            candidate.push(format!(
-                "{}.hal",
-                segments.last().expect("non-empty segments")
-            ));
-            let path = candidate.canonicalize().ok()?;
-            if path.starts_with(root) && path.is_file() && !self.excluded(&path) {
-                return Some(path);
+            for underscores in [false, true] {
+                let mut candidate = root.to_path_buf();
+                for segment in &segments[..segments.len().saturating_sub(1)] {
+                    candidate.push(if underscores {
+                        segment.replace('-', "_")
+                    } else {
+                        (*segment).to_owned()
+                    });
+                }
+                let leaf = segments.last().expect("non-empty segments");
+                candidate.push(format!(
+                    "{}.hal",
+                    if underscores {
+                        leaf.replace('-', "_")
+                    } else {
+                        (*leaf).to_owned()
+                    }
+                ));
+                let Ok(path) = candidate.canonicalize() else {
+                    continue;
+                };
+                if path.starts_with(root) && path.is_file() && !self.excluded(&path) {
+                    return Some(path);
+                }
             }
         }
         None
@@ -222,6 +314,36 @@ impl SourceCatalog {
             .lock()
             .expect("source catalog cache poisoned")
             .extend(discovered);
+    }
+}
+
+fn source_namespace_dependencies(source: &[u8], path: &Path) -> Result<Vec<String>, String> {
+    let source = std::str::from_utf8(source)
+        .map_err(|error| format!("cannot decode source file {}: {error}", path.display()))?;
+    let forms = crate::kernel::read_forms(source)
+        .map_err(|error| format!("cannot parse source file {}: {error}", path.display()))?;
+    for form in forms {
+        let crate::kernel::Form::List(values) = resource_without_metadata(&form.form) else {
+            continue;
+        };
+        if !matches!(values.first(), Some(crate::kernel::Form::Symbol(head)) if head == "ns" || head == "ns+") {
+            continue;
+        }
+        let config = crate::kernel::GeneratedNamespaceConfig::configure_with(&values[2..], |_| true)
+            .map_err(|error| format!("cannot read namespace dependencies from {}: {error}", path.display()))?;
+        let mut dependencies = config.required_namespaces().to_vec();
+        dependencies.extend(config.used_namespaces().iter().cloned());
+        dependencies.sort();
+        dependencies.dedup();
+        return Ok(dependencies);
+    }
+    Ok(Vec::new())
+}
+
+fn resource_without_metadata(form: &crate::kernel::Form) -> &crate::kernel::Form {
+    match form {
+        crate::kernel::Form::Metadata(_, value) => resource_without_metadata(value),
+        value => value,
     }
 }
 
@@ -390,4 +512,63 @@ fn dist_root() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".hara/dist")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SourceCatalog;
+    use std::fs;
+
+    #[test]
+    fn dependency_fingerprint_excludes_unrelated_source() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-source-catalog-dependency-fingerprint-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("fixture")).unwrap();
+        fs::create_dir_all(root.join("unrelated")).unwrap();
+        fs::write(
+            root.join("fixture/entry_point.hal"),
+            "(ns fixture.entry-point (:require [fixture.helper-value :as helper]))\n(def value helper/value)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("fixture/helper_value.hal"),
+            "(ns fixture.helper-value)\n(def value 1)\n",
+        )
+        .unwrap();
+        fs::write(root.join("unrelated/value.hal"), "(ns unrelated.value)\n(def value 1)\n")
+            .unwrap();
+        let catalog = SourceCatalog {
+            entries: Default::default(),
+            roots: vec![root.canonicalize().unwrap()],
+            excluded_roots: Vec::new(),
+        };
+
+        let initial = catalog
+            .content_fingerprint_dependencies(&["fixture.entry-point"])
+            .unwrap();
+        fs::write(root.join("unrelated/value.hal"), "(ns unrelated.value)\n(def value 2)\n")
+            .unwrap();
+        assert_eq!(
+            catalog
+                .content_fingerprint_dependencies(&["fixture.entry-point"])
+                .unwrap(),
+            initial
+        );
+        fs::write(
+            root.join("fixture/helper_value.hal"),
+            "(ns fixture.helper-value)\n(def value 2)\n",
+        )
+        .unwrap();
+        assert_ne!(
+            catalog
+                .content_fingerprint_dependencies(&["fixture.entry-point"])
+                .unwrap(),
+            initial
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

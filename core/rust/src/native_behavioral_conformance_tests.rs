@@ -216,3 +216,27 @@ fn rust_runs_the_specs_owned_identity_fast_path_calibration() {
             .expect("identity fast-path calibration must run")
     );
 }
+
+#[test]
+fn direct_native_expands_reexported_source_macros() {
+    let mut runtime = foundation_runtime();
+    runtime
+        .set_execution_backend("direct-native")
+        .expect("direct-native source runtime must configure");
+    runtime
+        .eval_native_value(
+            "(ns native.direct-macro-source) (defmacro quoted [value] (list 'quote value))",
+        )
+        .expect("direct-native must define the source macro");
+    runtime
+        .eval_native_value(
+            "(ns native.direct-macro-facade) (Runtime/intern-var (ns-current) [['quoted 'native.direct-macro-source/quoted]]) (Runtime/intern-var (ns-current) [['quoted 'native.direct-macro-source/quoted]])",
+        )
+        .expect("direct-native must bulk re-export source macros through Runtime/intern-var");
+    let result = runtime
+        .eval_native_value(
+            "(ns native.direct-macro-client (:require [native.direct-macro-facade :as facade])) (facade/quoted 42)",
+        )
+        .expect("direct-native must macroexpand the facade Var before executing it");
+    assert_eq!("42", result.display());
+}

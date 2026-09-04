@@ -93,6 +93,22 @@ enum Request {
     ListResources {
         reply: mpsc::Sender<Result<Vec<String>, String>>,
     },
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    ConfigureNativeSourceCache {
+        root: PathBuf,
+        source_index_fingerprint: [u8; 32],
+        reply: mpsc::Sender<Result<(), String>>,
+    },
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    InstallSourceFoundationImage {
+        image: Vec<u8>,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    InstallSourceLanguageSpecImage {
+        image: Vec<u8>,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
     InstallModule {
         session: String,
         manifest: String,
@@ -326,6 +342,29 @@ impl RuntimeBroker {
         )
     }
 
+    /// Starts a source-catalog broker without interpreter Foundation
+    /// bootstrap. Callers install a verified source Foundation image before
+    /// evaluating user code, so each session reconstructs its compiler
+    /// environment from HBC without sharing mutable runtime state.
+    pub fn start_core_with_backend_and_source_catalog(
+        root: Option<PathBuf>,
+        native_sockets: bool,
+        allow_process: bool,
+        allow_postgres: bool,
+        execution_backend: &str,
+        source_catalog: crate::project::SourceCatalog,
+    ) -> Result<Self, String> {
+        Self::start_with_bootstrap_and_backend_and_catalog(
+            root,
+            native_sockets,
+            allow_process,
+            allow_postgres,
+            RuntimeBootstrap::Core,
+            execution_backend,
+            Some(source_catalog),
+        )
+    }
+
     fn start_with_bootstrap(
         root: Option<PathBuf>,
         native_sockets: bool,
@@ -498,6 +537,39 @@ impl RuntimeBroker {
 
     pub fn resources(&self) -> Result<Vec<String>, String> {
         self.call(|reply| Request::ListResources { reply })
+    }
+
+    /// Configures the project-local HBC cache for the root session and every
+    /// child session subsequently created by this broker. Cache artifacts hold
+    /// only compiled source programs; every session still constructs its own
+    /// namespace and runtime state.
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    pub fn configure_native_source_cache(
+        &self,
+        root: &Path,
+        source_index_fingerprint: [u8; 32],
+    ) -> Result<(), String> {
+        self.call(|reply| Request::ConfigureNativeSourceCache {
+            root: root.to_path_buf(),
+            source_index_fingerprint,
+            reply,
+        })
+    }
+
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    pub fn install_source_foundation_image(&self, image: &[u8]) -> Result<(), String> {
+        self.call(|reply| Request::InstallSourceFoundationImage {
+            image: image.to_vec(),
+            reply,
+        })
+    }
+
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    pub fn install_source_language_spec_image(&self, image: &[u8]) -> Result<(), String> {
+        self.call(|reply| Request::InstallSourceLanguageSpecImage {
+            image: image.to_vec(),
+            reply,
+        })
     }
 
     pub fn install_module(
@@ -831,6 +903,23 @@ fn run(
             }
             Request::ListResources { reply } => {
                 let _ = reply.send(Ok(kernel.resource_names()));
+            }
+            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+            Request::ConfigureNativeSourceCache {
+                root,
+                source_index_fingerprint,
+                reply,
+            } => {
+                kernel.configure_native_source_cache(&root, source_index_fingerprint);
+                let _ = reply.send(Ok(()));
+            }
+            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+            Request::InstallSourceFoundationImage { image, reply } => {
+                let _ = reply.send(kernel.install_source_foundation_image(&image));
+            }
+            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+            Request::InstallSourceLanguageSpecImage { image, reply } => {
+                let _ = reply.send(kernel.install_source_language_spec_image(&image));
             }
             Request::InstallModule {
                 session,

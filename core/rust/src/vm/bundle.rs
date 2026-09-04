@@ -96,16 +96,189 @@ pub fn compile_package_bytecode_bundle(
     context: &[ModuleSource<'_>],
     sources: &[ModuleSource<'_>],
 ) -> Result<Vec<u8>, String> {
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    {
+        return core::without_direct_native_execution(|| {
+            compile_package_bytecode_bundle_inner(context, sources)
+        });
+    }
+    #[cfg(not(all(feature = "direct-native", not(target_arch = "wasm32"))))]
+    compile_package_bytecode_bundle_inner(context, sources)
+}
+
+fn compile_package_bytecode_bundle_inner(
+    context: &[ModuleSource<'_>],
+    sources: &[ModuleSource<'_>],
+) -> Result<Vec<u8>, String> {
     let mut runtime = Runtime::new();
     let ordered = foundation_root_first(sources);
     for source in context {
         runtime.register_resource(source.resource, source.source);
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if package_needs_foundation_bootstrap(context, &ordered) {
+    if package_needs_foundation_bootstrap(context, &ordered)
+        || ordered.iter().any(|source| source.resource == "std.foundation")
+    {
         runtime.bootstrap_source_foundation()?;
     }
-    compile_bytecode_bundle_with_runtime(&mut runtime, context, &ordered)
+    // Context modules are an interpreter-time compiler boundary. Keep this
+    // explicit because package builds can be invoked from a host runtime that
+    // has already selected the direct-native backend.
+    runtime.configure_execution_backend("interpreter")?;
+    // Registration makes context source discoverable to the evaluator, but it
+    // does not establish the Vars and macros that a selected module may use
+    // while its namespace form is being compiled. Load the selected modules'
+    // eager context closure, plus the language-spec roots used by the lazy
+    // grammar registry, before compiling the selected package. Selected
+    // modules remain bytecode-owned and are evaluated below as artifacts.
+    for source in context_modules_to_load(context, &ordered)? {
+        #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+        let result = core::without_direct_native_execution(|| {
+            runtime.eval_native(&format!("(require (quote {}))", source.resource))
+        });
+        #[cfg(not(all(feature = "direct-native", not(target_arch = "wasm32"))))]
+        let result = runtime.eval_native(&format!("(require (quote {}))", source.resource));
+        result.map_err(|error| format!("{}: context loading: {error}", source.resource))?;
+    }
+    // Context resources were registered above and may already be loaded to
+    // establish macro state; avoid re-registering them here, which would
+    // invalidate their namespace load markers before selected compilation.
+    compile_bytecode_bundle_with_runtime(&mut runtime, &[], &ordered)
+}
+
+fn context_modules_to_load<'a>(
+    context: &[ModuleSource<'a>],
+    selected: &[ModuleSource<'a>],
+) -> Result<Vec<ModuleSource<'a>>, String> {
+    let selected_names = selected
+        .iter()
+        .map(|source| source.resource)
+        .collect::<std::collections::HashSet<_>>();
+    let positions = context
+        .iter()
+        .enumerate()
+        .map(|(index, source)| (source.resource, index))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut pending = Vec::new();
+    let mut preload = std::collections::HashSet::new();
+    for source in selected {
+        let (dependencies, script_dependencies) = module_dependencies(source.source)?;
+        pending.extend(
+            dependencies
+                .into_iter()
+                .filter(|name| {
+                    !name.starts_with("std.foundation") && !selected_names.contains(name.as_str())
+                }),
+        );
+        preload.extend(script_dependencies.iter().cloned());
+        pending.extend(script_dependencies);
+    }
+    // The Postgres grammar is loaded lazily by lang.core.registry, but its
+    // macro image is needed during bytecode compilation. Keep this host-side
+    // bootstrap explicit instead of evaluating every target grammar in the
+    // project context for every package.
+    let needs_postgres_spec = selected_names
+        .iter()
+        .any(|name| name.starts_with("postgres."));
+    let needs_xtalk_spec = selected_names
+        .iter()
+        .any(|name| name.starts_with("xt."));
+    pending.extend(
+        context
+            .iter()
+            .filter(|source| {
+                ((needs_postgres_spec && source.resource == "lang.model.v1.spec-postgres")
+                    || (needs_xtalk_spec && source.resource == "lang.model.v1.spec-xtalk"))
+                    && !selected_names.contains(source.resource)
+            })
+            .map(|source| source.resource.to_owned()),
+    );
+    let mut required = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if (!preload.contains(&name) && selected_names.contains(name.as_str()))
+            || !required.insert(name.clone())
+        {
+            continue;
+        }
+        let Some(&index) = positions.get(name.as_str()) else {
+            continue;
+        };
+        let (dependencies, script_dependencies) = module_dependencies(context[index].source)?;
+        pending.extend(
+            dependencies
+                .into_iter()
+                .filter(|dependency| {
+                    !dependency.starts_with("std.foundation")
+                        && !selected_names.contains(dependency.as_str())
+                }),
+        );
+        preload.extend(script_dependencies.iter().cloned());
+        pending.extend(script_dependencies);
+    }
+    let mut ordered = order_module_sources(context)?
+        .into_iter()
+        .map(|index| context[index])
+        .filter(|source| required.contains(source.resource))
+        .collect::<Vec<_>>();
+    // `lang.core.registry` keeps target specs as lazy aliases. Loading the
+    // selected grammar root first makes those aliases resolve to an already
+    // materialized namespace when the registry is later loaded.
+    ordered.sort_by_key(|source| {
+        let priority = (needs_postgres_spec && source.resource == "lang.model.v1.spec-postgres")
+            || (needs_xtalk_spec && source.resource == "lang.model.v1.spec-xtalk");
+        (!priority, !preload.contains(source.resource), source.resource)
+    });
+    Ok(ordered)
+}
+
+pub(super) fn module_dependencies(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let (namespace_form, body) = split_namespace_form(source)?;
+    let dependencies = namespace_dependencies(namespace_form)?;
+    let mut script_dependencies = Vec::new();
+    for form in kernel::parse_forms(body)? {
+        collect_script_dependencies(&form, &mut script_dependencies);
+    }
+    script_dependencies.sort();
+    script_dependencies.dedup();
+    Ok((dependencies, script_dependencies))
+}
+
+fn collect_script_dependencies(form: &kernel::Form, output: &mut Vec<String>) {
+    let form = match form {
+        kernel::Form::Metadata(_, value) => value.as_ref(),
+        value => value,
+    };
+    let kernel::Form::List(items) = form else {
+        return;
+    };
+    let is_script = matches!(
+        items.first(),
+        Some(kernel::Form::Symbol(name)) if name == "l/script" || name == "script"
+    );
+    if !is_script {
+        return;
+    }
+    for option in items.iter().skip(2) {
+        let kernel::Form::Map(entries) = option else {
+            continue;
+        };
+        for (key, value) in entries {
+            if !matches!(key, kernel::Form::Keyword(name) if name == "require") {
+                continue;
+            }
+            let kernel::Form::Vector(requirements) = value else {
+                continue;
+            };
+            for requirement in requirements {
+                let kernel::Form::Vector(spec) = requirement else {
+                    continue;
+                };
+                if let Some(kernel::Form::Symbol(name)) = spec.first() {
+                    output.push(name.clone());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -758,6 +931,25 @@ mod tests {
         let modules = decode(&bytes).expect("decode isolated package bundle");
         assert_eq!(modules.len(), 1);
         assert_eq!(modules[0].resource, "demo.config");
+    }
+
+    #[test]
+    fn package_bundle_loads_context_macros_before_selected_modules() {
+        let context = [
+            ModuleSource {
+                resource: "demo.context",
+                source: "(ns demo.context) (defmacro context-identity [value] value)",
+            },
+            ModuleSource {
+                resource: "demo.client",
+                source: "(ns demo.client (:require [demo.context :refer-macros [context-identity]])) (def answer (context-identity 42))",
+            },
+        ];
+        let bytes = compile_package_bytecode_bundle(&context, &context[1..])
+            .expect("compile selected module against context macro");
+        let modules = decode(&bytes).expect("decode context macro package");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].resource, "demo.client");
     }
 
     #[test]

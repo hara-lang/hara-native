@@ -397,7 +397,22 @@ pub fn read(input: &Path) -> Result<Project, String> {
         &runtime_profiles,
     )?;
     let source_paths = active.source_paths.clone();
-    let source_excludes = active.source_excludes.clone();
+    let mut source_excludes = active.source_excludes.clone();
+    // The Hara deploy graph can mark source-only trees (for example
+    // src-build/play) that are useful in a checkout but must not enter a
+    // relocatable source distribution. Treat those declarations as an
+    // additional native source exclusion while preserving runtime-profile
+    // exclusions.
+    if let Some(deploy) = lookup(entries, "project/deploy") {
+        let deploy = map(deploy, "project.edn :project/deploy must be an EDN map")?;
+        if let Some(excludes) = lookup(deploy, "source-excludes") {
+            for path in paths(excludes, "project/deploy :source-excludes")? {
+                if !source_excludes.contains(&path) {
+                    source_excludes.push(path);
+                }
+            }
+        }
+    }
     let test_paths = active.test_paths.clone();
     let extension_paths = active.extension_paths.clone();
     let dependencies = active.hara_dependencies.clone();

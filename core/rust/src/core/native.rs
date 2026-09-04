@@ -2977,7 +2977,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 Rc::new(|| Ok(())),
             ))
         }
-        "socket/connect" => {
+        "connect" | "socket/connect" => {
             if values.len() != 4 {
                 return Err("socket/connect expects a host, port, options, and callback".into());
             }
@@ -3008,7 +3008,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 .map(|handle| Value::Number(handle as i64))
                 .map_err(|error| socket_error(operation, error))
         }
-        "socket/listen" => {
+        "listen" | "socket/listen" => {
             if values.len() != 4 {
                 return Err("socket/listen expects a host, port, options, and callback".into());
             }
@@ -3030,7 +3030,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 .map(|handle| Value::Number(handle as i64))
                 .map_err(|error| socket_error(operation, error))
         }
-        "socket/endpoint" => {
+        "endpoint" | "socket/endpoint" => {
             if values.len() != 1 {
                 return Err("socket/endpoint expects a server".into());
             }
@@ -3045,7 +3045,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 })
                 .map_err(|error| socket_error(operation, error))
         }
-        "socket/events" => {
+        "events" | "socket/events" => {
             if values.len() != 2 {
                 return Err("socket/events expects a socket handle and options".into());
             }
@@ -3056,7 +3056,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 .map(|stream| Value::Number(stream as i64))
                 .map_err(|error| socket_error(operation, error))
         }
-        "socket/next" => {
+        "next" | "socket/next" => {
             if values.len() != 1 {
                 return Err("socket/next expects a socket stream".into());
             }
@@ -3066,7 +3066,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 .map(Value::Promise)
                 .map_err(|error| socket_error(operation, error))
         }
-        "socket/send" => {
+        "send" | "socket/send" => {
             if values.len() != 2 {
                 return Err("socket/send expects a socket connection and bytes".into());
             }
@@ -3081,7 +3081,7 @@ fn socket_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
                 .map(|count| Value::Number(count as i64))
                 .map_err(|error| socket_error(operation, error))
         }
-        "socket/close" => {
+        "close" | "socket/close" => {
             if values.len() != 1 {
                 return Err("socket/close expects a socket connection".into());
             }
@@ -3643,6 +3643,73 @@ fn native_runtime_values(
             ])))
         }
         "intern-var" => {
+            if values.len() == 2 {
+                let target = namespace_identifier(values[0].clone(), operation)?;
+                let target_namespace = registry.find_or_create(&target);
+                let bindings = iterator_values(values[1].clone())?;
+                let mut interned = Vec::with_capacity(bindings.len());
+                for binding in bindings {
+                    let binding = iterator_values(binding)?;
+                    if binding.len() != 2 {
+                        return Err(
+                            "std.native.Runtime/intern-var bulk bindings must be [unqualified target symbol qualified source symbol]"
+                                .into(),
+                        );
+                    }
+                    let Value::Symbol(name) = &binding[0] else {
+                        return Err(
+                            "std.native.Runtime/intern-var bulk bindings must start with an unqualified target symbol"
+                                .into(),
+                        );
+                    };
+                    if name.get_namespace().is_some() {
+                        return Err(
+                            "std.native.Runtime/intern-var bulk bindings must start with an unqualified target symbol"
+                                .into(),
+                        );
+                    }
+                    if target_namespace.resolve(name).is_some() {
+                        continue;
+                    }
+                    let Value::Symbol(source_symbol) = &binding[1] else {
+                        return Err(
+                            "std.native.Runtime/intern-var bulk bindings must end with a qualified source symbol"
+                                .into(),
+                        );
+                    };
+                    if source_symbol.get_namespace().is_none() {
+                        return Err(
+                            "std.native.Runtime/intern-var bulk bindings must end with a qualified source symbol"
+                                .into(),
+                        );
+                    }
+                    let source = registry.resolve(source_symbol).ok_or_else(|| {
+                        format!(
+                            "std.native.Runtime/intern-var cannot resolve source Var: {}",
+                            source_symbol.as_str()
+                        )
+                    })?;
+                    let value = source.deref_value();
+                    if let Value::Function(function) = &value {
+                        if function.is_macro {
+                            ACTIVE_MACROS.with(|active| {
+                                if let Some(macros) = active.borrow().as_ref() {
+                                    macros.borrow_mut().insert(
+                                        (target.clone(), name.as_str().to_owned()),
+                                        function.clone(),
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    interned.push(Value::Var(target_namespace.intern_with_metadata(
+                        name.as_str(),
+                        value,
+                        source.metadata(),
+                    )));
+                }
+                return Ok(Value::Vector(PVector::from_iter(interned)));
+            }
             if values.len() != 3 && values.len() != 4 {
                 return Err(
                     "std.native.Runtime/intern-var expects namespace, symbol, Var, and optional metadata"

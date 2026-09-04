@@ -17,6 +17,10 @@ pub struct SessionKernel {
     source_catalog: Option<crate::project::SourceCatalog>,
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     native_source_cache: Option<SourceBytecodeCache>,
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    source_foundation_image: Option<Vec<u8>>,
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    source_language_spec_image: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -342,6 +346,10 @@ impl SessionKernel {
             source_catalog: None,
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
             native_source_cache: None,
+            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+            source_foundation_image: None,
+            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+            source_language_spec_image: None,
         }
     }
 
@@ -396,6 +404,34 @@ impl SessionKernel {
         }
     }
 
+    /// Installs a static Foundation compiler image into every current session
+    /// and carries its immutable HBC programs into future sessions. Each
+    /// session executes the image into its own namespace registry and runtime
+    /// state; no Books or Vars are shared between sessions.
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    pub fn install_source_foundation_image(&mut self, image: &[u8]) -> Result<(), String> {
+        for session in self.session_registry.entries.values_mut() {
+            session
+                .runtime_mut()?
+                .bootstrap_source_foundation_image(image)?;
+        }
+        self.source_foundation_image = Some(image.to_vec());
+        Ok(())
+    }
+
+    /// Installs materialized immutable language-spec data after Foundation has
+    /// established each session's own registry atom.
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    pub fn install_source_language_spec_image(&mut self, image: &[u8]) -> Result<(), String> {
+        for session in self.session_registry.entries.values_mut() {
+            session
+                .runtime_mut()?
+                .install_source_language_spec_image(image)?;
+        }
+        self.source_language_spec_image = Some(image.to_vec());
+        Ok(())
+    }
+
     /// Installs a verified HBX namespace bundle in every current session.
     /// Bundle loading is transactional per session and remains explicit so a
     /// kernel cannot accidentally make an application package available to a
@@ -423,6 +459,14 @@ impl SessionKernel {
         #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
         if let Some(source_cache) = &self.native_source_cache {
             runtime.set_direct_native_source_cache(source_cache.clone());
+        }
+        #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+        if let Some(image) = &self.source_foundation_image {
+            runtime.bootstrap_source_foundation_image(image)?;
+        }
+        #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+        if let Some(image) = &self.source_language_spec_image {
+            runtime.install_source_language_spec_image(image)?;
         }
         for (resource, source) in &self.development_resources.entries {
             runtime.register_resource(resource, source);
