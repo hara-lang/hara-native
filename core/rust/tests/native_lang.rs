@@ -26,6 +26,54 @@ fn direct_native_conforms_to_the_portable_catch_shape() {
 }
 
 #[test]
+fn direct_native_namespace_require_compiles_runtime_dependencies() {
+    let mut runtime = Runtime::core();
+    runtime.register_resource(
+        "example.direct-namespace-base",
+        "(ns example.direct-namespace-base) (defn increment [value] (+ value 1))",
+    );
+    runtime.register_resource(
+        "example.direct-namespace-dependency",
+        "(ns example.direct-namespace-dependency (:require [example.direct-namespace-base :as base])) (defn increment [value] (base/increment value))",
+    );
+    runtime
+        .set_execution_backend("direct-native")
+        .expect("native builds must expose the direct-native backend");
+
+    assert_eq!(
+        runtime
+            .eval_native(
+                "(ns example.direct-namespace-client (:require [example.direct-namespace-dependency :as dependency]))\n                 (dependency/increment 41)",
+            )
+            .unwrap(),
+        "42"
+    );
+}
+
+#[test]
+fn direct_native_socket_methods_use_the_declared_native_names() {
+    let mut runtime = Runtime::core();
+    runtime.install_native_socket_provider();
+    runtime
+        .set_execution_backend("direct-native")
+        .expect("native builds must expose the direct-native backend");
+    assert_eq!(
+        runtime
+            .eval_native(
+                concat!(
+                    "(let [server (Socket/listen \"127.0.0.1\" 0 {} (fn [_] nil)) ",
+                    "endpoint (Socket/endpoint server) ",
+                    "stream (Socket/events server {}) ",
+                    "_ (Socket/close server)] ",
+                    "[(= \"127.0.0.1\" (:host endpoint)) (< 0 (:port endpoint)) (< 0 stream)])"
+                ),
+            )
+            .unwrap(),
+        "[true true true]"
+    );
+}
+
+#[test]
 fn direct_native_reads_spanned_forms_without_evaluation() {
     let mut runtime = Runtime::core();
     runtime

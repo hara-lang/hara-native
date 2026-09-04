@@ -194,6 +194,230 @@ pub enum Value {
     Nil,
 }
 
+/// Rebuilds a persistent runtime value while allowing a caller to substitute
+/// selected leaves.  Snapshot boundaries use this to turn process-local
+/// callable Vars into portable references before HTA encoding, then resolve
+/// those references in the receiving Runtime.
+///
+/// The transformer deliberately rejects lazy, mutable, and host-owned values:
+/// carrying any of those across an image boundary would make the image look
+/// valid while silently changing its runtime semantics.
+pub(crate) fn transform_persistent_value(
+    value: &Value,
+    transform: &mut impl FnMut(&Value) -> Option<Result<Value, String>>,
+) -> Result<Value, String> {
+    if let Some(result) = transform(value) {
+        return result;
+    }
+    let nested = |value: &Value, transform: &mut _| transform_persistent_value(value, transform);
+    let pair = |key: &Value, value: &Value, transform: &mut _| {
+        Ok((nested(key, transform)?, nested(value, transform)?))
+    };
+    match value {
+        Value::Tagged(value) => Ok(Value::Tagged(Box::new(PTaggedLiteral::new(
+            value.tag().clone(),
+            nested(value.form(), transform)?,
+        )))),
+        Value::Array(values) => Ok(Value::Array(Rc::new(RefCell::new(
+            values
+                .borrow()
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?,
+        )))),
+        Value::Object(values) => Ok(Value::Object(Rc::new(RefCell::new(
+            values
+                .borrow()
+                .iter()
+                .map(|(key, value)| Ok((key.clone(), nested(value, transform)?)))
+                .collect::<Result<Vec<_>, String>>()?,
+        )))),
+        Value::Atom(value) => Ok(Value::Atom(Box::new(RuntimeAtom::new(
+            nested(&value.deref_value(), transform)?,
+            value.watchable,
+        )))),
+        Value::Recur(values) => Ok(Value::Recur(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Value::Map(values) => Ok(Value::Map(
+            values
+                .iter()
+                .map(|(key, value)| pair(key, value, transform))
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .collect(),
+        )),
+        Value::OrderedMap(values) => Ok(Value::OrderedMap(Box::new(
+            values
+                .iter()
+                .map(|(key, value)| pair(key, value, transform))
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::SortedMap(values) => Ok(Value::SortedMap(Box::new(
+            values
+                .iter()
+                .map(|(key, value)| pair(key, value, transform))
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::Trie(values) => {
+            let entries = values
+                .entries()
+                .into_iter()
+                .map(|(key, value)| Ok((key, nested(&value, transform)?)))
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(Value::Trie(Box::new(
+                entries.into_iter().fold(PTrie::new(), |trie, (key, value)| {
+                    trie.assoc_value(key, value)
+                }),
+            )))
+        }
+        Value::Set(values) => Ok(Value::Set(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        )),
+        Value::OrderedSet(values) => Ok(Value::OrderedSet(Box::new(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::SortedSet(values) => Ok(Value::SortedSet(Box::new(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::List(values) => Ok(Value::List(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        )),
+        Value::Cons(values) => {
+            let values = values
+                .iter()
+                .map(|value| nested(&value, transform))
+                .collect::<Result<Vec<_>, _>>()?;
+            let Some((first, rest)) = values.split_first() else {
+                return Err("cannot transform an empty cons".into());
+            };
+            Ok(Value::Cons(Box::new(PCons::new(
+                first.clone(),
+                rest.iter().cloned().collect(),
+            ))))
+        }
+        Value::Deque(values) => Ok(Value::Deque(Box::new(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::Queue(values) => Ok(Value::Queue(Box::new(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::PriorityMap(values) => Ok(Value::PriorityMap(Box::new(
+            values
+                .iter()
+                .map(|(key, value)| pair(&key, &value, transform))
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::Tuple(values) => Ok(Value::Tuple(Box::new(PTuple::from_values(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?,
+        )?))),
+        Value::Vector(values) => Ok(Value::Vector(
+            values
+                .iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        )),
+        Value::MapEntry(value) => Ok(Value::MapEntry(Box::new(PMapEntry::new(
+            nested(value.key(), transform)?,
+            nested(value.value(), transform)?,
+        )))),
+        Value::Pointer(value) => Ok(Value::Pointer(PPointer::new(
+            value.context().clone(),
+            value
+                .fields()
+                .iter()
+                .map(|(key, value)| pair(key, value, transform))
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .collect(),
+        ))),
+        Value::Struct(value) => Ok(Value::Struct(Rc::new(StructValue::from_values(
+            value.ty.clone(),
+            value
+                .ordered_values()
+                .into_iter()
+                .map(|value| nested(value, transform))
+                .collect::<Result<Vec<_>, _>>()?,
+            value.metadata.clone(),
+        )?))),
+        Value::ExceptionInfo(value) => Ok(Value::ExceptionInfo(Rc::new(ExceptionInfo {
+            message: value.message.clone(),
+            data: Box::new(nested(&value.data, transform)?),
+            cause: value
+                .cause
+                .as_deref()
+                .map(|value| nested(value, transform).map(Box::new))
+                .transpose()?,
+            provenance: value.provenance.clone(),
+        }))),
+        Value::Result(value) => {
+            let context = nested(&value.context, transform)?;
+            match value.status {
+                ResultStatus::Success => Ok(Value::Result(Rc::new(ResultValue::success(
+                    nested(&value.data, transform)?,
+                    context,
+                )?))),
+                ResultStatus::Error => Ok(Value::Result(Rc::new(ResultValue::error(
+                    nested(&value.error_value(), transform)?,
+                    context,
+                )?))),
+            }
+        }
+        Value::ByteBuffer(_) | Value::Promise(_) | Value::MutableCollection(_) | Value::Seq(_)
+        | Value::Iterator(_) | Value::Extension(_) | Value::StructType(_) | Value::MutableType(_)
+        | Value::Mutable(_) | Value::Protocol(_) | Value::NativeType(_) | Value::Schema(_)
+        | Value::Coroutine(_) | Value::Stream(_) => Err(format!(
+            "cannot transform non-persistent value: {}",
+            value.display()
+        )),
+        _ => Ok(value.clone()),
+    }
+}
+
 const UUID_TAG: &str = "uuid";
 
 fn uuid_value_from_uuid(value: uuid::Uuid) -> Value {
@@ -606,7 +830,7 @@ impl RuntimeAtom {
     pub(crate) fn deref_value(&self) -> Value {
         self.value.deref_value()
     }
-    fn reset(&self, new_value: Value) -> Result<Value, String> {
+    pub(crate) fn reset(&self, new_value: Value) -> Result<Value, String> {
         let old_value = self.value.deref_value();
         let result = self.value.reset(new_value.clone())?;
         self.notify(old_value, new_value)?;

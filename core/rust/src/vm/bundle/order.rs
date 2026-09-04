@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use super::{namespace_dependencies, split_namespace_form, ModuleSource};
+use super::{module_dependencies, ModuleSource};
 
-/// Returns a stable dependency-first order. Only eager `:require`/`:use`
-/// edges participate because lazy aliases are runtime loader registrations,
-/// not compilation prerequisites.
+/// Returns a stable dependency-first order. Eager namespace edges and
+/// `l/script` module requirements participate because both must be materialized
+/// before a consumer's macro expansion and artifact execution.
 pub(super) fn order_module_sources(sources: &[ModuleSource<'_>]) -> Result<Vec<usize>, String> {
     let positions = sources
         .iter()
@@ -14,8 +14,11 @@ pub(super) fn order_module_sources(sources: &[ModuleSource<'_>]) -> Result<Vec<u
     let dependencies = sources
         .iter()
         .map(|source| {
-            let (namespace_form, _) = split_namespace_form(source.source)?;
-            namespace_dependencies(namespace_form)
+            let (mut dependencies, script_dependencies) = module_dependencies(source.source)?;
+            dependencies.extend(script_dependencies);
+            dependencies.sort();
+            dependencies.dedup();
+            Ok(dependencies)
         })
         .collect::<Result<Vec<_>, String>>()?;
     let mut state = vec![0u8; sources.len()];

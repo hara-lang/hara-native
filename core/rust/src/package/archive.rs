@@ -22,7 +22,10 @@ pub(super) fn build_archive(project: &Project, output: &Path) -> Result<(), Stri
             collect_files(&base, &project.root, false, false, &mut source_entries)?;
         }
     }
-    let source_entries = source_entries.into_iter().collect::<BTreeSet<_>>();
+    let source_entries = source_entries
+        .into_iter()
+        .filter(|source| !source_is_excluded(source, &project.source_excludes))
+        .collect::<BTreeSet<_>>();
     entries.extend(source_entries.iter().cloned());
     for artifact_path in &project.artifact_paths {
         let base = project.root.join(artifact_path);
@@ -648,6 +651,15 @@ fn collect_source_file(
     }
     entries.push(source.to_path_buf());
     Ok(())
+}
+
+fn source_is_excluded(source: &Path, excludes: &[PathBuf]) -> bool {
+    excludes.iter().any(|exclude| {
+        source == exclude
+            || source
+                .strip_prefix(exclude)
+                .is_ok_and(|suffix| !suffix.as_os_str().is_empty())
+    })
 }
 
 pub(super) fn validate_relative_path(path: &Path) -> Result<(), String> {

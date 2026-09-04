@@ -146,6 +146,138 @@ fn registers_project_sources_for_cross_file_requires() {
 }
 
 #[test]
+fn checkout_dependency_resolves_without_an_installed_registration() {
+    let root = temp("checkout-source");
+    let checkout = root.join("checkouts/demo-lib");
+    let distribution = root.join("distribution");
+    fs::create_dir_all(checkout.join("src/demo")).unwrap();
+    fs::create_dir_all(root.join("src/demo")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/dependencies {\"hara:demo/lib\" {:version \"=1.0.0\"}}}",
+    )
+    .unwrap();
+    fs::write(
+        checkout.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/lib\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        checkout.join("src/demo/lib.hal"),
+        "(ns demo.lib) (defn answer [] 42)",
+    )
+    .unwrap();
+
+    let project = read(&root).unwrap();
+    let catalog = source_catalog_at(&project, &distribution).unwrap();
+    assert_eq!(
+        catalog.path("demo.lib"),
+        Some(checkout.join("src/demo/lib.hal").canonicalize().unwrap())
+    );
+    let mut runtime = Runtime::core();
+    runtime.register_source_catalog(&catalog);
+    assert_eq!(
+        runtime
+            .eval_native("(ns demo.app (:require [demo.lib :as lib])) (lib/answer)")
+            .unwrap(),
+        "42"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn checkout_dependency_overrides_an_installed_package() {
+    let root = temp("checkout-precedence");
+    let installed = root.join("installed");
+    let package = root.join("package");
+    let consumer = root.join("consumer");
+    let checkout = consumer.join("checkouts/demo-lib");
+    fs::create_dir_all(package.join("src/demo")).unwrap();
+    fs::create_dir_all(checkout.join("src/demo")).unwrap();
+    fs::create_dir_all(&consumer).unwrap();
+    fs::write(
+        package.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/lib\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        package.join("src/demo/lib.hal"),
+        "(ns demo.lib) (defn answer [] :installed)",
+    )
+    .unwrap();
+    fs::write(
+        checkout.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/lib\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(
+        checkout.join("src/demo/lib.hal"),
+        "(ns demo.lib) (defn answer [] :checkout)",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/dependencies {\"hara:demo/lib\" {:version \"=1.0.0\"}}}",
+    )
+    .unwrap();
+
+    let archive = package.join("target/lib.harp");
+    package::build_path(&package, Some(&archive)).unwrap();
+    package::install_path_at(&archive, &installed).unwrap();
+    let project = read(&consumer).unwrap();
+    let catalog = source_catalog_at(&project, &installed).unwrap();
+    assert_eq!(
+        catalog.path("demo.lib"),
+        Some(checkout.join("src/demo/lib.hal").canonicalize().unwrap())
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn checkout_dependency_rejects_a_version_mismatch() {
+    let root = temp("checkout-version");
+    let checkout = root.join("checkouts/demo-lib");
+    fs::create_dir_all(checkout.join("src/demo")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/dependencies {\"hara:demo/lib\" {:version \"=2.0.0\"}}}",
+    )
+    .unwrap();
+    fs::write(
+        checkout.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/lib\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    let error = source_catalog_at(&read(&root).unwrap(), &root.join("distribution")).unwrap_err();
+    assert!(error.contains("checkout"));
+    assert!(error.contains("does not satisfy [=2.0.0]"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn checkout_dependency_rejects_duplicate_coordinates() {
+    let root = temp("checkout-duplicate");
+    for name in ["first", "second"] {
+        let checkout = root.join("checkouts").join(name);
+        fs::create_dir_all(checkout.join("src")).unwrap();
+        fs::write(
+            checkout.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:demo/lib\" :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    let error = checkout_projects(&read(&root).unwrap()).unwrap_err();
+    assert!(error.contains("multiple checkouts provide hara:demo/lib"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn installed_semantic_harps_resolve_and_load_through_an_explicit_store() {
     let root = temp("installed-semantic-harps");
     let base = root.join("base");
@@ -330,6 +462,37 @@ fn source_catalog_falls_back_to_legacy_path_discovery_on_demand() {
 }
 
 #[test]
+fn source_catalog_family_content_fingerprint_ignores_unselected_source_changes() {
+    let root = temp("source-family-content-fingerprint");
+    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::create_dir_all(root.join("src/code")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
+    )
+    .unwrap();
+    fs::write(root.join("src/lang/spec.hal"), "(ns lang.spec) (def answer 42)").unwrap();
+    fs::write(root.join("src/code/deploy.hal"), "(ns code.deploy) (def stage :one)").unwrap();
+
+    let catalog = source_catalog(&read(&root).unwrap()).unwrap();
+    let original = catalog.content_fingerprint_prefixes(&["lang"]).unwrap();
+
+    fs::write(root.join("src/code/deploy.hal"), "(ns code.deploy) (def stage :two)").unwrap();
+    assert_eq!(
+        catalog.content_fingerprint_prefixes(&["lang"]).unwrap(),
+        original
+    );
+
+    fs::write(root.join("src/lang/spec.hal"), "(ns lang.spec) (def answer 43)").unwrap();
+    assert_ne!(
+        catalog.content_fingerprint_prefixes(&["lang"]).unwrap(),
+        original
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_profile_excludes_legacy_source_subtrees() {
     let root = temp("native-source-excludes");
     fs::create_dir_all(root.join("src/lang")).unwrap();
@@ -366,6 +529,36 @@ fn native_profile_excludes_legacy_source_subtrees() {
             .collect::<Vec<_>>(),
         vec!["lang.runtime".to_owned()]
     );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deploy_source_excludes_remove_checkout_only_trees_from_native_sources() {
+    let root = temp("deploy-source-excludes");
+    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::create_dir_all(root.join("src-build/play")).unwrap();
+    fs::write(
+        root.join("project.edn"),
+        "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\" \"src-build\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/deploy {:source-excludes [\"src-build\"]}}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/lang/runtime.hal"),
+        "(ns lang.runtime) (def answer 42)",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src-build/play/example.hal"),
+        "(ns play.example) (def answer 7)",
+    )
+    .unwrap();
+
+    let project = read(&root).unwrap();
+    assert_eq!(project.source_excludes, vec![PathBuf::from("src-build")]);
+    let catalog = source_catalog(&project).unwrap();
+    assert!(catalog.path("play.example").is_none());
+    assert!(catalog.path("lang.runtime").is_some());
 
     fs::remove_dir_all(root).unwrap();
 }

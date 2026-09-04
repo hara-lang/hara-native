@@ -117,8 +117,8 @@ impl Machine {
         };
         let metadata = metadata.map(|index| program.var_metadata[usize::from(index)].clone());
         let runtime_value = Machine::into_value(self.program.clone(), value.clone());
-        crate::core::vm_def_macro(name, runtime_value.clone(), metadata)?;
-        self.remember_vm_global(&runtime_value, value.clone());
+        let var = crate::core::vm_def_macro(name, runtime_value, metadata)?;
+        self.remember_vm_global(&var.deref_value(), value.clone());
         self.stack.push(value);
         Ok(())
     }

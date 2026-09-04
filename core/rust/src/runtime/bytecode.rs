@@ -14,11 +14,17 @@ pub(crate) struct SourceBytecodeCache {
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+struct SourceBytecodeCacheEntry {
+    namespace_form: String,
+    program: crate::direct_native::ValidatedProgram,
+}
+
+#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 impl SourceBytecodeCache {
     pub(crate) fn new(root: &std::path::Path, source_index_fingerprint: [u8; 32]) -> Self {
         Self {
             directory: root
-                .join("target/hara/test-bytecode/v1")
+                .join("target/hara/test-bytecode/v2")
                 .join(hex_digest(&source_index_fingerprint)),
         }
     }
@@ -37,25 +43,38 @@ impl SourceBytecodeCache {
             .join(format!("{}.hbc", hex_digest(&digest.finalize())))
     }
 
+    fn namespace_path_for(&self, namespace: &str, source: &str) -> std::path::PathBuf {
+        self.path_for(namespace, source).with_extension("ns")
+    }
+
     fn load(
         &self,
         namespace: &str,
         source: &str,
-    ) -> Option<crate::direct_native::ValidatedProgram> {
+    ) -> Option<SourceBytecodeCacheEntry> {
         let path = self.path_for(namespace, source);
+        let namespace_form = std::fs::read_to_string(self.namespace_path_for(namespace, source)).ok()?;
         let bytes = std::fs::read(path).ok()?;
         let program = crate::vm::decode_program(&bytes).ok()?;
         if program.namespace.as_deref() != Some(namespace) {
             return None;
         }
-        Some(crate::direct_native::ValidatedProgram::from_artifact(
-            Rc::new(program),
-        ))
+        Some(SourceBytecodeCacheEntry {
+            namespace_form,
+            program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program)),
+        })
     }
 
-    fn store(&self, namespace: &str, source: &str, program: &crate::vm::Program) {
+    fn store(
+        &self,
+        namespace: &str,
+        source: &str,
+        namespace_form: &str,
+        program: &crate::vm::Program,
+    ) {
         let path = self.path_for(namespace, source);
-        if path.is_file() {
+        let namespace_path = self.namespace_path_for(namespace, source);
+        if path.is_file() && namespace_path.is_file() {
             return;
         }
         let Ok(bytes) = crate::vm::encode_program(program) else {
@@ -64,10 +83,18 @@ impl SourceBytecodeCache {
         if std::fs::create_dir_all(&self.directory).is_err() {
             return;
         }
-        let temporary = path.with_extension(format!("hbc.tmp-{}", std::process::id()));
-        if std::fs::write(&temporary, bytes).is_ok() {
-            let _ = std::fs::rename(temporary, path);
+        let id = std::process::id();
+        let namespace_temporary = namespace_path.with_extension(format!("ns.tmp-{id}"));
+        let program_temporary = path.with_extension(format!("hbc.tmp-{id}"));
+        if std::fs::write(&namespace_temporary, namespace_form).is_err()
+            || std::fs::write(&program_temporary, bytes).is_err()
+        {
+            let _ = std::fs::remove_file(namespace_temporary);
+            let _ = std::fs::remove_file(program_temporary);
+            return;
         }
+        let _ = std::fs::rename(namespace_temporary, namespace_path);
+        let _ = std::fs::rename(program_temporary, path);
     }
 }
 
@@ -627,6 +654,8 @@ fn load_direct_native_namespace(
     resource: core::NamespaceResource,
     environment: &mut HashMap<String, core::Value>,
 ) -> Result<(), String> {
+    let profile = std::env::var_os("HARA_NATIVE_PROFILE_NAMESPACE_LOADS").is_some();
+    let started = std::time::Instant::now();
     let program = match &resource {
         core::NamespaceResource::Source(_) => {
             compile_direct_native_source_namespace(name, &resource, environment, source_cache)?
@@ -655,10 +684,19 @@ fn load_direct_native_namespace(
             crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program))
         }
     };
-    engine
+    let result = engine
         .execute_blocking_validated_with_multimethods(program, multimethods.clone())
         .map(|_| ())
-        .map_err(|error| format!("{name}: direct-native execution: {error}"))
+        .map_err(|error| format!("{name}: direct-native execution: {error}"));
+    if profile {
+        eprintln!(
+            "PROFILE namespace {}={}ms {}",
+            name,
+            started.elapsed().as_millis(),
+            if result.is_ok() { "ok" } else { "error" }
+        );
+    }
+    result
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -669,8 +707,34 @@ fn compile_direct_native_source_namespace(
     source_cache: Option<&SourceBytecodeCache>,
 ) -> Result<crate::direct_native::ValidatedProgram, String> {
     let source = core::read_source_resource(resource, name)?;
+    if let Some(entry) = source_cache.and_then(|cache| cache.load(name, &source)) {
+        if std::env::var_os("HARA_NATIVE_PROFILE_NAMESPACE_LOADS").is_some() {
+            eprintln!("PROFILE source-cache {name}=hit");
+        }
+        let forms = kernel::read_forms(&entry.namespace_form).map_err(|error| error.to_string())?;
+        let namespace = forms
+            .first()
+            .filter(|form| {
+                matches!(
+                    core::form_without_metadata(&form.form),
+                    kernel::Form::List(items)
+                        if matches!(items.first(), Some(kernel::Form::Symbol(operator)) if operator == "ns" || operator == "ns+")
+                )
+            })
+            .ok_or_else(|| format!("{name}: cached namespace declaration is invalid"))?;
+        let namespace_value = core::form_to_value(&namespace.form)?;
+        core::eval_bytecode_management_in(&namespace_value, environment)
+            .map_err(|error| format!("{name}: namespace declaration: {error}"))?;
+        let registry = core::namespace_registry()?;
+        registry.set_current(name);
+        return Ok(entry.program);
+    }
+    if std::env::var_os("HARA_NATIVE_PROFILE_NAMESPACE_LOADS").is_some() {
+        eprintln!("PROFILE source-cache {name}=miss");
+    }
     let forms = kernel::read_forms(&source).map_err(|error| error.to_string())?;
     let mut body_offset = 0;
+    let mut namespace_form = None;
     if forms.first().is_some_and(|form| {
         matches!(
             core::form_without_metadata(&form.form),
@@ -682,9 +746,9 @@ fn compile_direct_native_source_namespace(
         core::eval_bytecode_management_in(&namespace_value, environment)
             .map_err(|error| format!("{name}: namespace declaration: {error}"))?;
         body_offset = forms[0].span.end.offset;
-    }
-    if let Some(program) = source_cache.and_then(|cache| cache.load(name, &source)) {
-        return Ok(program);
+        namespace_form = source
+            .get(forms[0].span.start.offset..body_offset)
+            .map(str::to_owned);
     }
     let config = vm::source_namespace_config(&forms)
         .map_err(|error| format!("{name}: namespace configuration: {error}"))?;
@@ -693,19 +757,17 @@ fn compile_direct_native_source_namespace(
     let body = source
         .get(body_offset..)
         .ok_or_else(|| format!("{name}: namespace form offset is invalid"))?;
-    let allow_unbound_globals = vm::source_uses_dynamic_evaluation(body).unwrap_or(false);
-    let compile = || {
-        if allow_unbound_globals {
-            vm::compile_source_with_config_allow_unbound_globals(body, &registry, config)
-        } else {
-            vm::compile_source_with_config(body, &registry, config)
-        }
-    };
+    // A namespace is compiled as one source unit, while registrations such as
+    // `defstruct` publish constructors as earlier forms execute. Keep those
+    // references late-bound so the body can use its own generated Vars (and
+    // Vars from a dependency still being loaded) without falling back to the
+    // tree evaluator. Missing Vars still fail at their native call site.
+    let compile = || vm::compile_source_with_config_allow_unbound_globals(body, &registry, config);
     let mut program = core::without_direct_native_execution(compile)
         .map_err(|error| format!("{name}: direct-native compilation: {error}"))?;
     program.namespace = Some(name.to_owned());
-    if let Some(cache) = source_cache {
-        cache.store(name, &source, &program);
+    if let (Some(cache), Some(namespace_form)) = (source_cache, namespace_form.as_deref()) {
+        cache.store(name, &source, namespace_form, &program);
     }
     Ok(crate::direct_native::ValidatedProgram::from_compiler(
         Rc::new(program),
@@ -753,12 +815,13 @@ mod source_cache_tests {
         let cache = SourceBytecodeCache::new(&root.0, [7; 32]);
 
         assert!(cache.load(namespace, source).is_none());
-        cache.store(namespace, source, &program);
+        cache.store(namespace, source, "(ns example.cache)", &program);
 
         let loaded = cache
             .load(namespace, source)
             .expect("stored source must be readable");
-        assert_eq!(loaded.program().namespace.as_deref(), Some(namespace));
+        assert_eq!(loaded.program.program().namespace.as_deref(), Some(namespace));
+        assert_eq!(loaded.namespace_form, "(ns example.cache)");
         assert!(cache.load(namespace, "(+ 1 3)").is_none());
         assert!(cache.load("example.other", source).is_none());
     }

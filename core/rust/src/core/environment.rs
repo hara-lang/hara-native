@@ -813,6 +813,8 @@ thread_local! {
     static ACTIVE_THROWN_VALUE: RefCell<Option<(String, Value)>> = const { RefCell::new(None) };
     static ACTIVE_MULTIMETHODS: RefCell<HashMap<String, Rc<RefCell<MultiMethod>>>> = RefCell::new(HashMap::new());
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    static ACTIVE_DIRECT_NATIVE_MULTIMETHODS: RefCell<Option<MultiMethodRegistry>> = const { RefCell::new(None) };
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     static ACTIVE_DIRECT_NATIVE_NAMESPACE_LOADER: RefCell<Option<Rc<dyn Fn(&str, NamespaceResource, &mut HashMap<String, Value>) -> Result<(), String>>>> = const { RefCell::new(None) };
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     static ACTIVE_DIRECT_NATIVE_EXECUTION: Cell<bool> = const { Cell::new(false) };
@@ -859,9 +861,17 @@ pub(crate) struct DirectNativeContext {
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 impl DirectNativeContext {
     pub(crate) fn capture() -> Self {
-        let multimethods = Rc::new(RefCell::new(
-            ACTIVE_MULTIMETHODS.with(|active| active.borrow().clone()),
-        ));
+        // A callback created during native execution must retain the same
+        // registry as its parent. Declaration macros execute their work in
+        // callback thunks, so copying here would hide a `defmulti` from the
+        // following `defmethod` in the same compiled namespace.
+        let multimethods = ACTIVE_DIRECT_NATIVE_MULTIMETHODS
+            .with(|active| active.borrow().clone())
+            .unwrap_or_else(|| {
+                Rc::new(RefCell::new(
+                    ACTIVE_MULTIMETHODS.with(|active| active.borrow().clone()),
+                ))
+            });
         Self::capture_with_multimethods(multimethods)
     }
 
@@ -962,37 +972,44 @@ fn with_direct_native_context_values<R>(
     context: &DirectNativeContext,
     operation: impl FnOnce() -> R,
 ) -> R {
-    let run_with_multimethods = || {
-        ACTIVE_MULTIMETHODS.with(|active| {
-            let previous = std::mem::replace(
-                &mut *active.borrow_mut(),
-                context.multimethods.borrow().clone(),
-            );
-            let result = operation();
-            *context.multimethods.borrow_mut() = active.borrow().clone();
-            *active.borrow_mut() = previous;
-            result
-        })
-    };
-    let run_with_loader = || {
-        if let Some(loader) = context.native_namespace_loader.clone() {
-            with_direct_native_namespace_loader(loader, run_with_multimethods)
-        } else {
-            run_with_multimethods()
-        }
-    };
-    let run_with_source = || {
-        if let Some(provider) = context.namespace_source.clone() {
-            with_namespace_source(provider, run_with_loader)
-        } else {
-            run_with_loader()
-        }
-    };
-    if let Some(handler) = context.host_handler.clone() {
-        with_host_calls(handler, run_with_source)
-    } else {
-        run_with_source()
-    }
+    ACTIVE_DIRECT_NATIVE_MULTIMETHODS.with(|direct_native| {
+        let previous_direct_native = direct_native.replace(Some(context.multimethods.clone()));
+        let result = {
+            let run_with_multimethods = || {
+                ACTIVE_MULTIMETHODS.with(|active| {
+                    let previous = std::mem::replace(
+                        &mut *active.borrow_mut(),
+                        context.multimethods.borrow().clone(),
+                    );
+                    let result = operation();
+                    *context.multimethods.borrow_mut() = active.borrow().clone();
+                    *active.borrow_mut() = previous;
+                    result
+                })
+            };
+            let run_with_loader = || {
+                if let Some(loader) = context.native_namespace_loader.clone() {
+                    with_direct_native_namespace_loader(loader, run_with_multimethods)
+                } else {
+                    run_with_multimethods()
+                }
+            };
+            let run_with_source = || {
+                if let Some(provider) = context.namespace_source.clone() {
+                    with_namespace_source(provider, run_with_loader)
+                } else {
+                    run_with_loader()
+                }
+            };
+            if let Some(handler) = context.host_handler.clone() {
+                with_host_calls(handler, run_with_source)
+            } else {
+                run_with_source()
+            }
+        };
+        direct_native.replace(previous_direct_native);
+        result
+    })
 }
 
 pub(crate) fn with_test_runner<R>(runner: &str, f: impl FnOnce() -> R) -> R {
@@ -1258,10 +1275,21 @@ pub(crate) fn vm_def_macro(
     value: Value,
     metadata: Option<Rc<Metadata>>,
 ) -> Result<KernelVar<Value>, String> {
-    let Value::Function(function) = &value else {
+    let Value::Function(function) = value else {
         return Err("defmacro expects a function value".into());
     };
-    let function = function.clone();
+    // VM closures are materialized as regular native functions.  A macro must
+    // retain its macro classification in the Var value as well as in the
+    // current namespace macro registry: `intern-var` uses this flag when a
+    // facade re-exports the macro into another namespace.
+    let function = if function.is_macro {
+        function
+    } else {
+        let mut macro_function = (*function).clone();
+        macro_function.is_macro = true;
+        Rc::new(macro_function)
+    };
+    let value = Value::Function(function.clone());
     let namespace = namespace_registry()?.current().name().as_str().to_owned();
     let var = vm_def_global(name, value, metadata)?;
     register_macro(&namespace, name, function)?;
