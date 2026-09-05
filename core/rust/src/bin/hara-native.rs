@@ -4,7 +4,7 @@
 //! verified HARP archive.  The user-facing `hara` command is intentionally a
 //! source-package wrapper and is not built into this binary.
 
-use hara_native::kernel::{parse, read_forms, Form};
+use hara_native::kernel::{parse, read_forms, Form, SpannedForm};
 use hara_native::{
     command::{
         App as CommandApp, AppConfig, ArgumentSpec, CommandError, OptionKind, OptionSpec,
@@ -20,7 +20,8 @@ use hara_native::{
     Runtime,
 };
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, HashSet};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -41,15 +42,10 @@ enum Command {
     },
     Precompile {
         project: PathBuf,
-        all_lang: bool,
     },
     TestJson {
         suite: PathBuf,
         groups: Vec<String>,
-    },
-    BundleBuild {
-        project: PathBuf,
-        output: Option<PathBuf>,
     },
     BundleInspect {
         archive: PathBuf,
@@ -67,7 +63,9 @@ enum Command {
         argv: Vec<String>,
     },
     DistributionBuild {
-        project: PathBuf,
+        archive: PathBuf,
+        launcher: String,
+        entry: String,
         output: PathBuf,
     },
     Signer(Vec<String>),
@@ -87,13 +85,9 @@ Commands:
   repl                          start a core-language REPL
   test [--project PATH] [--file PATH]...
                                 run project Test/* files in fresh runtimes
-  precompile [--project PATH] [--all-lang]
-                                warm Foundation and the lazy Basic macro surface;
-                                --all-lang additionally compiles every lang.* namespace
+  precompile [--project PATH]  build a generic source Foundation bootstrap image
   test-json SUITE.json [GROUP...]
                                 run selected JSON host tests in one runtime
-  bundle build PROJECT [--output ARCHIVE.harp]
-                                package a source project into a HARP archive
   bundle inspect ARCHIVE.harp [--json]
                                 read verified package metadata
   bundle verify ARCHIVE.harp    verify archive paths, digests, and metadata
@@ -102,8 +96,8 @@ Commands:
                                 mount an installed package and evaluate its main
   bundle exec ARCHIVE.harp --entry NAMESPACE/SYMBOL [-- ARG...]
                                 mount a verified package and invoke its entry with argv
-  distribution build PROJECT --output DIRECTORY
-                                assemble a relocatable native host and HARP package
+  distribution build ARCHIVE.harp --launcher NAME --entry NAMESPACE/SYMBOL --output DIRECTORY
+                                assemble a relocatable native host and supplied HARP package
   signer generate --key-file PATH
                                 create a local development Ed25519 key
   signer public-key --key-file PATH
@@ -174,10 +168,7 @@ fn cli_application() -> Result<CommandApp<CliHandler>, String> {
         &["precompile"],
         "Warm Foundation and the lazy Basic macro surface",
     );
-    precompile.spec.options = vec![
-        cli_string_option("project", "--project", false, Some(".")),
-        cli_boolean_option("all-lang", "--all-lang"),
-    ];
+    precompile.spec.options = vec![cli_string_option("project", "--project", false, Some("."))];
     cli_install(&mut app, precompile)?;
     let mut test_json = cli_route("test-json", &["test-json"], "Run JSON host tests");
     test_json.spec.arguments = vec![
@@ -193,10 +184,6 @@ fn cli_application() -> Result<CommandApp<CliHandler>, String> {
         cli_argument("argv", false, true),
     ];
     cli_install(&mut app, bundle)?;
-    let mut bundle_build = cli_route("bundle-build", &["bundle", "build"], "Build a HARP archive");
-    bundle_build.spec.arguments = vec![cli_argument("project", true, false)];
-    bundle_build.spec.options = vec![cli_string_option("output", "--output", false, None)];
-    cli_install(&mut app, bundle_build)?;
     let mut bundle_inspect = cli_route(
         "bundle-inspect",
         &["bundle", "inspect"],
@@ -249,10 +236,14 @@ fn cli_application() -> Result<CommandApp<CliHandler>, String> {
     let mut distribution_build = cli_route(
         "distribution-build",
         &["distribution", "build"],
-        "Build a relocatable Hara distribution",
+        "Assemble a relocatable Hara distribution from a HARP archive",
     );
-    distribution_build.spec.arguments = vec![cli_argument("project", true, false)];
-    distribution_build.spec.options = vec![cli_string_option("output", "--output", false, None)];
+    distribution_build.spec.arguments = vec![cli_argument("archive", true, false)];
+    distribution_build.spec.options = vec![
+        cli_string_option("launcher", "--launcher", false, None),
+        cli_string_option("entry", "--entry", false, None),
+        cli_string_option("output", "--output", false, None),
+    ];
     cli_install(&mut app, distribution_build)?;
 
     for (id, desc) in [
@@ -353,7 +344,6 @@ fn cli_command(request: &Request) -> Result<Command, String> {
         }),
         "precompile" => Ok(Command::Precompile {
             project: PathBuf::from(option("project")?),
-            all_lang: enabled("all-lang")?,
         }),
         "test-json" => Ok(Command::TestJson {
             suite: PathBuf::from(argument("suite")?),
@@ -363,10 +353,6 @@ fn cli_command(request: &Request) -> Result<Command, String> {
             "unknown hara-native bundle operation: {}; expected build, inspect, verify, install, run, or exec",
             argument("operation")?
         )),
-        "bundle-build" => Ok(Command::BundleBuild {
-            project: PathBuf::from(argument("project")?),
-            output: non_empty(option("output")?).map(PathBuf::from),
-        }),
         "bundle-inspect" => Ok(Command::BundleInspect {
             archive: PathBuf::from(argument("archive")?),
             json: enabled("json")?,
@@ -388,7 +374,11 @@ fn cli_command(request: &Request) -> Result<Command, String> {
             argument("operation")?
         )),
         "distribution-build" => Ok(Command::DistributionBuild {
-            project: PathBuf::from(argument("project")?),
+            archive: PathBuf::from(argument("archive")?),
+            launcher: non_empty(option("launcher")?)
+                .ok_or_else(|| "hara-native distribution build requires --launcher".to_owned())?,
+            entry: non_empty(option("entry")?)
+                .ok_or_else(|| "hara-native distribution build requires --entry".to_owned())?,
             output: non_empty(option("output")?)
                 .map(PathBuf::from)
                 .ok_or_else(|| "hara-native distribution build requires --output".to_owned())?,
@@ -471,11 +461,8 @@ fn run(command: Command) -> Result<(), String> {
         Command::Run(path) => evaluate_file(&path),
         Command::Repl => repl(),
         Command::Test { project, files } => run_project_tests(&project, &files).map(|_| ()),
-        Command::Precompile { project, all_lang } => {
-            precompile_language_specs(&project, all_lang).map(|_| ())
-        }
+        Command::Precompile { project } => precompile_foundation(&project).map(|_| ()),
         Command::TestJson { suite, groups } => run_test_suite(&suite, &groups),
-        Command::BundleBuild { project, output } => build_bundle(&project, output.as_deref()),
         Command::BundleInspect { archive, json } => inspect_bundle(&archive, json),
         Command::BundleVerify(archive) => verify_bundle(&archive),
         Command::BundleInstall(archive) => install_bundle(&archive).map(|_| ()),
@@ -485,7 +472,12 @@ fn run(command: Command) -> Result<(), String> {
             entry,
             argv,
         } => run_bundle_entry(&archive, &entry, &argv),
-        Command::DistributionBuild { project, output } => build_distribution(&project, &output),
+        Command::DistributionBuild {
+            archive,
+            launcher,
+            entry,
+            output,
+        } => build_distribution(&archive, &launcher, &entry, &output),
         Command::Signer(arguments) => signer::run(arguments),
         Command::Id(arguments) => run_id(&arguments),
         Command::Publish => Err(package::github_workflow_required()),
@@ -613,12 +605,6 @@ fn inspect_bundle(archive: &Path, json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn build_bundle(project: &Path, output: Option<&Path>) -> Result<(), String> {
-    let archive = package::build_path(project, output)?;
-    println!("built {}", archive.display());
-    Ok(())
-}
-
 fn install_bundle(archive: &Path) -> Result<PathBuf, String> {
     verify_bundle(archive)?;
     let installed = package::install_path(archive)?;
@@ -657,7 +643,7 @@ fn execute_installed_bundle(
     entry: Option<&str>,
     argv: Option<&[String]>,
 ) -> Result<String, String> {
-    execute_installed_bundle_roots(root, &[root.to_path_buf()], entry, argv, None)
+    execute_installed_bundle_roots(root, &[root.to_path_buf()], entry, argv, None, None)
 }
 
 fn execute_installed_bundle_roots(
@@ -666,17 +652,37 @@ fn execute_installed_bundle_roots(
     entry: Option<&str>,
     argv: Option<&[String]>,
     file_root: Option<&Path>,
+    image_cache_root: Option<&Path>,
 ) -> Result<String, String> {
     let project = project::read(&root)?;
     let main = project::main_file(&project)?;
     let source = fs::read_to_string(&main)
         .map_err(|error| format!("cannot read {}: {error}", main.display()))?;
     let catalog = project::source_catalog(&project)?;
+    #[cfg(feature = "direct-native")]
+    let source_foundation_image = if catalog.path("std.foundation").is_some() {
+        read_foundation_image_from_roots(
+            root,
+            image_cache_root,
+            source_bootstrap_image_fingerprint(&catalog)?,
+        )?
+    } else {
+        None
+    };
     let file_root = file_root.unwrap_or(root);
     let mut runtime = Runtime::core();
     runtime.install_native_file_provider(file_root.to_string_lossy().as_ref());
-    install_native_kernel(
-        &mut runtime,
+    #[cfg(feature = "direct-native")]
+    let broker = if source_foundation_image.is_some() {
+        RuntimeBroker::start_core_with_backend_and_source_catalog(
+            Some(file_root.to_path_buf()),
+            false,
+            false,
+            false,
+            "interpreter",
+            catalog.clone(),
+        )?
+    } else {
         RuntimeBroker::start_with_source_catalog(
             Some(file_root.to_path_buf()),
             false,
@@ -684,13 +690,43 @@ fn execute_installed_bundle_roots(
             false,
             "interpreter",
             catalog.clone(),
-        )?,
-    );
+        )?
+    };
+    #[cfg(not(feature = "direct-native"))]
+    let broker = RuntimeBroker::start_with_source_catalog(
+        Some(file_root.to_path_buf()),
+        false,
+        false,
+        false,
+        "interpreter",
+        catalog.clone(),
+    )?;
+    install_native_kernel(&mut runtime, broker.clone());
     runtime.register_source_catalog(&catalog);
     for package_root in roots {
         runtime.register_installed_package(package_root)?;
     }
+    #[cfg(feature = "direct-native")]
+    if env::var_os("HARA_NATIVE_PROFILE_BOOTSTRAP").is_some() {
+        eprintln!(
+            "PROFILE distribution-bootstrap foundation-image={}",
+            if source_foundation_image.is_some() {
+                "hit"
+            } else {
+                "miss"
+            }
+        );
+    }
     if catalog.path("std.foundation").is_some() {
+        #[cfg(feature = "direct-native")]
+        match source_foundation_image.as_deref() {
+            Some(image) => {
+                broker.install_source_foundation_image(image)?;
+                runtime.bootstrap_source_foundation_image(image)?;
+            }
+            None => runtime.bootstrap_source_foundation()?,
+        }
+        #[cfg(not(feature = "direct-native"))]
         runtime.bootstrap_source_foundation()?;
     }
     runtime.eval_native(&source)?;
@@ -851,21 +887,74 @@ fn resp_launch(arguments: &[String]) -> Result<RespLaunch, String> {
     })
 }
 
-fn start_companion_resp(runtime_root: &Path, arguments: &[String]) -> Result<RespServer, String> {
+/// Starts a RESP companion from a source package. A relocatable distribution
+/// installs that package under `HARA_DIST_HOME`, but retains its immutable
+/// bootstrap image beside the verified launcher; `image_cache_root` preserves
+/// that fast path without treating the installed package as mutable.
+fn start_companion_resp_with_image_cache(
+    runtime_root: &Path,
+    image_cache_root: Option<&Path>,
+    arguments: &[String],
+) -> Result<RespServer, String> {
     let launch = resp_launch(arguments)?;
     let runtime_project = project::read(runtime_root)?;
     let client_project = project::discover(&launch.project)?;
-    let catalog = project::source_catalogs(&[&runtime_project, &client_project])?;
+    let mut catalog_project = client_project.clone();
+    if runtime_project.id == "hara/foundation" {
+        // The Foundation distribution is a verified full-source runtime. Its
+        // archive already owns the hara:hara/* namespace families, so a
+        // client such as Gwtrade must not also require separately installed
+        // semantic packages before its editor companion can start.
+        catalog_project
+            .dependencies
+            .retain(|coordinate, _| !embedded_foundation_dependency(coordinate));
+    }
+    let catalog = project::source_catalogs(&[&runtime_project, &catalog_project])?;
     let root = launch.root.canonicalize().map_err(|error| {
         format!(
             "cannot resolve RESP root {}: {error}",
             launch.root.display()
         )
     })?;
+    let (native_sockets, allow_process) = companion_provider_grants(&client_project.capabilities);
+    #[cfg(feature = "direct-native")]
+    let source_bootstrap_image = read_foundation_image_from_roots(
+        &runtime_project.root,
+        image_cache_root,
+        source_bootstrap_image_fingerprint(&catalog)?,
+    )?;
+    #[cfg(feature = "direct-native")]
+    let broker = if source_bootstrap_image.is_some() {
+        RuntimeBroker::start_core_with_backend_and_source_catalog(
+            Some(root.clone()),
+            native_sockets,
+            allow_process,
+            false,
+            "interpreter",
+            catalog,
+        )?
+    } else {
+        RuntimeBroker::start_with_source_catalog(
+            Some(root.clone()),
+            native_sockets,
+            allow_process,
+            false,
+            "interpreter",
+            catalog,
+        )?
+    };
+    #[cfg(feature = "direct-native")]
+    {
+        broker.configure_native_source_cache(&root, image_cache_root)?;
+        if let Some(image) = source_bootstrap_image.as_deref() {
+            broker.install_source_foundation_image(image)?;
+        }
+    }
+    #[cfg(not(feature = "direct-native"))]
     let broker = RuntimeBroker::start_with_source_catalog(
         Some(root),
-        false,
-        false,
+        native_sockets,
+        allow_process,
         false,
         "interpreter",
         catalog,
@@ -873,8 +962,21 @@ fn start_companion_resp(runtime_root: &Path, arguments: &[String]) -> Result<Res
     RespServer::start(&launch.host, launch.port, broker)
 }
 
-fn run_companion_resp(runtime_root: &Path, arguments: &[String]) -> Result<(), String> {
-    let server = start_companion_resp(runtime_root, arguments)?;
+fn companion_provider_grants(capabilities: &[String]) -> (bool, bool) {
+    let declared = |capability| capabilities.iter().any(|value| value == capability);
+    (declared("network"), declared("process"))
+}
+
+fn embedded_foundation_dependency(coordinate: &str) -> bool {
+    coordinate.starts_with("hara:hara/")
+}
+
+fn run_companion_resp_with_image_cache(
+    runtime_root: &Path,
+    image_cache_root: Option<&Path>,
+    arguments: &[String],
+) -> Result<(), String> {
+    let server = start_companion_resp_with_image_cache(runtime_root, image_cache_root, arguments)?;
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "HARA RESP {}", server.endpoint()).map_err(|error| error.to_string())?;
     stdout.flush().map_err(|error| error.to_string())?;
@@ -883,10 +985,15 @@ fn run_companion_resp(runtime_root: &Path, arguments: &[String]) -> Result<(), S
     }
 }
 
-fn build_distribution(project: &Path, output: &Path) -> Result<(), String> {
+fn build_distribution(
+    archive: &Path,
+    launcher: &str,
+    entry: &str,
+    output: &Path,
+) -> Result<(), String> {
     let native = env::current_exe()
         .map_err(|error| format!("cannot determine native launcher path: {error}"))?;
-    let manifest = distribution::build(project, &native, output)?;
+    let manifest = distribution::build(archive, &native, output, launcher, entry)?;
     println!(
         "built distribution {} {} at {}",
         manifest.source_identity,
@@ -1021,6 +1128,24 @@ fn test_file_counts(value: Value) -> Result<TestCounts, String> {
     Ok(counts)
 }
 
+fn test_failure_detail(value: &Value) -> String {
+    let Some(Value::Vector(results)) = value_map_get(value, "results") else {
+        return value.display();
+    };
+    let failed = results
+        .iter()
+        .filter(|result| {
+            !matches!(value_map_get(result, "status"), Some(Value::Keyword(status)) if status.as_str() == "passed")
+        })
+        .map(Value::display)
+        .collect::<Vec<_>>();
+    if failed.is_empty() {
+        value.display()
+    } else {
+        failed.join("\n")
+    }
+}
+
 /// Project test namespaces execute through the same native backend as the
 /// direct-native command path. Foundation remains interpreter-bootstrapped
 /// before this backend is selected.
@@ -1031,18 +1156,43 @@ const PROJECT_TEST_EXECUTION_BACKEND: &str = "direct-native";
 const PROJECT_TEST_NATIVE_SOCKETS: bool = true;
 const PROJECT_TEST_NATIVE_PROCESS: bool = true;
 const MAX_TEST_FAILURE_DETAIL_BYTES: usize = 16 * 1024;
-const FOUNDATION_IMAGE_CACHE_VERSION: &str = "v2";
-const LANGUAGE_SPEC_IMAGE_CACHE_VERSION: &str = "v5";
-const FOUNDATION_SOURCE_PREFIXES: &[&str] = &["std.foundation"];
-const BASIC_BOOK_IMAGE_LANGUAGES: &[&str] = &["xtalk", "js", "python", "lua"];
+const FOUNDATION_IMAGE_CACHE_VERSION: &str = "v4";
+const FOUNDATION_IMAGE_ROOTS: &[&str] = &[
+    "std.foundation",
+    "std.foundation.string",
+    "std.foundation.promise",
+    "std.foundation.bytes",
+    "std.foundation.coroutine",
+    "std.foundation.pretty",
+    "std.stream.duplex",
+];
 
 #[cfg(feature = "direct-native")]
-fn foundation_image_path(root: &Path, source_index_fingerprint: [u8; 32]) -> PathBuf {
+fn source_bootstrap_image_fingerprint(
+    catalog: &project::SourceCatalog,
+) -> Result<[u8; 32], String> {
+    let roots = FOUNDATION_IMAGE_ROOTS
+        .iter()
+        .copied()
+        .filter(|namespace| catalog.path(namespace).is_some())
+        .collect::<Vec<_>>();
+    if !roots.iter().any(|namespace| *namespace == "std.foundation") {
+        return Err("Foundation image requires source-owned std.foundation".into());
+    }
+    let bootstrap = catalog.content_fingerprint_dependencies(&roots)?;
+    let mut digest = Sha256::new();
+    digest.update(b"hara-source-bootstrap-image-v2\0");
+    digest.update(bootstrap);
+    Ok(digest.finalize().into())
+}
+
+#[cfg(feature = "direct-native")]
+fn foundation_image_cache_path(cache_root: &Path, source_index_fingerprint: [u8; 32]) -> PathBuf {
     let fingerprint = source_index_fingerprint
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    root.join("target/hara/foundation-image")
+    cache_root
         .join(FOUNDATION_IMAGE_CACHE_VERSION)
         .join(format!("native-{}", env!("CARGO_PKG_VERSION")))
         .join(fingerprint)
@@ -1050,15 +1200,58 @@ fn foundation_image_path(root: &Path, source_index_fingerprint: [u8; 32]) -> Pat
 }
 
 #[cfg(feature = "direct-native")]
+fn foundation_image_path(root: &Path, source_index_fingerprint: [u8; 32]) -> PathBuf {
+    foundation_image_cache_path(
+        &root.join("target/hara/foundation-image"),
+        source_index_fingerprint,
+    )
+}
+
+#[cfg(feature = "direct-native")]
+fn distribution_foundation_image_path(
+    distribution_root: &Path,
+    source_index_fingerprint: [u8; 32],
+) -> PathBuf {
+    foundation_image_cache_path(
+        &distribution_root.join("foundation-image"),
+        source_index_fingerprint,
+    )
+}
+
+#[cfg(feature = "direct-native")]
+fn read_foundation_image_at(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(image) => Ok(Some(image)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "cannot read Foundation image {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+#[cfg(feature = "direct-native")]
 fn read_foundation_image(
     root: &Path,
     source_index_fingerprint: [u8; 32],
 ) -> Result<Option<Vec<u8>>, String> {
-    let path = foundation_image_path(root, source_index_fingerprint);
-    match fs::read(&path) {
-        Ok(image) => Ok(Some(image)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("cannot read Foundation image {}: {error}", path.display())),
+    read_foundation_image_at(&foundation_image_path(root, source_index_fingerprint))
+}
+
+#[cfg(feature = "direct-native")]
+fn read_foundation_image_from_roots(
+    runtime_root: &Path,
+    image_cache_root: Option<&Path>,
+    source_index_fingerprint: [u8; 32],
+) -> Result<Option<Vec<u8>>, String> {
+    if let Some(image) = read_foundation_image(runtime_root, source_index_fingerprint)? {
+        return Ok(Some(image));
+    }
+    match image_cache_root {
+        Some(root) if root != runtime_root => read_foundation_image_at(
+            &distribution_foundation_image_path(root, source_index_fingerprint),
+        ),
+        _ => Ok(None),
     }
 }
 
@@ -1072,102 +1265,26 @@ fn write_foundation_image(
     let directory = path
         .parent()
         .ok_or_else(|| "Foundation image path has no parent directory".to_owned())?;
-    fs::create_dir_all(directory)
-        .map_err(|error| format!("cannot create Foundation image directory {}: {error}", directory.display()))?;
-    let temporary = path.with_extension(format!("hbx.tmp-{}", std::process::id()));
-    fs::write(&temporary, image)
-        .map_err(|error| format!("cannot write Foundation image {}: {error}", temporary.display()))?;
-    fs::rename(&temporary, &path)
-        .map_err(|error| format!("cannot publish Foundation image {}: {error}", path.display()))?;
-    Ok(path)
-}
-
-#[cfg(feature = "direct-native")]
-fn basic_book_image_path(
-    root: &Path,
-    language: &str,
-    source_index_fingerprint: [u8; 32],
-) -> PathBuf {
-    let fingerprint = source_index_fingerprint
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    root.join("target/hara/basic-book-image")
-        .join(LANGUAGE_SPEC_IMAGE_CACHE_VERSION)
-        .join(format!("native-{}", env!("CARGO_PKG_VERSION")))
-        .join(language)
-        .join(fingerprint)
-        .join("book.hta")
-}
-
-#[cfg(feature = "direct-native")]
-fn read_basic_book_image(
-    root: &Path,
-    language: &str,
-    source_index_fingerprint: [u8; 32],
-) -> Result<Option<Vec<u8>>, String> {
-    let path = basic_book_image_path(root, language, source_index_fingerprint);
-    match fs::read(&path) {
-        Ok(image) => Ok(Some(image)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!(
-            "cannot read basic Book image {}: {error}",
-            path.display()
-        )),
-    }
-}
-
-#[cfg(feature = "direct-native")]
-fn write_basic_book_image(
-    root: &Path,
-    language: &str,
-    source_index_fingerprint: [u8; 32],
-    image: &[u8],
-) -> Result<PathBuf, String> {
-    let path = basic_book_image_path(root, language, source_index_fingerprint);
-    let directory = path
-        .parent()
-        .ok_or_else(|| "basic Book image path has no parent directory".to_owned())?;
     fs::create_dir_all(directory).map_err(|error| {
         format!(
-            "cannot create basic Book image directory {}: {error}",
+            "cannot create Foundation image directory {}: {error}",
             directory.display()
         )
     })?;
-    let temporary = path.with_extension(format!("hta.tmp-{}", std::process::id()));
+    let temporary = path.with_extension(format!("hbx.tmp-{}", std::process::id()));
     fs::write(&temporary, image).map_err(|error| {
         format!(
-            "cannot write basic Book image {}: {error}",
+            "cannot write Foundation image {}: {error}",
             temporary.display()
         )
     })?;
     fs::rename(&temporary, &path).map_err(|error| {
         format!(
-            "cannot publish basic Book image {}: {error}",
+            "cannot publish Foundation image {}: {error}",
             path.display()
         )
     })?;
     Ok(path)
-}
-
-#[cfg(feature = "direct-native")]
-fn basic_book_spec_namespace(language: &str) -> Result<&'static str, String> {
-    match language {
-        "xtalk" => Ok("lang.model.v1.spec-xtalk"),
-        "js" => Ok("lang.model.v1.spec-js"),
-        "python" => Ok("lang.model.v1.spec-python"),
-        "lua" => Ok("lang.model.v1.spec-lua"),
-        _ => Err(format!("unsupported basic Book language: {language}")),
-    }
-}
-
-#[cfg(feature = "direct-native")]
-fn basic_book_source_fingerprint(
-    catalog: &project::SourceCatalog,
-    language: &str,
-) -> Result<[u8; 32], String> {
-    let namespace = basic_book_spec_namespace(language)?;
-    catalog.content_fingerprint_dependencies(&[namespace])
 }
 
 fn form_without_metadata(mut form: &Form) -> &Form {
@@ -1175,65 +1292,6 @@ fn form_without_metadata(mut form: &Form) -> &Form {
         form = value;
     }
     form
-}
-
-#[cfg(feature = "direct-native")]
-fn basic_runtime_languages(source: &str) -> Result<HashSet<String>, String> {
-    fn collect(form: &Form, languages: &mut HashSet<String>) {
-        let form = form_without_metadata(form);
-        match form {
-            Form::List(values) => {
-                if matches!(
-                    values.first().map(form_without_metadata),
-                    Some(Form::Symbol(name)) if matches!(name.as_str(), "quote" | "syntax-quote")
-                ) {
-                    return;
-                }
-                let is_script = matches!(
-                    values.first().map(form_without_metadata),
-                    Some(Form::Symbol(name))
-                        if matches!(
-                            name.as_str(),
-                            "l/script" | "l/script-" | "lang.core/script" | "lang.core/script-"
-                        )
-                );
-                if is_script {
-                    if let Some(Form::Keyword(language)) = values.get(1).map(form_without_metadata)
-                    {
-                        if BASIC_BOOK_IMAGE_LANGUAGES
-                            .iter()
-                            .any(|candidate| language.as_str() == *candidate)
-                        {
-                            languages.insert(language.clone());
-                        }
-                    }
-                }
-                for value in values {
-                    collect(value, languages);
-                }
-            }
-            Form::Vector(values) | Form::Set(values) => {
-                for value in values {
-                    collect(value, languages);
-                }
-            }
-            Form::Map(entries) => {
-                for (key, value) in entries {
-                    collect(key, languages);
-                    collect(value, languages);
-                }
-            }
-            Form::Tagged(_, value) | Form::Metadata(_, value) => collect(value, languages),
-            _ => {}
-        }
-    }
-
-    let forms = read_forms(source).map_err(|error| error.to_string())?;
-    let mut languages = HashSet::new();
-    for form in forms {
-        collect(&form.form, &mut languages);
-    }
-    Ok(languages)
 }
 
 fn reject_top_level_test_run(source: &str) -> Result<(), String> {
@@ -1253,6 +1311,38 @@ fn reject_top_level_test_run(source: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn top_level_declaration(form: &Form) -> bool {
+    let Form::List(values) = form_without_metadata(form) else {
+        return false;
+    };
+    matches!(
+        values.first().map(form_without_metadata),
+        Some(Form::Symbol(name)) if name.as_str() == "ns" || name.as_str().starts_with("def")
+    )
+}
+
+fn top_level_test_check(form: &Form) -> bool {
+    let Form::List(values) = form_without_metadata(form) else {
+        return false;
+    };
+    matches!(
+        values.first().map(form_without_metadata),
+        Some(Form::Symbol(name)) if matches!(name.as_str(), "Test/check" | "std.native.Test/check")
+    )
+}
+
+fn project_test_source_form(source: &str, form: &SpannedForm, runner_eval_mode: bool) -> String {
+    let form_source = match source.get(form.span.start.offset..form.span.end.offset) {
+        Some(value) => value.to_owned(),
+        None => form.form.to_string(),
+    };
+    if runner_eval_mode && !top_level_declaration(&form.form) {
+        format!("(binding [code.test.context/*eval-mode* false] {form_source})")
+    } else {
+        form_source
+    }
 }
 
 fn selected_test_files(
@@ -1314,14 +1404,10 @@ fn run_project_tests(
     let files = selected_test_files(&project, requested)?;
     let catalog = project::source_catalog(&project)?;
     let source_foundation = catalog.path("std.foundation").is_some();
-    #[cfg(feature = "direct-native")]
-    let source_index_fingerprint = catalog.fingerprint()?;
-    #[cfg(feature = "direct-native")]
-    let foundation_source_fingerprint =
-        catalog.content_fingerprint_prefixes(FOUNDATION_SOURCE_PREFIXES)?;
+    let runner_eval_mode = catalog.path("code.test.context").is_some();
     #[cfg(feature = "direct-native")]
     let source_foundation_image = if source_foundation {
-        read_foundation_image(&project.root, foundation_source_fingerprint)?
+        read_foundation_image(&project.root, source_bootstrap_image_fingerprint(&catalog)?)?
     } else {
         None
     };
@@ -1334,18 +1420,17 @@ fn run_project_tests(
             let source = fs::read_to_string(&path)
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
             reject_top_level_test_run(&source)?;
-            #[cfg(feature = "direct-native")]
-            let basic_runtime_languages = basic_runtime_languages(&source)?;
-            #[cfg(feature = "direct-native")]
-            let mut source_basic_book_images = basic_runtime_languages
-                .iter()
-                .map(|language| {
-                    let fingerprint = basic_book_source_fingerprint(&catalog, language)?;
-                    let image = read_basic_book_image(&project.root, language, fingerprint)?;
-                    Ok((language.clone(), (fingerprint, image)))
-                })
-                .collect::<Result<BTreeMap<_, _>, String>>()?;
             let mut runtime = Runtime::core();
+            runtime.add_extension_root(project.root.clone());
+            let project_extension_roots = project
+                .extension_paths
+                .iter()
+                .map(|extension_path| project.root.join(extension_path))
+                .collect::<Vec<_>>();
+            for extension_path in &project.extension_paths {
+                runtime.add_extension_root(project.root.join(extension_path));
+            }
+            runtime.load_project_extensions(&project_extension_roots)?;
             runtime.install_native_file_provider(project.root.to_string_lossy().as_ref());
             runtime.install_native_socket_provider();
             runtime.install_native_process_provider();
@@ -1379,7 +1464,7 @@ fn run_project_tests(
                 catalog.clone(),
             )?;
             #[cfg(feature = "direct-native")]
-            broker.configure_native_source_cache(&project.root, source_index_fingerprint)?;
+            broker.configure_native_source_cache(&project.root, None)?;
             #[cfg(feature = "direct-native")]
             if let Some(image) = source_foundation_image.as_deref() {
                 broker.install_source_foundation_image(image)?;
@@ -1392,19 +1477,23 @@ fn run_project_tests(
                 );
                 #[cfg(feature = "direct-native")]
                 eprintln!(
-                    "PROFILE {} foundation-image={} basic-book-images={}",
+                    "PROFILE {} foundation-image={}",
                     path.display(),
-                    if source_foundation_image.is_some() { "hit" } else { "miss" },
-                    source_basic_book_images
-                        .values()
-                        .filter(|(_, image)| image.is_some())
-                        .count()
+                    if source_foundation_image.is_some() {
+                        "hit"
+                    } else {
+                        "miss"
+                    }
                 );
             }
             install_native_kernel(&mut runtime, broker);
             runtime.register_source_catalog(&catalog);
             #[cfg(feature = "direct-native")]
-            runtime.configure_direct_native_source_cache(&project.root, source_index_fingerprint);
+            runtime.configure_direct_native_source_cache_for_catalog(
+                &project.root,
+                None,
+                catalog.clone(),
+            );
             if source_foundation {
                 #[cfg(feature = "direct-native")]
                 if let Some(image) = source_foundation_image.as_deref() {
@@ -1415,13 +1504,8 @@ fn run_project_tests(
                 #[cfg(not(feature = "direct-native"))]
                 runtime.bootstrap_source_foundation()?;
             }
-            #[cfg(feature = "direct-native")]
-            for (language, (_, image)) in &source_basic_book_images {
-                if let Some(image) = image {
-                    let mut selected = HashSet::new();
-                    selected.insert(language.clone());
-                    runtime.install_source_language_spec_image_for_languages(image, &selected)?;
-                }
+            if runner_eval_mode {
+                runtime.eval_native_value("(require 'code.test.context)")?;
             }
             runtime
                 .set_execution_backend(PROJECT_TEST_EXECUTION_BACKEND)
@@ -1439,25 +1523,56 @@ fn run_project_tests(
                     profile_started.elapsed().as_millis()
                 );
             }
-            if profile_forms {
+            if runner_eval_mode || profile_forms {
+                let mut deferred_test_forms = Vec::new();
                 for form in read_forms(&source).map_err(|error| error.to_string())? {
+                    if runner_eval_mode && top_level_test_check(&form.form) {
+                        deferred_test_forms.push((
+                            form.span.clone(),
+                            project_test_source_form(&source, &form, false),
+                        ));
+                        continue;
+                    }
                     let form_started = Instant::now();
-                    runtime.eval_native_value(&form.form.to_string())?;
+                    let form_source = project_test_source_form(&source, &form, runner_eval_mode);
+                    runtime.eval_native_value(&form_source)?;
+                    if profile_forms {
+                        eprintln!(
+                            "PROFILE {} form {}:{}={}ms {}",
+                            path.display(),
+                            form.span.start.line,
+                            form.span.start.column,
+                            form_started.elapsed().as_millis(),
+                            form.form
+                        );
+                    }
+                }
+                if profile_bootstrap {
                     eprintln!(
-                        "PROFILE {} form {}:{}={}ms {}",
+                        "PROFILE {} test-source-evaluated={}ms",
                         path.display(),
-                        form.span.start.line,
-                        form.span.start.column,
-                        form_started.elapsed().as_millis(),
-                        form.form
+                        profile_started.elapsed().as_millis()
                     );
+                }
+                for (span, form_source) in deferred_test_forms {
+                    let form_started = Instant::now();
+                    runtime.eval_native_value(&form_source)?;
+                    if profile_forms {
+                        eprintln!(
+                            "PROFILE {} deferred-test {}:{}={}ms",
+                            path.display(),
+                            span.start.line,
+                            span.start.column,
+                            form_started.elapsed().as_millis(),
+                        );
+                    }
                 }
             } else {
                 runtime.eval_native_value(&source)?;
             }
             if profile_bootstrap {
                 eprintln!(
-                    "PROFILE {} test-source-evaluated={}ms",
+                    "PROFILE {} test-checks-complete={}ms",
                     path.display(),
                     profile_started.elapsed().as_millis()
                 );
@@ -1471,33 +1586,23 @@ fn run_project_tests(
                 );
             }
             let counts = test_file_counts(results.clone())?;
-            #[cfg(feature = "direct-native")]
-            if counts.failing() == 0 {
-                for language in basic_runtime_languages {
-                    if let Ok(image) = runtime.encode_source_language_book_image(&language) {
-                        let (fingerprint, cached) = source_basic_book_images
-                            .get(&language)
-                            .cloned()
-                            .ok_or_else(|| format!("missing Basic Book cache key for :{language}"))?;
-                        if cached.as_deref() != Some(image.as_slice()) {
-                            write_basic_book_image(&project.root, &language, fingerprint, &image)?;
-                            source_basic_book_images.insert(language, (fingerprint, Some(image)));
-                        }
-                    }
-                }
-            }
             let detail = if counts.failing() == 0 {
                 None
             } else {
-                let detail = results.display();
+                let detail = test_failure_detail(&results);
                 let detail = if detail.len() <= MAX_TEST_FAILURE_DETAIL_BYTES {
                     detail
                 } else {
-                    let mut end = MAX_TEST_FAILURE_DETAIL_BYTES.saturating_sub(3);
-                    while end > 0 && !detail.is_char_boundary(end) {
-                        end -= 1;
+                    let half = MAX_TEST_FAILURE_DETAIL_BYTES.saturating_sub(5) / 2;
+                    let mut head_end = half;
+                    while head_end > 0 && !detail.is_char_boundary(head_end) {
+                        head_end -= 1;
                     }
-                    format!("{}...", &detail[..end])
+                    let mut tail_start = detail.len().saturating_sub(half);
+                    while tail_start < detail.len() && !detail.is_char_boundary(tail_start) {
+                        tail_start += 1;
+                    }
+                    format!("{}\n...\n{}", &detail[..head_end], &detail[tail_start..])
                 };
                 Some(format!("Test/run results: {detail}"))
             };
@@ -1559,7 +1664,9 @@ fn run_project_tests(
     }
 }
 
-fn precompile_language_specs(project_path: &Path, all_lang: bool) -> Result<usize, String> {
+/// Creates the generic Foundation source image. Package-specific warm-up
+/// policy belongs to the package that owns those namespaces, not this host.
+fn precompile_foundation(project_path: &Path) -> Result<usize, String> {
     #[cfg(not(feature = "direct-native"))]
     {
         let _ = project_path;
@@ -1567,58 +1674,13 @@ fn precompile_language_specs(project_path: &Path, all_lang: bool) -> Result<usiz
     }
     #[cfg(feature = "direct-native")]
     {
-    let project = project::discover(project_path)?;
-    let catalog = project::source_catalog(&project)?;
-    if catalog.path("std.foundation").is_none() {
-        return Err("precompile requires a source-owned std.foundation namespace".into());
-    }
-    let namespaces = if all_lang {
-        catalog
-            .namespaces()
-            .into_iter()
-            .filter(|namespace| namespace == "lang" || namespace.starts_with("lang."))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    if all_lang && namespaces.is_empty() {
-        return Err("precompile --all-lang found no source lang.* namespaces".into());
-    }
-    let source_index_fingerprint = catalog.fingerprint()?;
-    let foundation_source_fingerprint =
-        catalog.content_fingerprint_prefixes(FOUNDATION_SOURCE_PREFIXES)?;
-    let image = Runtime::compile_source_foundation_image(&catalog)?;
-    let image_path = write_foundation_image(&project.root, foundation_source_fingerprint, &image)?;
-    let mut runtime = Runtime::core();
-    runtime.install_native_file_provider(project.root.to_string_lossy().as_ref());
-    runtime.register_source_catalog(&catalog);
-    runtime.configure_direct_native_source_cache(&project.root, source_index_fingerprint);
-    runtime.bootstrap_source_foundation_image(&image)?;
-    let mut compiled_namespaces = 0;
-    if catalog.path("lang.core.registry").is_some() {
-        runtime
-            .eval_native_value("(require 'lang.core.registry)")
-            .map_err(|error| format!("cannot precompile Basic macro registry: {error}"))?;
-        compiled_namespaces += 1;
-    }
-    if all_lang {
-        for namespace in &namespaces {
-            if namespace == "lang.core.registry" {
-                continue;
-            }
-            runtime
-                .eval_native_value(&format!("(require '{namespace})"))
-                .map_err(|error| format!("cannot precompile {namespace}: {error}"))?;
-            compiled_namespaces += 1;
-        }
-    }
-    println!(
-        "PRECOMPILED foundation-image={} mode={} lang.* namespaces={}",
-        image_path.display(),
-        if all_lang { "all-lang" } else { "lazy-basic" },
-        compiled_namespaces
-    );
-    Ok(compiled_namespaces)
+        let project = project::discover(project_path)?;
+        let catalog = project::source_catalog(&project)?;
+        let fingerprint = source_bootstrap_image_fingerprint(&catalog)?;
+        let image = Runtime::compile_source_foundation_image(&catalog)?;
+        let path = write_foundation_image(&project.root, fingerprint, &image)?;
+        println!("PRECOMPILED foundation-image={}", path.display());
+        Ok(1)
     }
 }
 
@@ -1876,26 +1938,60 @@ fn run_companion_distribution(arguments: &[String]) -> Result<Option<i32>, Strin
     if !root.join(distribution::MANIFEST_PATH).is_file() {
         return Ok(None);
     }
+    let profile_bootstrap = env::var_os("HARA_NATIVE_PROFILE_BOOTSTRAP").is_some();
+    if profile_bootstrap {
+        eprintln!("PROFILE distribution-root={}", root.display());
+    }
     let manifest = distribution::verify(&root, &native)?;
+    if profile_bootstrap {
+        eprintln!(
+            "PROFILE distribution-verified archive={}",
+            manifest.archive.display()
+        );
+    }
     let archive = root.join(&manifest.archive);
     let installation_root =
         companion_installation_root(&package::install_root(), &manifest.archive_sha256);
     let installed = install_bundle_silent_at(&archive, &installation_root)?;
-    run_installed_distribution(&installed, &manifest.entry, arguments).map(Some)
+    if profile_bootstrap {
+        eprintln!(
+            "PROFILE distribution-installed root={}",
+            installed.display()
+        );
+    }
+    run_installed_distribution_with_image_cache(&installed, &manifest.entry, Some(&root), arguments)
+        .map(Some)
 }
 
-fn run_installed_distribution(
+fn run_installed_distribution_with_image_cache(
     installed: &Path,
     entry: &str,
+    image_cache_root: Option<&Path>,
     arguments: &[String],
 ) -> Result<i32, String> {
-    run_installed_distribution_roots(installed, &[installed.to_path_buf()], entry, arguments)
+    run_installed_distribution_roots_with_image_cache(
+        installed,
+        &[installed.to_path_buf()],
+        entry,
+        image_cache_root,
+        arguments,
+    )
 }
 
 fn run_installed_distribution_roots(
     installed: &Path,
     roots: &[PathBuf],
     entry: &str,
+    arguments: &[String],
+) -> Result<i32, String> {
+    run_installed_distribution_roots_with_image_cache(installed, roots, entry, None, arguments)
+}
+
+fn run_installed_distribution_roots_with_image_cache(
+    installed: &Path,
+    roots: &[PathBuf],
+    entry: &str,
+    image_cache_root: Option<&Path>,
     arguments: &[String],
 ) -> Result<i32, String> {
     let file_root = env::current_dir()
@@ -1907,10 +2003,11 @@ fn run_installed_distribution_roots(
         Some(entry),
         Some(arguments),
         Some(&file_root),
+        image_cache_root,
     )?;
     match companion_host_action(&result)? {
         Some(CompanionHostAction::Resp) => {
-            run_companion_resp(installed, arguments)?;
+            run_companion_resp_with_image_cache(installed, image_cache_root, arguments)?;
             Ok(0)
         }
         None => match companion_command_response(&result)? {
@@ -1944,17 +2041,19 @@ fn companion_installation_root(install_root: &Path, archive_sha256: &str) -> Pat
 #[cfg(test)]
 mod tests {
     use super::{
-        basic_book_image_path, basic_book_source_fingerprint, basic_runtime_languages,
         companion_command_response, companion_host_action, companion_installation_root,
-        companion_root, parse_arguments, parse_test_suite,
-        precompile_language_specs, reject_top_level_test_run, resp_launch, run_id,
-        run_project_tests, run_test_suite, sealed_installation_root, select_test_cases, signer,
-        start_companion_resp, write_basic_book_image, Command, CompanionHostAction,
+        companion_provider_grants, companion_root, distribution_foundation_image_path,
+        embedded_foundation_dependency, foundation_image_path, parse_arguments, parse_test_suite,
+        project_test_source_form, read_foundation_image_from_roots, reject_top_level_test_run,
+        resp_launch, run_id, run_project_tests, run_test_suite, sealed_installation_root,
+        select_test_cases, signer, start_companion_resp_with_image_cache, top_level_declaration,
+        top_level_test_check, Command, CompanionHostAction,
     };
     use hara_native::{
-        identity_tool, package,
+        identity_tool,
+        kernel::read_forms,
+        package,
         package_manifest::PackageManifest,
-        project,
         resp::{RespConnection, RespValue},
         tap,
     };
@@ -1970,23 +2069,89 @@ mod tests {
         ))
     }
 
-    #[cfg(feature = "direct-native")]
-    #[test]
-    fn basic_runtime_languages_selects_only_declared_basic_book_targets() {
-        let languages = basic_runtime_languages(
-            "(l/script :js {:runtime :basic})\n\
-             (lang.core/script- :python {:runtime :basic})\n\
-             (l/script- :postgres {:runtime :basic})\n\
-             (quote (l/script- :lua {:runtime :basic}))",
+    fn build_source_archive(
+        root: &std::path::Path,
+        archive: &std::path::Path,
+        identity: &str,
+        version: &str,
+        files: &[&str],
+    ) {
+        let files = files
+            .iter()
+            .map(|path| hara_native::package::ArtifactFile {
+                path: (*path).to_owned(),
+                bytes: fs::read(root.join(path)).unwrap(),
+            })
+            .collect();
+        hara_native::package::build_artifact(
+            hara_native::package::ArtifactSpec {
+                identity: identity.to_owned(),
+                version: version.to_owned(),
+                name: None,
+                files,
+                resources: Default::default(),
+                bytecode: None,
+                extensions: "{}".into(),
+            },
+            archive,
         )
         .unwrap();
-        assert_eq!(
-            languages,
-            ["js", "python"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-        );
+    }
+
+    #[cfg(feature = "direct-native")]
+    #[cfg(feature = "direct-native")]
+    #[test]
+    fn companion_image_cache_uses_verified_distribution_when_package_is_immutable() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-companion-image-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime_root = root.join("installed-package");
+        let distribution_root = root.join("distribution");
+        let fingerprint = [0x4a; 32];
+        let result = (|| -> Result<(), String> {
+            let distribution_image =
+                distribution_foundation_image_path(&distribution_root, fingerprint);
+            fs::create_dir_all(
+                distribution_image
+                    .parent()
+                    .ok_or_else(|| "distribution image has no parent".to_owned())?,
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(&distribution_image, [1_u8, 2, 3]).map_err(|error| error.to_string())?;
+            if read_foundation_image_from_roots(
+                &runtime_root,
+                Some(&distribution_root),
+                fingerprint,
+            )? != Some(vec![1, 2, 3])
+            {
+                return Err("distribution image was not selected".into());
+            }
+
+            let runtime_image = foundation_image_path(&runtime_root, fingerprint);
+            fs::create_dir_all(
+                runtime_image
+                    .parent()
+                    .ok_or_else(|| "runtime image has no parent".to_owned())?,
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(&runtime_image, [4_u8, 5, 6]).map_err(|error| error.to_string())?;
+            if read_foundation_image_from_roots(
+                &runtime_root,
+                Some(&distribution_root),
+                fingerprint,
+            )? != Some(vec![4, 5, 6])
+            {
+                return Err("runtime package image did not take precedence".into());
+            }
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(&root);
+        result.unwrap();
     }
 
     fn test_git(
@@ -2050,12 +2215,7 @@ mod tests {
                 "--project".into(),
                 "demo".into(),
             ]),
-            Ok(Command::Precompile { project, all_lang: false })
-                if project == std::path::PathBuf::from("demo")
-        ));
-        assert!(matches!(
-            parse_arguments(["precompile".into(), "--all-lang".into()]),
-            Ok(Command::Precompile { all_lang: true, .. })
+            Ok(Command::Precompile { project }) if project == std::path::PathBuf::from("demo")
         ));
         assert!(matches!(
             parse_arguments([
@@ -2087,25 +2247,19 @@ mod tests {
             parse_arguments([
                 "distribution".into(),
                 "build".into(),
-                "source".into(),
+                "source.harp".into(),
+                "--launcher".into(),
+                "hara".into(),
+                "--entry".into(),
+                "hara.command/main".into(),
                 "--output".into(),
                 "target/hara".into(),
             ]),
-            Ok(Command::DistributionBuild { project, output })
-                if project == std::path::PathBuf::from("source")
+            Ok(Command::DistributionBuild { archive, launcher, entry, output })
+                if archive == std::path::PathBuf::from("source.harp")
+                    && launcher == "hara"
+                    && entry == "hara.command/main"
                     && output == std::path::PathBuf::from("target/hara")
-        ));
-        assert!(matches!(
-            parse_arguments([
-                "bundle".into(),
-                "build".into(),
-                "examples/smoke-answer".into(),
-                "--output".into(),
-                "target/smoke-answer.harp".into(),
-            ]),
-            Ok(Command::BundleBuild { project, output: Some(output) })
-                if project == std::path::PathBuf::from("examples/smoke-answer")
-                    && output == std::path::PathBuf::from("target/smoke-answer.harp")
         ));
         assert!(matches!(
             parse_arguments([
@@ -2171,16 +2325,16 @@ mod tests {
         ));
         let output = root.join("release");
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src/fixture")).unwrap();
-        fs::write(
-            root.join("project.edn"),
-            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/main fixture.main :project/distribution {:launcher \"fixture\" :entry fixture.main/main} :project/capabilities #{}}\n",
-        )
-        .unwrap();
-        fs::write(root.join("src/fixture/main.hal"), ")\n").unwrap();
+        fs::create_dir_all(&root).unwrap();
 
         let host = std::env::current_exe().unwrap();
-        let result = hara_native::distribution::build(&root, &host, &output);
+        let result = hara_native::distribution::build(
+            &root.join("missing.harp"),
+            &host,
+            &output,
+            "fixture",
+            "fixture.main/main",
+        );
         let staging = fs::read_dir(&root)
             .unwrap()
             .filter_map(Result::ok)
@@ -2272,6 +2426,31 @@ mod tests {
     }
 
     #[test]
+    fn foundation_distribution_satisfies_its_own_semantic_dependency_family() {
+        assert!(embedded_foundation_dependency("hara:hara/code.test"));
+        assert!(!embedded_foundation_dependency("greenways:gwtrade/core"));
+        assert!(!embedded_foundation_dependency("hara:other/code.test"));
+    }
+
+    #[test]
+    fn companion_resp_grants_only_declared_network_and_process_capabilities() {
+        assert_eq!(companion_provider_grants(&[]), (false, false));
+        assert_eq!(
+            companion_provider_grants(&["network".into(), "file".into()]),
+            (true, false)
+        );
+        assert_eq!(
+            companion_provider_grants(&["process".into(), "kernel".into()]),
+            (false, true)
+        );
+        assert_eq!(
+            companion_provider_grants(&["network".into(), "process".into()]),
+            (true, true)
+        );
+    }
+
+    #[cfg(feature = "direct-native")]
+    #[test]
     fn resp_server_mounts_the_client_project_after_source_bootstrap() {
         let root = std::env::temp_dir().join(format!(
             "hara-native-companion-resp-{}-{}",
@@ -2329,7 +2508,12 @@ mod tests {
                 "0".into(),
                 "headless".into(),
             ];
-            let mut server = start_companion_resp(&runtime, &arguments)?;
+            let mut server = match start_companion_resp_with_image_cache(&runtime, None, &arguments)
+            {
+                Ok(server) => server,
+                Err(error) if error.contains("Operation not permitted") => return Ok(()),
+                Err(error) => return Err(error),
+            };
             let response = (|| -> Result<RespValue, String> {
                 let project = client.display().to_string();
                 let mut connection = RespConnection::new(
@@ -2400,7 +2584,19 @@ mod tests {
             "(ns demo.cli)\n(require 'demo.cli.internal)\n(intern-in [main demo.cli.internal/main])\n",
         )
         .unwrap();
-        let archive = package::build_path(&root, None).unwrap();
+        let archive = root.join("target/cli.harp");
+        build_source_archive(
+            &root,
+            &archive,
+            "hara:demo/cli",
+            "1.0.0",
+            &[
+                "project.edn",
+                "src/std/foundation.hal",
+                "src/demo/cli/internal.hal",
+                "src/demo/cli.hal",
+            ],
+        );
         let installed = package::install_path_at(&archive, &store).unwrap();
         let result = super::execute_installed_bundle(
             &installed,
@@ -2435,7 +2631,14 @@ mod tests {
         )
         .unwrap();
         fs::write(client.join("command-input.txt"), "available\n").unwrap();
-        let archive = package::build_path(&source, None).unwrap();
+        let archive = source.join("target/cli.harp");
+        build_source_archive(
+            &source,
+            &archive,
+            "hara:demo/cli",
+            "1.0.0",
+            &["project.edn", "src/demo/cli.hal"],
+        );
         let installed = package::install_path_at(&archive, &store).unwrap();
         let result = super::execute_installed_bundle_roots(
             &installed,
@@ -2443,6 +2646,7 @@ mod tests {
             Some("demo.cli/main"),
             Some(&[]),
             Some(&client),
+            None,
         )
         .unwrap();
         assert_eq!(result, "true");
@@ -2482,8 +2686,22 @@ mod tests {
         )
         .unwrap();
 
-        let primary_archive = package::build_path(&primary, None).unwrap();
-        let specs_archive = package::build_path(&specs, None).unwrap();
+        let primary_archive = primary.join("target/primary.harp");
+        build_source_archive(
+            &primary,
+            &primary_archive,
+            "hara:demo/cli",
+            "1.0.0",
+            &["project.edn", "src/demo/cli.hal"],
+        );
+        let specs_archive = specs.join("target/specs.harp");
+        build_source_archive(
+            &specs,
+            &specs_archive,
+            "hara:fixture/specs",
+            "1.0.0",
+            &["project.edn", "content/suite.edn"],
+        );
         let primary_root = package::install_path_at(&primary_archive, &store).unwrap();
         let specs_root = package::install_path_at(&specs_archive, &store).unwrap();
         let result = super::execute_installed_bundle_roots(
@@ -2491,6 +2709,7 @@ mod tests {
             &[primary_root.clone(), specs_root],
             Some("demo.cli/main"),
             Some(&[]),
+            None,
             None,
         )
         .unwrap();
@@ -2511,7 +2730,7 @@ mod tests {
             "--archive".into(),
         ])
         .unwrap_err();
-        assert!(error.contains("unknown hara-native bundle build option"));
+        assert!(error.contains("unknown hara-native bundle operation"));
     }
 
     #[test]
@@ -2739,6 +2958,36 @@ mod tests {
     }
 
     #[test]
+    fn project_test_runner_binds_eval_mode_for_expressions_but_not_top_level_declarations() {
+        let source = "(ns fixture.runner-test)\n^{:public true} (def observed true)\n(defmacro.thing example [] 1)\n(observe :expression)\n(Test/check [])\n";
+        let forms = read_forms(source).unwrap();
+        assert!(top_level_declaration(&forms[0].form));
+        assert!(top_level_declaration(&forms[1].form));
+        assert!(top_level_declaration(&forms[2].form));
+        assert!(!top_level_declaration(&forms[3].form));
+        assert!(top_level_test_check(&forms[4].form));
+        assert_eq!(
+            project_test_source_form(source, &forms[0], true),
+            source[forms[0].span.start.offset..forms[0].span.end.offset]
+        );
+        assert_eq!(
+            project_test_source_form(source, &forms[1], true),
+            source[forms[1].span.start.offset..forms[1].span.end.offset]
+        );
+        assert_eq!(
+            project_test_source_form(source, &forms[3], true),
+            format!(
+                "(binding [code.test.context/*eval-mode* false] {})",
+                &source[forms[3].span.start.offset..forms[3].span.end.offset]
+            )
+        );
+        assert_eq!(
+            project_test_source_form(source, &forms[3], false),
+            source[forms[3].span.start.offset..forms[3].span.end.offset]
+        );
+    }
+
+    #[test]
     fn project_test_runner_discovers_files_requires_sources_and_normalizes_structured_outputs() {
         let root =
             std::env::temp_dir().join(format!("hara-native-project-test-{}", std::process::id()));
@@ -2783,6 +3032,38 @@ mod tests {
     }
 
     #[test]
+    fn project_test_runner_binds_eval_mode_only_while_loading_source_forms() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-native-project-runner-mode-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/code/test")).unwrap();
+        fs::create_dir_all(root.join("test/fixture")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/runner-mode :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/code/test/context.hal"),
+            "(ns code.test.context)\n(def ^{:dynamic true} *eval-mode* true)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/runner_mode_test.hal"),
+            "(ns fixture.runner-mode-test)\n(def source-eval-mode (Base/atom true))\n(def test-eval-mode (Base/atom false))\n(IReset/reset source-eval-mode code.test.context/*eval-mode*)\n(Test/check [{:desc \"runner binds source eval mode\" :test (fn [] (IReset/reset test-eval-mode code.test.context/*eval-mode*) [(IDeref/deref source-eval-mode) (IDeref/deref test-eval-mode)]) :expected [false true]}])\n",
+        )
+        .unwrap();
+
+        let report = run_project_tests(&root, &[]).unwrap();
+        assert_eq!(report.counts.passed, 1);
+        assert_eq!(report.counts.failing(), 0);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn project_test_runner_bootstraps_source_owned_foundation() {
         let root = std::env::temp_dir().join(format!(
             "hara-native-foundation-project-test-{}",
@@ -2822,146 +3103,6 @@ mod tests {
         let report = run_project_tests(&root, &[]).unwrap();
         assert_eq!(report.counts.passed, 1);
         assert_eq!(report.counts.failing(), 0);
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn precompile_defers_non_basic_lang_namespaces_for_fresh_project_test_runtimes() {
-        let root = std::env::temp_dir().join(format!(
-            "hara-native-lang-precompile-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src/std")).unwrap();
-        fs::create_dir_all(root.join("src/lang")).unwrap();
-        fs::create_dir_all(root.join("src/fixture")).unwrap();
-        fs::create_dir_all(root.join("test/fixture")).unwrap();
-        fs::write(
-            root.join("project.edn"),
-            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/precompile :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/std/foundation.hal"),
-            "(ns std.foundation)\n(def image-ready true)\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/lang/spec.hal"),
-            "(ns lang.spec)\n(defn answer [] 42)\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/fixture/not_lang.hal"),
-            "(ns fixture.not-lang)\n(defn answer [] 0)\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("test/fixture/lang_precompile_test.hal"),
-            "(ns fixture.lang-precompile-test (:require [lang.spec :as spec]))\n(Test/register {:desc \"uses precompiled language namespace\" :test (fn [] (spec/answer)) :expected 42 :meta {:refer (quote lang.spec/answer) :id (quote language-cache)}})\n",
-        )
-        .unwrap();
-
-        assert_eq!(precompile_language_specs(&root, false).unwrap(), 0);
-        let cache_root = root.join("target/hara/test-bytecode/v2");
-        assert!(!cache_root.exists());
-        assert_eq!(precompile_language_specs(&root, true).unwrap(), 1);
-
-        let report = run_project_tests(&root, &[]).unwrap();
-        assert_eq!(report.counts.passed, 1);
-        assert_eq!(report.counts.failing(), 0);
-        assert_eq!(
-            fs::read_dir(&cache_root)
-                .unwrap()
-                .map(|entry| {
-                    fs::read_dir(entry.unwrap().path())
-                        .unwrap()
-                        .filter(|entry| {
-                            entry
-                                .as_ref()
-                                .ok()
-                                .and_then(|entry| {
-                                    entry.path().extension().map(|value| value == "hbc")
-                                })
-                                .unwrap_or(false)
-                        })
-                        .count()
-                })
-                .sum::<usize>(),
-            1
-        );
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn basic_book_image_is_scoped_to_its_language_dependencies() {
-        let root = std::env::temp_dir().join(format!(
-            "hara-native-basic-macro-image-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src/std")).unwrap();
-        fs::create_dir_all(root.join("src/lang/model/v1")).unwrap();
-        fs::create_dir_all(root.join("src/lang/model/v1/spec_js")).unwrap();
-        fs::create_dir_all(root.join("src/code")).unwrap();
-        fs::write(
-            root.join("project.edn"),
-            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/basic-image :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/std/foundation.hal"),
-            "(ns std.foundation)\n(defn atom [value] (Base/atom value))\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/lang/model/v1/spec-js.hal"),
-            "(ns lang.model.v1.spec-js (:require [lang.model.v1.spec-js.helper :as helper]))\n(def version helper/version)\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/lang/model/v1/spec_js/helper.hal"),
-            "(ns lang.model.v1.spec-js.helper)\n(def version 1)\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/lang/model/v1/spec-python.hal"),
-            "(ns lang.model.v1.spec-python)\n(def version 1)\n",
-        )
-        .unwrap();
-        fs::write(root.join("src/code/deploy.hal"), "(ns code.deploy)\n(def stage :one)\n")
-            .unwrap();
-
-        let catalog = project::source_catalog(&project::discover(&root).unwrap()).unwrap();
-        let fingerprint = basic_book_source_fingerprint(&catalog, "js").unwrap();
-        let image_path = basic_book_image_path(&root, "js", fingerprint);
-        assert!(!image_path.exists());
-        write_basic_book_image(&root, "js", fingerprint, &[1, 2, 3]).unwrap();
-        assert_eq!(fs::read(&image_path).unwrap(), [1, 2, 3]);
-
-        fs::write(root.join("src/code/deploy.hal"), "(ns code.deploy)\n(def stage :two)\n")
-            .unwrap();
-        let unchanged = basic_book_source_fingerprint(&catalog, "js").unwrap();
-        assert_eq!(unchanged, fingerprint);
-        assert_eq!(fs::read(basic_book_image_path(&root, "js", unchanged)).unwrap(), [1, 2, 3]);
-
-        fs::write(
-            root.join("src/lang/model/v1/spec-python.hal"),
-            "(ns lang.model.v1.spec-python)\n(def version 2)\n",
-        )
-        .unwrap();
-        assert_eq!(basic_book_source_fingerprint(&catalog, "js").unwrap(), fingerprint);
-
-        fs::write(
-            root.join("src/lang/model/v1/spec_js/helper.hal"),
-            "(ns lang.model.v1.spec-js.helper)\n(def version 2)\n",
-        )
-        .unwrap();
-        let changed = basic_book_source_fingerprint(&catalog, "js").unwrap();
-        assert_ne!(changed, fingerprint);
-        assert_ne!(basic_book_image_path(&root, "js", changed), image_path);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3015,7 +3156,7 @@ mod tests {
     }
 
     #[test]
-    fn verifies_and_installs_a_minimal_source_package_without_a_source_checkout() {
+    fn verifies_and_installs_a_minimal_package_without_a_source_checkout() {
         let nonce = format!(
             "{}-{}",
             std::process::id(),
@@ -3035,7 +3176,14 @@ mod tests {
         )
         .unwrap();
 
-        let archive = package::build_path(&root, None).unwrap();
+        let archive = root.join("target/app.harp");
+        build_source_archive(
+            &root,
+            &archive,
+            "hara:demo/app",
+            "1.0.0",
+            &["project.edn", "src/demo/main.hal"],
+        );
         let manifest = PackageManifest::read_archive(&archive).unwrap();
         assert_eq!(manifest.identity, "hara:demo/app");
         let installed = package::install_path_at(&archive, &distribution).unwrap();

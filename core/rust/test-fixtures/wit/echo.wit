@@ -1,0 +1,11 @@
+package hara:values-echo@0.1.0;
+
+interface value-echo {
+  use hara:values/values@0.1.0.{value};
+
+  echo: func(value: value) -> value;
+}
+
+world echo {
+  export value-echo;
+}

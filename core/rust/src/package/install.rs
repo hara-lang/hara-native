@@ -1,9 +1,8 @@
-use super::{
-    file_sha256, io_error, read_project, split_coordinate, validate_relative_path, zip_error,
-};
+use super::artifact::validate_relative_path;
+use super::{file_sha256, io_error, split_coordinate, zip_error};
 use crate::kernel::{parse, Form};
 use crate::package_manifest::PackageManifest;
-use crate::project::{self, Project};
+use crate::project::Project;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use zip::ZipArchive;
@@ -106,17 +105,13 @@ pub(super) fn install_archive_at(archive: &Path, root: &Path) -> Result<PathBuf,
         extract_package_root(&archive_target, &package_root, &manifest, &digest)?;
     }
 
-    let project = validate_installed_root(&package_root, &manifest)?;
-    let coordinate = if manifest.name.is_some() {
-        project::normalize_coordinate(&manifest.identity).map_err(|error| {
-            format!(
-                "package/invalid-manifest: package identity {} is invalid: {error}",
-                manifest.identity
-            )
-        })?
-    } else {
-        project::normalize_coordinate(&project.id)?
-    };
+    validate_installed_root(&package_root, &manifest)?;
+    let coordinate = crate::project::normalize_coordinate(&manifest.identity).map_err(|error| {
+        format!(
+            "package/invalid-manifest: package identity {} is invalid: {error}",
+            manifest.identity
+        )
+    })?;
     let (tap, package) = split_coordinate(&coordinate)?;
     let mut parts = package.split('/');
     let owner = parts
@@ -276,10 +271,7 @@ fn extract_package_root(
     Ok(())
 }
 
-fn validate_installed_root(
-    package_root: &Path,
-    manifest: &PackageManifest,
-) -> Result<Project, String> {
+fn validate_installed_root(package_root: &Path, manifest: &PackageManifest) -> Result<(), String> {
     manifest
         .verify_files_at(package_root)
         .map_err(|error| error.to_string())?;
@@ -292,33 +284,7 @@ fn validate_installed_root(
                 .into(),
         );
     }
-    let project = read_project(package_root)?;
-    let project_coordinate = if manifest.name.is_none() {
-        Some(project::normalize_coordinate(&project.id)?)
-    } else {
-        None
-    };
-    let manifest_coordinate =
-        project::normalize_coordinate(&manifest.identity).map_err(|error| {
-            format!(
-                "package/invalid-manifest: package identity {} is invalid: {error}",
-                manifest.identity
-            )
-        })?;
-    if let Some(coordinate) = project_coordinate {
-        if coordinate != manifest_coordinate {
-            return Err(format!(
-                "package/invalid-manifest: project identity {coordinate} does not match package identity {manifest_coordinate}"
-            ));
-        }
-    }
-    if project.version != manifest.version {
-        return Err(format!(
-            "package/invalid-manifest: project version {} does not match package version {}",
-            project.version, manifest.version
-        ));
-    }
-    Ok(project)
+    Ok(())
 }
 
 fn verify_installed_entry_set(

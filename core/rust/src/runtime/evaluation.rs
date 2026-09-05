@@ -90,6 +90,18 @@ impl Runtime {
         let package =
             native_extension::ExtensionPackage::discover(namespace, &self.extension_roots)?
                 .ok_or_else(|| format!("extension/not-found: {namespace}"))?;
+        self.install_extension_package(package)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn install_extension_package(
+        &mut self,
+        package: native_extension::ExtensionPackage,
+    ) -> Result<(), String> {
+        let namespace = package.manifest.namespace.clone();
+        if self.wasm_extensions.contains_key(&namespace) {
+            return Ok(());
+        }
         if package.manifest.provider == "hta" {
             let target = package
                 .manifest
@@ -117,6 +129,13 @@ impl Runtime {
         }
         let bytes = package.module_bytes()?;
         let provider = match package.manifest.abi {
+            extension::WasmAbi::ComponentV1 => {
+                package.verify_component_wit()?;
+                wasmtime_provider::WasmtimeExtensionProvider::compile_component_with_file_provider(
+                    &bytes,
+                    self.providers.file(),
+                )?
+            }
             extension::WasmAbi::CoreV1 => {
                 wasmtime_provider::WasmtimeExtensionProvider::compile(&bytes)?
             }
@@ -188,6 +207,23 @@ impl Runtime {
             &package.descriptor.display().to_string(),
             provider,
         )
+    }
+
+    /// Activates the Component packages declared below project extension
+    /// roots. Direct-native source loading uses the shared `require`
+    /// transaction, so these namespaces must be materialized before a source
+    /// dependency reaches that loader.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_project_extensions(
+        &mut self,
+        roots: &[std::path::PathBuf],
+    ) -> Result<(), String> {
+        for package in native_extension::ExtensionPackage::discover_all(roots)? {
+            let namespace = package.manifest.namespace.clone();
+            self.install_extension_package(package)?;
+            self.load_wasm_extension_namespace(&namespace)?;
+        }
+        Ok(())
     }
 
     pub fn install_wasm_extension<P: extension::WasmExtensionProvider + 'static>(
@@ -289,6 +325,9 @@ impl Runtime {
             provider: "wasm".into(),
             module: None,
             abi: extension::WasmAbi::CoreV1,
+            world: None,
+            wit: None,
+            imports: Vec::new(),
             targets: HashMap::new(),
             assets: Vec::new(),
             exports,
@@ -553,6 +592,9 @@ impl Runtime {
                 }),
             );
         }
+        self.namespace_registry
+            .set_load_state(name, kernel::NamespaceLoadState::Loaded);
+        self.namespace_registry.clear_load_failure(name);
         self.refresh_qualified_bindings();
         Ok(":loaded".into())
     }

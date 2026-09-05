@@ -7,9 +7,7 @@
 
 pub mod view;
 
-use hara_abi::{
-    ExceptionProvenance, ExceptionSite, ImmutableValue as Value, Value as AbiValue,
-};
+use hara_abi::{ExceptionProvenance, ExceptionSite, ImmutableValue as Value, Value as AbiValue};
 use std::collections::BTreeMap;
 
 pub const MAGIC: &[u8; 4] = b"HTA0";
@@ -74,11 +72,17 @@ fn site_value(site: &ExceptionSite) -> Value {
     let mut fields = BTreeMap::new();
     fields.insert(
         "namespace".into(),
-        site.namespace.clone().map(Value::String).unwrap_or(Value::Nil),
+        site.namespace
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Nil),
     );
     fields.insert(
         "resource".into(),
-        site.resource.clone().map(Value::String).unwrap_or(Value::Nil),
+        site.resource
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Nil),
     );
     fields.insert("line".into(), Value::Integer(site.line as i64));
     fields.insert("column".into(), Value::Integer(site.column as i64));
@@ -89,7 +93,10 @@ fn decode_provenance(value: Value) -> Result<ExceptionProvenance, String> {
     let Value::Record(fields) = value else {
         return Err("hta/value-malformed: invalid exception provenance".into());
     };
-    if fields.len() != 2 || !fields.contains_key("ex/created-at") || !fields.contains_key("ex/throws") {
+    if fields.len() != 2
+        || !fields.contains_key("ex/created-at")
+        || !fields.contains_key("ex/throws")
+    {
         return Err("hta/value-malformed: invalid exception provenance fields".into());
     }
     let created_at = match fields.get("ex/created-at").expect("checked above") {
@@ -120,11 +127,15 @@ fn decode_site(value: &Value) -> Result<ExceptionSite, String> {
     let optional_string = |name: &str| match fields.get(name).expect("checked above") {
         Value::Nil => Ok(None),
         Value::String(value) => Ok(Some(value.clone())),
-        _ => Err(format!("hta/value-malformed: invalid exception provenance {name}")),
+        _ => Err(format!(
+            "hta/value-malformed: invalid exception provenance {name}"
+        )),
     };
     let nonnegative = |name: &str| match fields.get(name).expect("checked above") {
         Value::Integer(value) if *value >= 0 => Ok(*value as u64),
-        _ => Err(format!("hta/value-malformed: invalid exception provenance {name}")),
+        _ => Err(format!(
+            "hta/value-malformed: invalid exception provenance {name}"
+        )),
     };
     Ok(ExceptionSite {
         namespace: optional_string("namespace")?,

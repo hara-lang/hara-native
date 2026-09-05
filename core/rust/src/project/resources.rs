@@ -14,7 +14,7 @@ mod installed;
 /// The catalog resolves conventional namespace paths at the `require`
 /// boundary. It discovers the complete legacy path map only when a requested
 /// namespace cannot be derived from its name, so starting a project never
-/// walks unrelated source families such as `lang.*`.
+/// walks unrelated source families.
 #[derive(Debug, Clone, Default)]
 pub struct SourceCatalog {
     entries: Arc<Mutex<BTreeMap<String, PathBuf>>>,
@@ -107,10 +107,7 @@ impl SourceCatalog {
     /// Returns a content address for source namespaces selected by a family
     /// prefix.  Artifact owners use this instead of the whole-project index
     /// when unrelated application source must not invalidate their cache.
-    pub fn content_fingerprint_prefixes(
-        &self,
-        prefixes: &[&str],
-    ) -> Result<[u8; 32], String> {
+    pub fn content_fingerprint_prefixes(&self, prefixes: &[&str]) -> Result<[u8; 32], String> {
         let mut selected = BTreeSet::new();
         for (namespace, path) in self.entries() {
             if prefixes.iter().any(|prefix| {
@@ -138,12 +135,9 @@ impl SourceCatalog {
 
     /// Returns a content address for one namespace and its declarative source
     /// dependency closure. Unlike family fingerprints, this resolves only the
-    /// namespaces that an artifact can load, so a JavaScript Book is not
-    /// invalidated by unrelated Python, Lua, or application source.
-    pub fn content_fingerprint_dependencies(
-        &self,
-        roots: &[&str],
-    ) -> Result<[u8; 32], String> {
+    /// namespaces that an artifact can load, so unrelated source cannot
+    /// invalidate the artifact.
+    pub fn dependency_paths(&self, roots: &[&str]) -> Result<Vec<(String, PathBuf)>, String> {
         let requested = roots
             .iter()
             .map(|namespace| (*namespace).to_owned())
@@ -169,12 +163,22 @@ impl SourceCatalog {
                     pending.insert(dependency);
                 }
             }
-            selected.insert(namespace, source);
+            selected.insert(namespace, path);
         }
 
+        Ok(selected.into_iter().collect())
+    }
+
+    /// Returns a content address for one namespace and its declarative source
+    /// dependency closure. Unlike family fingerprints, this resolves only the
+    /// namespaces that an artifact can load, so unrelated source cannot
+    /// invalidate the artifact.
+    pub fn content_fingerprint_dependencies(&self, roots: &[&str]) -> Result<[u8; 32], String> {
         let mut digest = Sha256::new();
         digest.update(b"hara-source-content-closure-v1\0");
-        for (namespace, source) in selected {
+        for (namespace, path) in self.dependency_paths(roots)? {
+            let source = fs::read(&path)
+                .map_err(|error| format!("cannot read source file {}: {error}", path.display()))?;
             digest.update(namespace.as_bytes());
             digest.update([0]);
             digest.update(source.len().to_le_bytes());
@@ -326,11 +330,18 @@ fn source_namespace_dependencies(source: &[u8], path: &Path) -> Result<Vec<Strin
         let crate::kernel::Form::List(values) = resource_without_metadata(&form.form) else {
             continue;
         };
-        if !matches!(values.first(), Some(crate::kernel::Form::Symbol(head)) if head == "ns" || head == "ns+") {
+        if !matches!(values.first(), Some(crate::kernel::Form::Symbol(head)) if head == "ns" || head == "ns+")
+        {
             continue;
         }
-        let config = crate::kernel::GeneratedNamespaceConfig::configure_with(&values[2..], |_| true)
-            .map_err(|error| format!("cannot read namespace dependencies from {}: {error}", path.display()))?;
+        let config =
+            crate::kernel::GeneratedNamespaceConfig::configure_with(&values[2..], |_| true)
+                .map_err(|error| {
+                    format!(
+                        "cannot read namespace dependencies from {}: {error}",
+                        path.display()
+                    )
+                })?;
         let mut dependencies = config.required_namespaces().to_vec();
         dependencies.extend(config.used_namespaces().iter().cloned());
         dependencies.sort();
@@ -538,8 +549,11 @@ mod tests {
             "(ns fixture.helper-value)\n(def value 1)\n",
         )
         .unwrap();
-        fs::write(root.join("unrelated/value.hal"), "(ns unrelated.value)\n(def value 1)\n")
-            .unwrap();
+        fs::write(
+            root.join("unrelated/value.hal"),
+            "(ns unrelated.value)\n(def value 1)\n",
+        )
+        .unwrap();
         let catalog = SourceCatalog {
             entries: Default::default(),
             roots: vec![root.canonicalize().unwrap()],
@@ -549,8 +563,20 @@ mod tests {
         let initial = catalog
             .content_fingerprint_dependencies(&["fixture.entry-point"])
             .unwrap();
-        fs::write(root.join("unrelated/value.hal"), "(ns unrelated.value)\n(def value 2)\n")
-            .unwrap();
+        assert_eq!(
+            catalog
+                .dependency_paths(&["fixture.entry-point"])
+                .unwrap()
+                .into_iter()
+                .map(|(namespace, _)| namespace)
+                .collect::<Vec<_>>(),
+            vec!["fixture.entry-point", "fixture.helper-value"]
+        );
+        fs::write(
+            root.join("unrelated/value.hal"),
+            "(ns unrelated.value)\n(def value 2)\n",
+        )
+        .unwrap();
         assert_eq!(
             catalog
                 .content_fingerprint_dependencies(&["fixture.entry-point"])

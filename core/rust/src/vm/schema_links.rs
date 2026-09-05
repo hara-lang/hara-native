@@ -24,10 +24,7 @@ pub struct SchemaCoordinate {
 }
 
 impl SchemaCoordinate {
-    pub fn new(
-        id: impl Into<String>,
-        hash: impl Into<String>,
-    ) -> Result<Self, String> {
+    pub fn new(id: impl Into<String>, hash: impl Into<String>) -> Result<Self, String> {
         let value = Self {
             id: id.into(),
             hash: hash.into(),
@@ -292,11 +289,7 @@ mod tests {
     use crate::vm::compile_source;
 
     fn coordinate(id: &str, digit: char) -> SchemaCoordinate {
-        SchemaCoordinate::new(
-            id,
-            format!("sha256:{}", digit.to_string().repeat(64)),
-        )
-        .unwrap()
+        SchemaCoordinate::new(id, format!("sha256:{}", digit.to_string().repeat(64))).unwrap()
     }
 
     #[test]
@@ -349,8 +342,7 @@ mod tests {
     #[test]
     fn corruption_is_rejected_before_nested_program_decode() {
         let program = compile_source("42").unwrap();
-        let mut encoded =
-            encode_linked_program(&program, &[coordinate("model/id", '1')]).unwrap();
+        let mut encoded = encode_linked_program(&program, &[coordinate("model/id", '1')]).unwrap();
         encoded[12] ^= 1;
         assert_eq!(
             decode_linked_program(&encoded).unwrap_err(),

@@ -135,7 +135,7 @@ pub fn admit_catalog(
     components: &[CatalogComponent],
 ) -> Result<AdmittedCatalog, String> {
     let mut entry_index = BTreeMap::new();
-        let mut identities = BTreeMap::<String, String>::new();
+    let mut identities = BTreeMap::<String, String>::new();
     for raw_entry in entries {
         let entry =
             CatalogEntry::new(raw_entry.coordinate.clone(), raw_entry.dependencies.clone())?;
@@ -290,8 +290,7 @@ pub fn admit_linked_program(
 }
 
 fn validate_coordinate(coordinate: &SchemaCoordinate) -> Result<(), String> {
-    SchemaCoordinate::new(coordinate.id.clone(), coordinate.hash.clone())
-    .map(|_| ())
+    SchemaCoordinate::new(coordinate.id.clone(), coordinate.hash.clone()).map(|_| ())
 }
 
 fn validate_hash(value: &str, label: &str) -> Result<(), String> {
@@ -483,11 +482,7 @@ mod tests {
     use crate::vm::compile_source;
 
     fn coordinate(id: &str, digit: char) -> SchemaCoordinate {
-        SchemaCoordinate::new(
-            id,
-            format!("sha256:{}", digit.to_string().repeat(64)),
-        )
-        .unwrap()
+        SchemaCoordinate::new(id, format!("sha256:{}", digit.to_string().repeat(64))).unwrap()
     }
 
     fn component(members: Vec<SchemaCoordinate>, dependencies: Vec<String>) -> CatalogComponent {

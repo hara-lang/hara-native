@@ -10,8 +10,19 @@ pub(crate) struct Document {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Interface {
     pub types: BTreeMap<String, TypeDecl>,
+    /// Local names introduced by standard WIT `use` declarations. Keeping
+    /// their package identity prevents a manifest `:value` from matching an
+    /// arbitrary local alias named `value`.
+    pub imported_types: BTreeMap<String, ImportedType>,
     pub functions: Vec<Function>,
     pub resources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportedType {
+    pub package: String,
+    pub interface: String,
+    pub type_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +221,7 @@ impl Parser {
                     name.clone(),
                     Interface {
                         types: BTreeMap::new(),
+                        imported_types: BTreeMap::new(),
                         functions: world.functions.clone(),
                         resources: Vec::new(),
                     },
@@ -227,6 +239,7 @@ impl Parser {
     fn interface_body(&mut self) -> Result<Interface, String> {
         self.open_brace()?;
         let mut types = BTreeMap::new();
+        let mut imported_types = BTreeMap::new();
         let mut functions = Vec::new();
         let mut resources = Vec::new();
         while !self.take_punct('}') {
@@ -280,7 +293,8 @@ impl Parser {
                     )?;
                     self.skip_block_or_semicolon()?;
                 }
-                "use" | "include" => self.skip_declaration()?,
+                "use" => self.use_declaration(&mut imported_types)?,
+                "include" => self.skip_declaration()?,
                 "async" => {
                     let function = self.function(true)?;
                     functions.push(function);
@@ -309,9 +323,60 @@ impl Parser {
         }
         Ok(Interface {
             types,
+            imported_types,
             functions,
             resources,
         })
+    }
+
+    fn use_declaration(
+        &mut self,
+        imported_types: &mut BTreeMap<String, ImportedType>,
+    ) -> Result<(), String> {
+        let namespace = self.required_word("WIT use namespace")?;
+        self.expect_punct(':')?;
+        // The lexer deliberately keeps `/values@0.1.0.` as one word. The
+        // trailing period is WIT's package/interface separator before `{`.
+        let target = format!(
+            "{namespace}:{}",
+            self.required_word("WIT use target")?.trim_end_matches('.')
+        );
+        let (package, interface_version) = target
+            .split_once('/')
+            .ok_or_else(|| "WIT use must name package/interface@version".to_owned())?;
+        let (interface, version) = interface_version
+            .split_once('@')
+            .ok_or_else(|| "WIT use must name an interface version".to_owned())?;
+        if package.is_empty() || interface.is_empty() || version.is_empty() {
+            return Err("WIT use must name package/interface@version".into());
+        }
+        self.open_brace()?;
+        while !self.take_punct('}') {
+            let type_name = self.required_word("WIT imported type")?;
+            let local_name = if self.take_word("as") {
+                self.required_word("WIT imported type alias")?
+            } else {
+                type_name.clone()
+            };
+            if imported_types
+                .insert(
+                    local_name.clone(),
+                    ImportedType {
+                        package: format!("{package}@{version}"),
+                        interface: interface.to_owned(),
+                        type_name,
+                    },
+                )
+                .is_some()
+            {
+                return Err(format!("duplicate imported type {local_name}"));
+            }
+            if !self.take_punct(',') {
+                self.expect_punct('}')?;
+                break;
+            }
+        }
+        self.semicolon()
     }
 
     fn world_body(&mut self) -> Result<World, String> {

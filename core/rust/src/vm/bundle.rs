@@ -117,7 +117,9 @@ fn compile_package_bytecode_bundle_inner(
     }
     #[cfg(not(target_arch = "wasm32"))]
     if package_needs_foundation_bootstrap(context, &ordered)
-        || ordered.iter().any(|source| source.resource == "std.foundation")
+        || ordered
+            .iter()
+            .any(|source| source.resource == "std.foundation")
     {
         runtime.bootstrap_source_foundation()?;
     }
@@ -128,9 +130,9 @@ fn compile_package_bytecode_bundle_inner(
     // Registration makes context source discoverable to the evaluator, but it
     // does not establish the Vars and macros that a selected module may use
     // while its namespace form is being compiled. Load the selected modules'
-    // eager context closure, plus the language-spec roots used by the lazy
-    // grammar registry, before compiling the selected package. Selected
-    // modules remain bytecode-owned and are evaluated below as artifacts.
+    // declarative context closure before compiling the selected package.
+    // Selected modules remain bytecode-owned and are evaluated below as
+    // artifacts.
     #[cfg(not(target_arch = "wasm32"))]
     for source in context_modules_to_load(context, &ordered)? {
         #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -161,125 +163,44 @@ fn context_modules_to_load<'a>(
         .map(|(index, source)| (source.resource, index))
         .collect::<std::collections::HashMap<_, _>>();
     let mut pending = Vec::new();
-    let mut preload = std::collections::HashSet::new();
     for source in selected {
-        let (dependencies, script_dependencies) = module_dependencies(source.source)?;
         pending.extend(
-            dependencies
+            module_dependencies(source.source)?
                 .into_iter()
                 .filter(|name| {
                     !name.starts_with("std.foundation") && !selected_names.contains(name.as_str())
                 }),
         );
-        preload.extend(script_dependencies.iter().cloned());
-        pending.extend(script_dependencies);
     }
-    // The Postgres grammar is loaded lazily by lang.core.registry, but its
-    // macro image is needed during bytecode compilation. Keep this host-side
-    // bootstrap explicit instead of evaluating every target grammar in the
-    // project context for every package.
-    let needs_postgres_spec = selected_names
-        .iter()
-        .any(|name| name.starts_with("postgres."));
-    let needs_xtalk_spec = selected_names
-        .iter()
-        .any(|name| name.starts_with("xt."));
-    pending.extend(
-        context
-            .iter()
-            .filter(|source| {
-                ((needs_postgres_spec && source.resource == "lang.model.v1.spec-postgres")
-                    || (needs_xtalk_spec && source.resource == "lang.model.v1.spec-xtalk"))
-                    && !selected_names.contains(source.resource)
-            })
-            .map(|source| source.resource.to_owned()),
-    );
     let mut required = std::collections::HashSet::new();
     while let Some(name) = pending.pop() {
-        if (!preload.contains(&name) && selected_names.contains(name.as_str()))
-            || !required.insert(name.clone())
-        {
+        if selected_names.contains(name.as_str()) || !required.insert(name.clone()) {
             continue;
         }
         let Some(&index) = positions.get(name.as_str()) else {
             continue;
         };
-        let (dependencies, script_dependencies) = module_dependencies(context[index].source)?;
         pending.extend(
-            dependencies
+            module_dependencies(context[index].source)?
                 .into_iter()
                 .filter(|dependency| {
                     !dependency.starts_with("std.foundation")
                         && !selected_names.contains(dependency.as_str())
                 }),
         );
-        preload.extend(script_dependencies.iter().cloned());
-        pending.extend(script_dependencies);
     }
     let mut ordered = order_module_sources(context)?
         .into_iter()
         .map(|index| context[index])
         .filter(|source| required.contains(source.resource))
         .collect::<Vec<_>>();
-    // `lang.core.registry` keeps target specs as lazy aliases. Loading the
-    // selected grammar root first makes those aliases resolve to an already
-    // materialized namespace when the registry is later loaded.
-    ordered.sort_by_key(|source| {
-        let priority = (needs_postgres_spec && source.resource == "lang.model.v1.spec-postgres")
-            || (needs_xtalk_spec && source.resource == "lang.model.v1.spec-xtalk");
-        (!priority, !preload.contains(source.resource), source.resource)
-    });
+    ordered.sort_by_key(|source| source.resource);
     Ok(ordered)
 }
 
-pub(super) fn module_dependencies(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
-    let (namespace_form, body) = split_namespace_form(source)?;
-    let dependencies = namespace_dependencies(namespace_form)?;
-    let mut script_dependencies = Vec::new();
-    for form in kernel::parse_forms(body)? {
-        collect_script_dependencies(&form, &mut script_dependencies);
-    }
-    script_dependencies.sort();
-    script_dependencies.dedup();
-    Ok((dependencies, script_dependencies))
-}
-
-fn collect_script_dependencies(form: &kernel::Form, output: &mut Vec<String>) {
-    let form = match form {
-        kernel::Form::Metadata(_, value) => value.as_ref(),
-        value => value,
-    };
-    let kernel::Form::List(items) = form else {
-        return;
-    };
-    let is_script = matches!(
-        items.first(),
-        Some(kernel::Form::Symbol(name)) if name == "l/script" || name == "script"
-    );
-    if !is_script {
-        return;
-    }
-    for option in items.iter().skip(2) {
-        let kernel::Form::Map(entries) = option else {
-            continue;
-        };
-        for (key, value) in entries {
-            if !matches!(key, kernel::Form::Keyword(name) if name == "require") {
-                continue;
-            }
-            let kernel::Form::Vector(requirements) = value else {
-                continue;
-            };
-            for requirement in requirements {
-                let kernel::Form::Vector(spec) = requirement else {
-                    continue;
-                };
-                if let Some(kernel::Form::Symbol(name)) = spec.first() {
-                    output.push(name.clone());
-                }
-            }
-        }
-    }
+pub(super) fn module_dependencies(source: &str) -> Result<Vec<String>, String> {
+    let (namespace_form, _) = split_namespace_form(source)?;
+    namespace_dependencies(namespace_form)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -720,7 +641,7 @@ fn validate_bundle_modules(modules: &[BytecodeBundleModule]) -> Result<(), Strin
 }
 
 fn standard_library_namespace(namespace: &str) -> bool {
-    ["std.", "code.", "db.", "lang."]
+    ["std.", "code.", "db."]
         .iter()
         .any(|prefix| namespace.starts_with(prefix))
 }

@@ -32,7 +32,7 @@ public class NativeMain {
     }
 
     if ("version".equals(command) || "--version".equals(command) || "-V".equals(command)) {
-      System.out.println("hara-native-jvm 0.1.23");
+      System.out.println("hara-native-jvm 0.1.24");
       return;
     }
 

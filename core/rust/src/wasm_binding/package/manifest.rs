@@ -59,14 +59,8 @@ pub(super) fn package_document(
         )
     })?;
     let lifecycle = Form::Map(vec![
-        (
-            keyword_form("lifecycle/load"),
-            keyword_form("idempotent"),
-        ),
-        (
-            keyword_form("lifecycle/close"),
-            keyword_form("idempotent"),
-        ),
+        (keyword_form("lifecycle/load"), keyword_form("idempotent")),
+        (keyword_form("lifecycle/close"), keyword_form("idempotent")),
         (
             keyword_form("lifecycle/session-isolation"),
             Form::Bool(true),
@@ -77,13 +71,11 @@ pub(super) fn package_document(
         ),
         (
             keyword_form("lifecycle/cancellation"),
-            Form::Bool(
-                interface.exports.iter().any(|export| {
-                    export.cancellation.is_some_and(|policy| {
-                        !matches!(policy, CancellationPolicy::Ignore)
-                    })
-                }),
-            ),
+            Form::Bool(interface.exports.iter().any(|export| {
+                export
+                    .cancellation
+                    .is_some_and(|policy| !matches!(policy, CancellationPolicy::Ignore))
+            })),
         ),
     ]);
     let host_calls = interface

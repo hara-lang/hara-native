@@ -1,5 +1,9 @@
 use super::*;
-use crate::{package, package_manifest::PackageManifest};
+use crate::{
+    package::{self, ArtifactFile, ArtifactSpec},
+    package_manifest::PackageManifest,
+};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp(name: &str) -> PathBuf {
@@ -10,6 +14,36 @@ fn temp(name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ))
+}
+
+fn build_package_archive(
+    root: &Path,
+    archive: &Path,
+    identity: &str,
+    version: &str,
+    files: &[&str],
+    resources: Vec<(String, String)>,
+) {
+    let files = files
+        .iter()
+        .map(|path| ArtifactFile {
+            path: (*path).to_owned(),
+            bytes: fs::read(root.join(path)).unwrap(),
+        })
+        .collect();
+    package::build_artifact(
+        ArtifactSpec {
+            identity: identity.to_owned(),
+            version: version.to_owned(),
+            name: None,
+            files,
+            resources: resources.into_iter().collect::<BTreeMap<_, _>>(),
+            bytecode: None,
+            extensions: "{}".into(),
+        },
+        archive,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -222,7 +256,14 @@ fn checkout_dependency_overrides_an_installed_package() {
     .unwrap();
 
     let archive = package.join("target/lib.harp");
-    package::build_path(&package, Some(&archive)).unwrap();
+    build_package_archive(
+        &package,
+        &archive,
+        "hara:demo/lib",
+        "1.0.0",
+        &["project.edn", "src/demo/lib.hal"],
+        vec![("demo.lib".into(), "src/demo/lib.hal".into())],
+    );
     package::install_path_at(&archive, &installed).unwrap();
     let project = read(&consumer).unwrap();
     let catalog = source_catalog_at(&project, &installed).unwrap();
@@ -333,10 +374,29 @@ fn installed_semantic_harps_resolve_and_load_through_an_explicit_store() {
     .unwrap();
 
     let base_archive = base.join("target/base.harp");
-    package::build_path(&base, Some(&base_archive)).unwrap();
+    build_package_archive(
+        &base,
+        &base_archive,
+        "hara:demo/base",
+        "1.0.0",
+        &["project.edn", "src/demo/base.hal"],
+        vec![("demo.base".into(), "src/demo/base.hal".into())],
+    );
     let base_root = package::install_path_at(&base_archive, &distribution).unwrap();
     let client_archive = client.join("target/client.harp");
-    package::build_path(&client, Some(&client_archive)).unwrap();
+    build_package_archive(
+        &client,
+        &client_archive,
+        "hara:demo/client",
+        "1.0.0",
+        &[
+            "project.edn",
+            "config/packages.edn",
+            "project.lock.edn",
+            "src/demo/client.hal",
+        ],
+        vec![("demo.client".into(), "src/demo/client.hal".into())],
+    );
     let client_manifest = PackageManifest::read_archive(&client_archive).unwrap();
     assert_eq!(client_manifest.identity, "hara:demo/client");
     assert!(client_manifest.resources.contains_key("demo.client"));
@@ -401,6 +461,7 @@ fn source_catalog_does_not_mutate_an_installed_package_root() {
 fn source_catalog_defers_unrelated_legacy_source_discovery() {
     let root = temp("lazy-source-catalog");
     fs::create_dir_all(root.join("src/demo")).unwrap();
+    fs::create_dir_all(root.join("src/example")).unwrap();
     fs::create_dir_all(root.join("src/lang")).unwrap();
     fs::write(
         root.join("project.edn"),
@@ -466,26 +527,43 @@ fn source_catalog_family_content_fingerprint_ignores_unselected_source_changes()
     let root = temp("source-family-content-fingerprint");
     fs::create_dir_all(root.join("src/lang")).unwrap();
     fs::create_dir_all(root.join("src/code")).unwrap();
+    fs::create_dir_all(root.join("src/example")).unwrap();
     fs::write(
         root.join("project.edn"),
         "{:hara/type :project :hara/version \"1.0.0\" :project/id demo/app :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}",
     )
     .unwrap();
-    fs::write(root.join("src/lang/spec.hal"), "(ns lang.spec) (def answer 42)").unwrap();
-    fs::write(root.join("src/code/deploy.hal"), "(ns code.deploy) (def stage :one)").unwrap();
+    fs::write(
+        root.join("src/example/spec.hal"),
+        "(ns example.spec) (def answer 42)",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/code/deploy.hal"),
+        "(ns code.deploy) (def stage :one)",
+    )
+    .unwrap();
 
     let catalog = source_catalog(&read(&root).unwrap()).unwrap();
-    let original = catalog.content_fingerprint_prefixes(&["lang"]).unwrap();
+    let original = catalog.content_fingerprint_prefixes(&["example"]).unwrap();
 
-    fs::write(root.join("src/code/deploy.hal"), "(ns code.deploy) (def stage :two)").unwrap();
+    fs::write(
+        root.join("src/code/deploy.hal"),
+        "(ns code.deploy) (def stage :two)",
+    )
+    .unwrap();
     assert_eq!(
-        catalog.content_fingerprint_prefixes(&["lang"]).unwrap(),
+        catalog.content_fingerprint_prefixes(&["example"]).unwrap(),
         original
     );
 
-    fs::write(root.join("src/lang/spec.hal"), "(ns lang.spec) (def answer 43)").unwrap();
+    fs::write(
+        root.join("src/example/spec.hal"),
+        "(ns example.spec) (def answer 43)",
+    )
+    .unwrap();
     assert_ne!(
-        catalog.content_fingerprint_prefixes(&["lang"]).unwrap(),
+        catalog.content_fingerprint_prefixes(&["example"]).unwrap(),
         original
     );
 
@@ -495,7 +573,7 @@ fn source_catalog_family_content_fingerprint_ignores_unselected_source_changes()
 #[test]
 fn native_profile_excludes_legacy_source_subtrees() {
     let root = temp("native-source-excludes");
-    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::create_dir_all(root.join("src/example")).unwrap();
     fs::create_dir_all(root.join("src/std")).unwrap();
     fs::write(
         root.join("project.edn"),
@@ -503,8 +581,8 @@ fn native_profile_excludes_legacy_source_subtrees() {
     )
     .unwrap();
     fs::write(
-        root.join("src/lang/runtime.hal"),
-        "(ns lang.runtime) (def answer 42)",
+        root.join("src/example/runtime.hal"),
+        "(ns example.runtime) (def answer 42)",
     )
     .unwrap();
     fs::write(
@@ -518,8 +596,8 @@ fn native_profile_excludes_legacy_source_subtrees() {
     let catalog = source_catalog(&project).unwrap();
     assert_eq!(catalog.path("std.foundation"), None);
     assert_eq!(
-        catalog.path("lang.runtime"),
-        Some(root.join("src/lang/runtime.hal").canonicalize().unwrap())
+        catalog.path("example.runtime"),
+        Some(root.join("src/example/runtime.hal").canonicalize().unwrap())
     );
     assert_eq!(
         source_resources(&project)
@@ -527,7 +605,7 @@ fn native_profile_excludes_legacy_source_subtrees() {
             .into_iter()
             .map(|(namespace, _)| namespace)
             .collect::<Vec<_>>(),
-        vec!["lang.runtime".to_owned()]
+        vec!["example.runtime".to_owned()]
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -536,7 +614,7 @@ fn native_profile_excludes_legacy_source_subtrees() {
 #[test]
 fn deploy_source_excludes_remove_checkout_only_trees_from_native_sources() {
     let root = temp("deploy-source-excludes");
-    fs::create_dir_all(root.join("src/lang")).unwrap();
+    fs::create_dir_all(root.join("src/example")).unwrap();
     fs::create_dir_all(root.join("src-build/play")).unwrap();
     fs::write(
         root.join("project.edn"),
@@ -544,8 +622,8 @@ fn deploy_source_excludes_remove_checkout_only_trees_from_native_sources() {
     )
     .unwrap();
     fs::write(
-        root.join("src/lang/runtime.hal"),
-        "(ns lang.runtime) (def answer 42)",
+        root.join("src/example/runtime.hal"),
+        "(ns example.runtime) (def answer 42)",
     )
     .unwrap();
     fs::write(
@@ -558,7 +636,7 @@ fn deploy_source_excludes_remove_checkout_only_trees_from_native_sources() {
     assert_eq!(project.source_excludes, vec![PathBuf::from("src-build")]);
     let catalog = source_catalog(&project).unwrap();
     assert!(catalog.path("play.example").is_none());
-    assert!(catalog.path("lang.runtime").is_some());
+    assert!(catalog.path("example.runtime").is_some());
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -567,6 +645,7 @@ fn deploy_source_excludes_remove_checkout_only_trees_from_native_sources() {
 fn source_catalog_bootstraps_the_fixed_foundation_family_without_a_full_index() {
     let root = temp("lazy-foundation-bootstrap");
     fs::create_dir_all(root.join("src/std/foundation")).unwrap();
+    fs::create_dir_all(root.join("src/example")).unwrap();
     fs::create_dir_all(root.join("src/lang")).unwrap();
     fs::write(
         root.join("project.edn"),

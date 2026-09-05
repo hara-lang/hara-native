@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use super::{module_dependencies, ModuleSource};
 
-/// Returns a stable dependency-first order. Eager namespace edges and
-/// `l/script` module requirements participate because both must be materialized
-/// before a consumer's macro expansion and artifact execution.
+/// Returns a stable dependency-first order from declarative namespace edges.
 pub(super) fn order_module_sources(sources: &[ModuleSource<'_>]) -> Result<Vec<usize>, String> {
     let positions = sources
         .iter()
@@ -13,13 +11,7 @@ pub(super) fn order_module_sources(sources: &[ModuleSource<'_>]) -> Result<Vec<u
         .collect::<HashMap<_, _>>();
     let dependencies = sources
         .iter()
-        .map(|source| {
-            let (mut dependencies, script_dependencies) = module_dependencies(source.source)?;
-            dependencies.extend(script_dependencies);
-            dependencies.sort();
-            dependencies.dedup();
-            Ok(dependencies)
-        })
+        .map(|source| module_dependencies(source.source))
         .collect::<Result<Vec<_>, String>>()?;
     let mut state = vec![0u8; sources.len()];
     let mut ordered = Vec::with_capacity(sources.len());

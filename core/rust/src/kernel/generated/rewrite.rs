@@ -91,7 +91,8 @@ impl GeneratedNamespaceConfig {
         }
         if symbol.contains('/') {
             if let Ok(registry) = crate::core::namespace_registry() {
-                if let Some(variable) = registry.resolve(&crate::lang::data::Symbol::parse(symbol)) {
+                if let Some(variable) = registry.resolve(&crate::lang::data::Symbol::parse(symbol))
+                {
                     return variable.symbol().as_str().to_owned();
                 }
             }

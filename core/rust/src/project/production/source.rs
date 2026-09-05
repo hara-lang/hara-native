@@ -205,7 +205,7 @@ fn without_metadata(form: &Form) -> &Form {
 }
 
 fn standard_library_namespace(namespace: &str) -> bool {
-    ["std.", "code.", "lang."]
+    ["std.", "code."]
         .iter()
         .any(|prefix| namespace.starts_with(prefix))
 }

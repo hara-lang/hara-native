@@ -331,8 +331,7 @@ fn visit_package_dependency(
                 ))),
             }
         })
-        .collect::<Result<Vec<_>, _>>()
-        ?;
+        .collect::<Result<Vec<_>, _>>()?;
     dependencies.sort();
     dependencies.dedup();
     for dependency in dependencies {
@@ -609,22 +608,22 @@ mod tests {
     fn reads_foundation_selectors_and_expands_semantic_packages() {
         let source = r#"{
           xyz.zcaudate/code.test {:description "tests" :include [[code.test :complete]]}
-          lang.model.v1.postgres {:include [[lang.model.v1.spec-postgres :complete]
+          example.model.v1.postgres {:include [[example.model.v1.spec-postgres :complete]
                                             [postgres.core :complete]
                                             [postgres.typed :complete]
                                             [postgres.gen :complete]]
-                                  :dependencies [lang.base]}
-          lang.base {:include [[lang.base :complete]]}
+                                  :dependencies [example.base]}
+          example.base {:include [[example.base :complete]]}
         }"#;
         let definitions = definitions_from_packages_edn(source).unwrap();
-        assert_eq!(definitions[0].name, "lang.base");
+        assert_eq!(definitions[0].name, "example.base");
         let postgres = definitions
             .iter()
-            .find(|definition| definition.name == "lang.model.v1.postgres")
+            .find(|definition| definition.name == "example.model.v1.postgres")
             .unwrap();
         let available = vec![
-            "lang.model.v1.spec-postgres".into(),
-            "lang.model.v1.spec-postgres.deftype.common".into(),
+            "example.model.v1.spec-postgres".into(),
+            "example.model.v1.spec-postgres.deftype.common".into(),
             "postgres.core".into(),
             "postgres.core.graph".into(),
             "postgres.typed".into(),
@@ -634,8 +633,8 @@ mod tests {
         assert_eq!(
             package_namespaces(postgres, &available),
             vec![
-                "lang.model.v1.spec-postgres".to_owned(),
-                "lang.model.v1.spec-postgres.deftype.common".to_owned(),
+                "example.model.v1.spec-postgres".to_owned(),
+                "example.model.v1.spec-postgres.deftype.common".to_owned(),
                 "postgres.core".to_owned(),
                 "postgres.core.graph".to_owned(),
                 "postgres.gen.rpc".to_owned(),
@@ -644,8 +643,9 @@ mod tests {
         );
         validate_package_definitions(&definitions, &available).unwrap();
         assert_eq!(
-            package_dependency_order(&definitions, &["lang.model.v1.postgres".to_owned()]).unwrap(),
-            vec!["lang.base", "lang.model.v1.postgres"]
+            package_dependency_order(&definitions, &["example.model.v1.postgres".to_owned()])
+                .unwrap(),
+            vec!["example.base", "example.model.v1.postgres"]
         );
     }
 

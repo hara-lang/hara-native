@@ -28,32 +28,6 @@ fn synthetic_spanned_form(form: Form) -> kernel::SpannedForm {
     }
 }
 
-/// Language specifications used by `l/script-` and `l/restart` to publish and
-/// run the basic runtime declaration surface. The image carries the pure macro
-/// index plus a materialized Book whose named callable values are represented
-/// as source references. Installing an image loads only those small callable
-/// owner namespaces; it never evaluates a target spec's full grammar builder.
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_LANGUAGES: &[(&str, &str)] = &[
-    ("xtalk", "lang.model.v1.spec-xtalk"),
-    ("js", "lang.model.v1.spec-js"),
-    ("python", "lang.model.v1.spec-python"),
-    ("lua", "lang.model.v1.spec-lua"),
-];
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_MACROS: &str = "macro-index";
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_BOOKS: &str = "books";
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE: &str = "hara.lang/source-ref";
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_SYMBOL: &str = "symbol";
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_FUNCTION: &str = "function";
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-const SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_VAR: &str = "var";
-
 #[cfg_attr(not(feature = "raw-wasm"), wasm_bindgen)]
 impl Runtime {
 
@@ -1215,32 +1189,51 @@ impl Runtime {
             .get(&name)
             .ok_or("module/not-found")?;
         let namespace_source = self.namespace_source();
-        core::with_macros(self.macros.clone(), || {
-            core::with_namespace_source(namespace_source, || {
-                core::with_protocols(&self.protocols, || {
-                    core::with_namespace_registry(&self.namespace_registry, || {
-                        #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-                        if self.execution_backend == "direct-native" {
-                            return core::with_direct_native_namespace_loader(
-                                Self::direct_native_namespace_loader(
-                                    self.direct_native.clone(),
-                                    self.direct_native_multimethods.clone(),
-                                    self.direct_native_source_cache.clone(),
-                                ),
-                                || {
-                                    core::require_namespace(
-                                        &self.namespace_registry,
-                                        self.execution.environment_mut(),
-                                        &name,
-                                    )
-                                },
-                            );
-                        }
-                        core::require_namespace(
-                            &self.namespace_registry,
-                            self.execution.environment_mut(),
-                            &name,
-                        )
+        let file = self.providers.file();
+        let socket = self.providers.socket();
+        let process = self.providers.process();
+        let kernel = self.providers.kernel();
+        let promise = self.providers.promise();
+        let package_catalog = &self.package_catalog;
+        let protocols = &self.protocols;
+        let namespace_registry = &self.namespace_registry;
+        let environment = self.execution.environment_mut();
+        let macros = self.macros.clone();
+        let test_runner = self.test_runner.clone();
+        core::with_test_runner(&test_runner, || {
+            core::with_capability_providers(file, socket, process, kernel, || {
+                core::with_package_catalog(package_catalog, || {
+                    core::with_promise_provider(promise, || {
+                        core::with_macros(macros, || {
+                            core::with_namespace_source(namespace_source, || {
+                                core::with_protocols(protocols, || {
+                                    core::with_namespace_registry(namespace_registry, || {
+                                        #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+                                        if self.execution_backend == "direct-native" {
+                                            return core::with_direct_native_namespace_loader(
+                                                Self::direct_native_namespace_loader(
+                                                    self.direct_native.clone(),
+                                                    self.direct_native_multimethods.clone(),
+                                                    self.direct_native_source_cache.clone(),
+                                                ),
+                                                || {
+                                                    core::require_namespace(
+                                                        namespace_registry,
+                                                        environment,
+                                                        &name,
+                                                    )
+                                                },
+                                            );
+                                        }
+                                        core::require_namespace(
+                                            namespace_registry,
+                                            environment,
+                                            &name,
+                                        )
+                                    })
+                                })
+                            })
+                        })
                     })
                 })
             })
@@ -1636,10 +1629,9 @@ impl Runtime {
         }
     }
 
-    /// Compiles the source-owned Foundation bootstrap family into a verified
-    /// HBX image. The image holds only source-digested HBC programs; it does
-    /// not retain the Runtime, Books, Vars, or any provider state used while
-    /// it was built.
+    /// Compiles only the source-owned Foundation bootstrap family into a
+    /// verified HBX image. Package namespaces remain source-owned and load on
+    /// demand through the generic per-namespace HBC cache.
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     pub fn compile_source_foundation_image(
         catalog: &crate::project::SourceCatalog,
@@ -1661,8 +1653,9 @@ impl Runtime {
             .iter()
             .map(|(resource, source)| crate::vm::ModuleSource { resource, source })
             .collect::<Vec<_>>();
-        crate::vm::compile_package_bytecode_bundle(&modules, &modules)
-            .map_err(|error| format!("cannot compile Foundation image: {error}"))
+        let image = crate::vm::compile_package_bytecode_bundle(&modules, &modules)
+            .map_err(|error| format!("cannot compile Foundation image: {error}"))?;
+        Ok(image)
     }
 
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -1673,258 +1666,15 @@ impl Runtime {
         Ok(())
     }
 
-    /// Encodes macro indexes and materialized Books for currently-loaded basic
-    /// language specs. A Book image replaces named Hara callables with their
-    /// defining Var symbols, allowing the receiving Runtime to hydrate only
-    /// the target-specific helper namespace rather than build the grammar.
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    pub fn encode_source_language_spec_image(&self) -> Result<Vec<u8>, String> {
-        let registry = self.namespace_registry.resolve(&crate::lang::data::Symbol::parse(
-            "lang.core.registry/+book-macro-registry+",
-        ));
-        let mut macro_indexes = registry
-            .and_then(|registry| match registry.deref_value() {
-                core::Value::Atom(book_registry) => core::map_entries(&book_registry.deref_value()),
-                _ => None,
-            })
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(key, _)| {
-                matches!(key, core::Value::Keyword(language)
-                         if SOURCE_LANGUAGE_SPEC_IMAGE_LANGUAGES
-                             .iter()
-                             .any(|(expected, _)| language.as_str() == *expected))
-            })
-            .collect::<Vec<_>>();
-        let mut materialized_books = Vec::new();
-        for &(language, namespace) in SOURCE_LANGUAGE_SPEC_IMAGE_LANGUAGES {
-            let Some(source) = self.namespace_registry.find(namespace) else {
-                continue;
-            };
-            let book = source
-                .resolve(&crate::lang::data::Symbol::parse("+book+"))
-                .ok_or_else(|| format!("language spec image requires {namespace}/+book+"))?
-                .deref_value();
-            let macro_info = source_language_spec_image_macro_info(&book)
-                .map_err(|error| format!("language spec image cannot index :{language}: {error}"))?;
-            macro_indexes.retain(|(key, _)| {
-                !matches!(key, core::Value::Keyword(candidate) if candidate.as_str() == language)
-            });
-            macro_indexes.push((core::Value::Keyword(language.into()), macro_info));
-            if source_language_spec_image_book_version(&book).is_some() {
-                materialized_books.retain(|(key, _)| {
-                    !matches!(key, core::Value::Keyword(candidate) if candidate.as_str() == language)
-                });
-                materialized_books.push((
-                    core::Value::Keyword(language.into()),
-                    source_language_spec_image_dehydrate_book(&book).map_err(|error| {
-                        format!("language spec image cannot dehydrate :{language}: {error}")
-                    })?,
-                ));
-            }
-        }
-        if macro_indexes.is_empty() && materialized_books.is_empty() {
-            return Err("language spec image requires at least one loaded basic language Book".into());
-        }
-        let image = core::Value::Map(crate::lang::data::Map::from_iter([
-            (
-                core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_MACROS.into()),
-                core::Value::Map(crate::lang::data::Map::from_iter(macro_indexes)),
-            ),
-            (
-                core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_BOOKS.into()),
-                core::Value::Map(crate::lang::data::Map::from_iter(materialized_books)),
-            ),
-        ]));
-        crate::hta::encode(&image)
-            .map_err(|error| format!("cannot encode language spec image: {error}"))
-    }
-
-    /// Encodes exactly one materialized Basic Book. Declaration macro data is
-    /// deliberately absent: it is a small static baseline in
-    /// `lang.core.registry`, while this image remains target-specific and is
-    /// installed only by a caller that will compile that target.
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    pub fn encode_source_language_book_image(&self, language: &str) -> Result<Vec<u8>, String> {
-        let namespace = SOURCE_LANGUAGE_SPEC_IMAGE_LANGUAGES
-            .iter()
-            .find_map(|(candidate, namespace)| (*candidate == language).then_some(*namespace))
-            .ok_or_else(|| format!("unsupported basic language Book: {language}"))?;
-        let source = self.namespace_registry.find(namespace).ok_or_else(|| {
-            format!("basic Book image requires loaded source namespace {namespace}")
-        })?;
-        let book = source
-            .resolve(&crate::lang::data::Symbol::parse("+book+"))
-            .ok_or_else(|| format!("basic Book image requires {namespace}/+book+"))?
-            .deref_value();
-        if source_language_spec_image_book_version(&book).is_none() {
-            return Err(format!("basic Book image :{language} is missing positive :version"));
-        }
-        let image_book = source_language_spec_image_dehydrate_book(&book)
-            .map_err(|error| format!("basic Book image cannot dehydrate :{language}: {error}"))?;
-        let image = core::Value::Map(crate::lang::data::Map::from_iter([
-            (
-                core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_MACROS.into()),
-                core::Value::Map(crate::lang::data::Map::new()),
-            ),
-            (
-                core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_BOOKS.into()),
-                core::Value::Map(crate::lang::data::Map::from_iter([(
-                    core::Value::Keyword(language.into()),
-                    image_book,
-                )])),
-            ),
-        ]));
-        crate::hta::encode(&image)
-            .map_err(|error| format!("cannot encode basic Book image :{language}: {error}"))
-    }
-
-    /// Installs a verified basic macro index into this Runtime's own registry.
-    /// Materialized Books are deliberately deferred: macro expansion can use
-    /// the index immediately, while a caller that knows its target language
-    /// can hydrate only that Book with
-    /// [`Runtime::install_source_language_spec_image_for_languages`].
-    ///
-    /// A Book's source references resolve to direct-native Vars in this
-    /// Runtime only; no cross-session closures are retained.
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    pub fn install_source_language_spec_image(&mut self, image: &[u8]) -> Result<(), String> {
-        self.install_source_language_spec_image_for_languages(image, &HashSet::new())
-    }
-
-    /// Installs a verified basic macro index and the materialized Books for
-    /// `languages`. Keeping Book hydration target-selective preserves the
-    /// source-image fast path: a JavaScript script does not load Python, Lua,
-    /// or XTalk target helpers before it can run.
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    pub fn install_source_language_spec_image_for_languages(
-        &mut self,
-        image: &[u8],
-        languages: &HashSet<String>,
-    ) -> Result<(), String> {
-        let image = crate::hta::decode_canonical(image)
-            .map_err(|error| format!("invalid language spec image: {error}"))?;
-        let macros = source_language_spec_image_field(&image, SOURCE_LANGUAGE_SPEC_IMAGE_MACROS)
-            .map_err(|error| format!("invalid language spec image: {error}"))?;
-        let books = source_language_spec_image_field(&image, SOURCE_LANGUAGE_SPEC_IMAGE_BOOKS)
-            .map_err(|error| format!("invalid language spec image: {error}"))?;
-        let macro_entries = core::map_entries(&macros)
-            .ok_or_else(|| "invalid language spec image: :macro-index must be a map".to_owned())?;
-        let book_entries = core::map_entries(&books)
-            .ok_or_else(|| "invalid language spec image: :books must be a map".to_owned())?;
-        let mut macro_indexes = HashMap::with_capacity(macro_entries.len());
-        for (key, value) in macro_entries {
-            let core::Value::Keyword(language) = key else {
-                return Err("invalid language spec image: language keys must be keywords".into());
-            };
-            if !SOURCE_LANGUAGE_SPEC_IMAGE_LANGUAGES
-                .iter()
-                .any(|(expected, _)| language.as_str() == *expected)
-            {
-                return Err(format!(
-                    "invalid language spec image: unsupported language: {}",
-                    language.as_str()
-                ));
-            }
-            if core::map_entries(&value).is_none() {
-                return Err(format!(
-                    "invalid language spec image: macro index for :{} must be a map",
-                    language.as_str()
-                ));
-            }
-            macro_indexes.insert(language.as_str().to_owned(), value);
-        }
-        if macro_indexes.is_empty() && book_entries.is_empty() {
-            return Err("invalid language spec image: expected at least one language book".into());
-        }
-        if self.namespace_registry.find("lang.core.registry").is_none() {
-            self.load_namespace_from_provider("lang.core.registry")?;
-        }
-        let macro_registry = self
-            .namespace_registry
-            .resolve(&crate::lang::data::Symbol::parse(
-                "lang.core.registry/+book-macro-registry+",
-            ))
-            .ok_or_else(|| "language spec image requires lang.core.registry/+book-macro-registry+".to_owned())?;
-        let core::Value::Atom(book_registry) = macro_registry.deref_value() else {
-            return Err("language spec image requires lang.core.registry/+book-macro-registry+ atom".into());
-        };
-        let current = book_registry.deref_value();
-        let mut next = core::map_entries(&current)
-            .ok_or_else(|| "language spec image requires a map macro registry".to_owned())?;
-        next.retain(|(key, _)| {
-            !matches!(key, core::Value::Keyword(language)
-                      if macro_indexes.contains_key(language.as_str()))
-        });
-        next.extend(macro_indexes.into_iter().map(|(language, value)| {
-            (core::Value::Keyword(language.into()), value)
-        }));
-        let next = core::Value::Map(crate::lang::data::Map::from_iter(next));
-        book_registry
-            .reset(next)
-            .map_err(|error| format!("cannot install language spec image: {error}"))?;
-        let book_image_registry = self
-            .namespace_registry
-            .resolve(&crate::lang::data::Symbol::parse(
-                "lang.core.registry/+book-image-registry+",
-            ))
-            .ok_or_else(|| "language spec image requires lang.core.registry/+book-image-registry+".to_owned())?;
-        let core::Value::Atom(book_image_registry) = book_image_registry.deref_value() else {
-            return Err("language spec image requires lang.core.registry/+book-image-registry+ atom".into());
-        };
-        let current = book_image_registry.deref_value();
-        let mut next = core::map_entries(&current)
-            .ok_or_else(|| "language spec image requires a map book image registry".to_owned())?;
-        for (key, image_book) in book_entries {
-            let core::Value::Keyword(language) = key else {
-                return Err("invalid language spec image: book language keys must be keywords".into());
-            };
-            if !SOURCE_LANGUAGE_SPEC_IMAGE_LANGUAGES
-                .iter()
-                .any(|(expected, _)| language.as_str() == *expected)
-            {
-                return Err(format!(
-                    "invalid language spec image: unsupported book language: {}",
-                    language.as_str()
-                ));
-            }
-            if !languages.contains(language.as_str()) {
-                continue;
-            }
-            let book = source_language_spec_image_hydrate_book(self, &image_book)
-                .map_err(|error| format!("invalid language spec image :{} Book: {error}", language.as_str()))?;
-            let book = source_language_spec_image_restore_book_type(self, book)
-                .map_err(|error| format!("invalid language spec image :{} Book: {error}", language.as_str()))?;
-            let version = source_language_spec_image_book_version(&book).ok_or_else(|| {
-                format!(
-                    "invalid language spec image :{} Book: missing positive :version",
-                    language.as_str()
-                )
-            })?;
-            let coordinate = core::Value::Vector(PVector::from_iter([
-                core::Value::Keyword(language.clone()),
-                core::Value::Keyword("default".into()),
-                core::Value::Number(version),
-            ]));
-            next.retain(|(key, _)| key != &coordinate);
-            next.push((coordinate, book));
-        }
-        book_image_registry
-            .reset(core::Value::Map(crate::lang::data::Map::from_iter(next)))
-            .map_err(|error| format!("cannot install language spec Book image: {error}"))?;
-        Ok(())
-    }
-
     fn finish_source_foundation_bootstrap(&mut self) {
         self.use_namespace("std.foundation");
         core::apply_global_aliases(&self.namespace_registry, "user");
         self.use_namespace("user");
     }
 
-    /// Loads the language-level Foundation from the mounted source catalog.
-    /// This is intentionally an interpreter bootstrap: the resulting macros,
-    /// aliases, and protocol wiring form the compiler environment for later
-    /// direct-native namespace loads.
+    /// Loads Foundation from the mounted source catalog. This interpreter
+    /// bootstrap establishes the compiler environment for later direct-native
+    /// namespace loads without selecting any package namespace.
     pub fn bootstrap_source_foundation(&mut self) -> Result<(), String> {
         self.configure_execution_backend("interpreter")?;
         self.load_namespace_from_provider("std.foundation")?;
@@ -2010,324 +1760,6 @@ impl Runtime {
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_map_get(
-    value: &core::Value,
-    key: &core::Value,
-) -> Option<core::Value> {
-    core::map_entries(value)?.into_iter().find_map(|(candidate, value)| {
-        if candidate == *key {
-            Some(value)
-        } else {
-            None
-        }
-    })
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_field(
-    value: &core::Value,
-    field: &str,
-) -> Result<core::Value, String> {
-    let field_key = core::Value::Keyword(field.into());
-    match value {
-        core::Value::Struct(value) => value
-            .get(field)
-            .cloned()
-            .ok_or_else(|| format!("missing struct field :{field}")),
-        _ => source_language_spec_image_map_get(value, &field_key)
-            .ok_or_else(|| format!("missing map field :{field}")),
-    }
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_book_version(book: &core::Value) -> Option<i64> {
-    if !matches!(book, core::Value::Struct(value) if value.ty.name == "lang.common.book/Book") {
-        return None;
-    }
-    match source_language_spec_image_field(book, "version") {
-        Ok(core::Value::Number(version)) if version > 0 => Some(version),
-        _ => None,
-    }
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_reference(kind: &str, symbol: crate::lang::data::Symbol) -> core::Value {
-    core::Value::Map(crate::lang::data::Map::from_iter([
-        (
-            core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE.into()),
-            core::Value::Keyword(kind.into()),
-        ),
-        (
-            core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_SYMBOL.into()),
-            core::Value::Symbol(symbol),
-        ),
-    ]))
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_reference_parts(
-    value: &core::Value,
-) -> Result<Option<(&'static str, crate::lang::data::Symbol)>, String> {
-    let Some(entries) = core::map_entries(value) else {
-        return Ok(None);
-    };
-    let kind = source_language_spec_image_map_get(
-        value,
-        &core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE.into()),
-    );
-    let symbol = source_language_spec_image_map_get(
-        value,
-        &core::Value::Keyword(SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_SYMBOL.into()),
-    );
-    let (Some(core::Value::Keyword(kind)), Some(core::Value::Symbol(symbol))) = (kind, symbol)
-    else {
-        return Ok(None);
-    };
-    if entries.len() != 2 {
-        return Err("source reference must contain exactly a kind and symbol".into());
-    }
-    let kind = match kind.as_str() {
-        SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_FUNCTION => SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_FUNCTION,
-        SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_VAR => SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_VAR,
-        other => return Err(format!("unknown source reference kind: {other}")),
-    };
-    if symbol.get_namespace().is_none() {
-        return Err("source reference symbol must be namespace-qualified".into());
-    }
-    Ok(Some((kind, symbol)))
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_dehydrate_book(book: &core::Value) -> Result<core::Value, String> {
-    core::transform_persistent_value(book, &mut |value| match value {
-        core::Value::Function(function) => Some(
-            function
-                .origin_symbol()
-                .ok_or_else(|| "Book contains an anonymous function".to_owned())
-                .map(|symbol| {
-                    source_language_spec_image_reference(
-                        SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_FUNCTION,
-                        symbol,
-                    )
-                })),
-        core::Value::Var(var) => Some(Ok(source_language_spec_image_reference(
-            SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_VAR,
-            var.symbol().clone(),
-        ))),
-        _ => None,
-    })
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_hydrate_book(
-    runtime: &mut Runtime,
-    book: &core::Value,
-) -> Result<core::Value, String> {
-    core::transform_persistent_value(book, &mut |value| {
-        let reference = match source_language_spec_image_reference_parts(value) {
-            Ok(reference) => reference,
-            Err(error) => return Some(Err(error)),
-        };
-        let Some((kind, symbol)) = reference else {
-            return None;
-        };
-        let namespace = symbol
-            .get_namespace()
-            .expect("validated source reference namespace");
-        let result = (|| {
-            if runtime.namespace_registry.find(namespace).is_none() {
-                runtime.load_namespace_from_provider(namespace)?;
-            }
-            let var = runtime
-                .namespace_registry
-                .resolve(&symbol)
-                .ok_or_else(|| format!("source reference does not resolve: {}", symbol.as_str()))?;
-            let value = var.deref_value();
-            match kind {
-                SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_FUNCTION
-                    if matches!(value, core::Value::Function(_)) =>
-                {
-                    Ok(value)
-                }
-                SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_VAR => Ok(value),
-                SOURCE_LANGUAGE_SPEC_IMAGE_REFERENCE_FUNCTION => Err(format!(
-                    "source reference is not a function: {}",
-                    symbol.as_str()
-                )),
-                _ => Err("invalid source reference kind".into()),
-            }
-        })();
-        Some(result)
-    })
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_restore_book_type(
-    runtime: &mut Runtime,
-    book: core::Value,
-) -> Result<core::Value, String> {
-    let core::Value::Struct(value) = book else {
-        return Err("Book must be a struct".into());
-    };
-    if value.ty.name != "lang.common.book/Book" {
-        return Err(format!("expected lang.common.book/Book, got {}", value.ty.name));
-    }
-    if runtime.namespace_registry.find("lang.common.book").is_none() {
-        runtime.load_namespace_from_provider("lang.common.book")?;
-    }
-    let constructor = runtime
-        .namespace_registry
-        .resolve(&crate::lang::data::Symbol::parse("lang.common.book/map->Book"))
-        .ok_or_else(|| "language spec image requires lang.common.book/map->Book".to_owned())?
-        .deref_value();
-    core::invoke_callable(
-        constructor,
-        vec![core::Value::Map(crate::lang::data::Map::from_iter(
-            value.ordered_entries(),
-        ))],
-    )
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_items(value: &core::Value) -> Result<Vec<core::Value>, String> {
-    match value {
-        core::Value::Set(values) => Ok(values.iter().cloned().collect()),
-        core::Value::OrderedSet(values) => Ok(values.iter().cloned().collect()),
-        core::Value::SortedSet(values) => Ok(values.iter().cloned().collect()),
-        core::Value::List(values) => Ok(values.iter().cloned().collect()),
-        core::Value::Tuple(values) => Ok(values.iter().cloned().collect()),
-        core::Value::Vector(values) => Ok(values.iter().cloned().collect()),
-        _ => Err("expected a grammar collection".into()),
-    }
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-fn source_language_spec_image_macro_info(book: &core::Value) -> Result<core::Value, String> {
-    let grammar = source_language_spec_image_field(book, "grammar")?;
-    let tag = source_language_spec_image_field(&grammar, "tag")?;
-    let reserved = source_language_spec_image_field(&grammar, "reserved")?;
-    let highlights = source_language_spec_image_field(&grammar, "highlight")?;
-    let reserved_entries = core::map_entries(&reserved)
-        .ok_or_else(|| "grammar :reserved must be a persistent map".to_owned())?;
-
-    let mut definitions = reserved_entries
-        .iter()
-        .filter_map(|(candidate, operation)| {
-            let core::Value::Symbol(candidate) = candidate else {
-                return None;
-            };
-            let kind = source_language_spec_image_map_get(
-                operation,
-                &core::Value::Keyword("type".into()),
-            );
-            (kind == Some(core::Value::Keyword("def".into()))).then(|| {
-                core::Value::Symbol(candidate.clone())
-            })
-        })
-        .collect::<Vec<_>>();
-    definitions.sort_by_key(core::Value::display);
-
-    let mut highlights = source_language_spec_image_items(&highlights)?
-        .into_iter()
-        .filter(|value| matches!(value, core::Value::Symbol(_)))
-        .collect::<Vec<_>>();
-    highlights.sort_by_key(core::Value::display);
-
-    let mut highlight_meta = Vec::with_capacity(highlights.len());
-    for highlight in &highlights {
-        let operation = source_language_spec_image_map_get(&reserved, highlight)
-            .unwrap_or(core::Value::Map(crate::lang::data::Map::new()));
-        let metadata = ["arglists", "style/indent"]
-            .into_iter()
-            .filter_map(|field| {
-                source_language_spec_image_map_get(
-                    &operation,
-                    &core::Value::Keyword(field.into()),
-                )
-                .map(|value| (core::Value::Keyword(field.into()), value))
-            })
-            .collect::<Vec<_>>();
-        highlight_meta.push((
-            highlight.clone(),
-            core::Value::Map(crate::lang::data::Map::from_iter(metadata)),
-        ));
-    }
-
-    Ok(core::Value::Map(crate::lang::data::Map::from_iter([
-        (core::Value::Keyword("tag".into()), tag),
-        (
-            core::Value::Keyword("definitions".into()),
-            core::Value::Vector(PVector::from_iter(definitions)),
-        ),
-        (
-            core::Value::Keyword("highlights".into()),
-            core::Value::Vector(PVector::from_iter(highlights)),
-        ),
-        (
-            core::Value::Keyword("highlight-meta".into()),
-            core::Value::Map(crate::lang::data::Map::from_iter(highlight_meta)),
-        ),
-    ])))
-}
-
-#[cfg(all(test, feature = "direct-native", not(target_arch = "wasm32")))]
-mod language_spec_image_tests {
-    use super::{
-        source_language_spec_image_dehydrate_book, source_language_spec_image_hydrate_book,
-        Runtime,
-    };
-    use crate::core::{self, Value};
-    use crate::lang::data::{Keyword, Map};
-
-    #[test]
-    fn basic_book_image_hydrates_a_named_callable_from_its_owner_namespace() {
-        let mut runtime = Runtime::core();
-        runtime
-            .eval_native_value("(defn book-image-callable [value] value)")
-            .unwrap();
-        let callable = runtime
-            .namespace_registry
-            .resolve(&crate::lang::data::Symbol::parse("user/book-image-callable"))
-            .unwrap()
-            .deref_value();
-        let book = Value::Map(Map::from_iter([
-            (Value::Keyword(Keyword::from("version")), Value::Number(1)),
-            (Value::Keyword(Keyword::from("callable")), callable),
-        ]));
-
-        let image = source_language_spec_image_dehydrate_book(&book).unwrap();
-        let image = crate::hta::decode_canonical(&crate::hta::encode(&image).unwrap()).unwrap();
-        let hydrated = source_language_spec_image_hydrate_book(&mut runtime, &image).unwrap();
-        let callable = core::map_entries(&hydrated)
-            .unwrap()
-            .into_iter()
-            .find_map(|(key, value)| {
-                (key == Value::Keyword(Keyword::from("callable"))).then_some(value)
-            })
-            .unwrap();
-
-        assert_eq!(
-            core::invoke_callable(callable, vec![Value::Number(42)]).unwrap(),
-            Value::Number(42)
-        );
-    }
-
-    #[test]
-    fn basic_book_image_rejects_anonymous_callable_state() {
-        let mut runtime = Runtime::core();
-        let anonymous = runtime.eval_native_value("(fn [value] value)").unwrap();
-        let book = Value::Map(Map::from_iter([(
-            Value::Keyword(Keyword::from("version")),
-            anonymous,
-        )]));
-
-        assert!(source_language_spec_image_dehydrate_book(&book)
-            .unwrap_err()
-            .contains("anonymous function"));
-    }
-}
-
-#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 impl Runtime {
     /// Creates a Runtime whose native-substrate telemetry is shared with
     /// another Runtime owner. Namespace registries, providers, and mutable
@@ -2342,7 +1774,7 @@ impl Runtime {
     /// Enables the project-local persistent source-program cache used by
     /// short-lived native runners. The cache contains only validated HBC
     /// artifacts; a cache miss or an unreadable entry always falls back to
-    /// compilation. It never restores namespace Vars, Books, or other Runtime
+    /// compilation. It never restores namespace Vars or other Runtime
     /// state from a previous process.
     pub fn configure_direct_native_source_cache(
         &mut self,
@@ -2352,6 +1784,23 @@ impl Runtime {
         self.set_direct_native_source_cache(SourceBytecodeCache::new(
             root,
             source_index_fingerprint,
+        ));
+    }
+
+    /// Uses per-namespace transitive source closures so an immutable
+    /// Foundation distribution can share its compiled programs with a client
+    /// project while client-owned source continues to write only locally.
+    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+    pub fn configure_direct_native_source_cache_for_catalog(
+        &mut self,
+        root: &std::path::Path,
+        distribution_root: Option<&std::path::Path>,
+        catalog: crate::project::SourceCatalog,
+    ) {
+        self.set_direct_native_source_cache(SourceBytecodeCache::with_catalog(
+            root,
+            distribution_root,
+            catalog,
         ));
     }
 

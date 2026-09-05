@@ -8,6 +8,8 @@ mod browser_wasm_provider;
 mod clock;
 pub mod command;
 pub mod compiled_product;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod component_value;
 pub mod core;
 mod direct_wasm;
 #[cfg(not(target_arch = "wasm32"))]
@@ -36,8 +38,8 @@ pub mod interpreter_observation;
 pub mod journal;
 pub mod json;
 pub mod kernel;
-pub mod lang_harness;
 pub mod lang;
+pub mod lang_harness;
 pub mod live_session;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_cli;
@@ -89,6 +91,8 @@ pub mod hbc_schema_links;
 pub mod jit;
 #[cfg(feature = "bytecode-vm")]
 pub mod vm;
+#[cfg(not(target_arch = "wasm32"))]
+mod wasi_file_provider;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod wasmtime_provider;
 #[cfg(feature = "whole-wasm")]

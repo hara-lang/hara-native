@@ -13,9 +13,7 @@ fn direct_native_conforms_to_the_portable_catch_shape() {
         ":caught"
     );
     let error = runtime
-        .eval_direct_native(
-            "(try (throw (ex :test/failure {})) (catch Throwable error :caught))",
-        )
+        .eval_direct_native("(try (throw (ex :test/failure {})) (catch Throwable error :caught))")
         .expect_err("typed host catch syntax must not compile as Hara");
     assert!(
         error.contains(
@@ -59,15 +57,13 @@ fn direct_native_socket_methods_use_the_declared_native_names() {
         .expect("native builds must expose the direct-native backend");
     assert_eq!(
         runtime
-            .eval_native(
-                concat!(
-                    "(let [server (Socket/listen \"127.0.0.1\" 0 {} (fn [_] nil)) ",
-                    "endpoint (Socket/endpoint server) ",
-                    "stream (Socket/events server {}) ",
-                    "_ (Socket/close server)] ",
-                    "[(= \"127.0.0.1\" (:host endpoint)) (< 0 (:port endpoint)) (< 0 stream)])"
-                ),
-            )
+            .eval_native(concat!(
+                "(let [server (Socket/listen \"127.0.0.1\" 0 {} (fn [_] nil)) ",
+                "endpoint (Socket/endpoint server) ",
+                "stream (Socket/events server {}) ",
+                "_ (Socket/close server)] ",
+                "[(= \"127.0.0.1\" (:host endpoint)) (< 0 (:port endpoint)) (< 0 stream)])"
+            ),)
             .unwrap(),
         "[true true true]"
     );

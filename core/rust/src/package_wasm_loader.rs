@@ -9,6 +9,8 @@
 use std::fs;
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 use crate::extension::{ExtensionManifest, WasmAbi, WasmExtension};
 use crate::package_manifest::{
     PackageArtifactType, PackageManifest, PackageRuntimeRequirements, PackageSelection,
@@ -66,7 +68,10 @@ pub fn load_wasm_import_package(
             variant.artifact.artifact_type.keyword()
         ));
     }
-    if variant.artifact.abi != "core.v1" && variant.artifact.abi != "memory.v1" {
+    if variant.artifact.abi != "component.v1"
+        && variant.artifact.abi != "core.v1"
+        && variant.artifact.abi != "memory.v1"
+    {
         return Err(format!(
             "package/abi-mismatch: direct Wasm loader does not support {}",
             variant.artifact.abi
@@ -89,6 +94,7 @@ pub fn load_wasm_import_package(
         return Err("package/identity-mismatch: extension identity differs from package".into());
     }
     let expected_abi = match variant.artifact.abi.as_str() {
+        "component.v1" => WasmAbi::ComponentV1,
         "core.v1" => WasmAbi::CoreV1,
         "memory.v1" => WasmAbi::MemoryV1,
         _ => unreachable!(),
@@ -102,6 +108,38 @@ pub fn load_wasm_import_package(
         return Err(
             "package/provider-mismatch: direct Wasm artifact requires :provider :wasm".into(),
         );
+    }
+    if expected_abi == WasmAbi::ComponentV1 {
+        let wit = extension_manifest.wit.as_ref().ok_or_else(|| {
+            "package/wit-missing: component.v1 artifact requires WIT metadata".to_owned()
+        })?;
+        let wit_bytes = fs::read(package_root.join(&wit.source)).map_err(|error| {
+            format!(
+                "package/wit-missing: cannot read declared WIT source {}: {error}",
+                wit.source
+            )
+        })?;
+        let digest = format!("{:x}", Sha256::digest(&wit_bytes));
+        if digest != wit.sha256 {
+            return Err(
+                "package/wit-digest-mismatch: declared WIT source differs from manifest".into(),
+            );
+        }
+        for dependency in &wit.dependencies {
+            let bytes = fs::read(package_root.join(&dependency.source)).map_err(|error| {
+                format!(
+                    "package/wit-missing: cannot read declared WIT dependency {}: {error}",
+                    dependency.source
+                )
+            })?;
+            let digest = format!("{:x}", Sha256::digest(&bytes));
+            if digest != dependency.sha256 {
+                return Err(
+                    "package/wit-digest-mismatch: declared WIT dependency differs from manifest"
+                        .into(),
+                );
+            }
+        }
     }
     if !variant.required_capabilities.iter().all(|capability| {
         extension_manifest
@@ -135,6 +173,7 @@ pub fn load_wasm_import_package(
     }
 
     let provider = match expected_abi {
+        WasmAbi::ComponentV1 => WasmtimeExtensionProvider::compile_component(&bytes)?,
         WasmAbi::CoreV1 => WasmtimeExtensionProvider::compile(&bytes)?,
         WasmAbi::MemoryV1 => {
             return Err(

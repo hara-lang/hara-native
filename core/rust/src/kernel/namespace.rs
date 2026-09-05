@@ -466,9 +466,7 @@ impl<V: Clone> NamespaceRegistry<V> {
             }
             return Ok(());
         }
-        self.global_imports
-            .borrow_mut()
-            .insert(local, canonical);
+        self.global_imports.borrow_mut().insert(local, canonical);
         Ok(())
     }
     pub fn global_imports(&self) -> Vec<(Symbol, Symbol)> {

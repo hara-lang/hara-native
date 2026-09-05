@@ -2,7 +2,6 @@
 //! vector before any execution. After validation the machine indexes
 //! without re-checking, and malformed programs never reach a panic.
 
-
 use super::error::ValidationError;
 use super::opcode::Instruction;
 use super::program::{

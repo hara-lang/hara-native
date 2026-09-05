@@ -19,8 +19,6 @@ pub struct SessionKernel {
     native_source_cache: Option<SourceBytecodeCache>,
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     source_foundation_image: Option<Vec<u8>>,
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    source_language_spec_image: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -348,8 +346,6 @@ impl SessionKernel {
             native_source_cache: None,
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
             source_foundation_image: None,
-            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-            source_language_spec_image: None,
         }
     }
 
@@ -392,9 +388,12 @@ impl SessionKernel {
     pub fn configure_native_source_cache(
         &mut self,
         root: &std::path::Path,
-        source_index_fingerprint: [u8; 32],
+        distribution_root: Option<&std::path::Path>,
     ) {
-        let cache = SourceBytecodeCache::new(root, source_index_fingerprint);
+        let cache = self.source_catalog.as_ref().map_or_else(
+            || SourceBytecodeCache::new(root, [0; 32]),
+            |catalog| SourceBytecodeCache::with_catalog(root, distribution_root, catalog.clone()),
+        );
         self.native_source_cache = Some(cache.clone());
         for session in self.session_registry.entries.values_mut() {
             session
@@ -407,7 +406,7 @@ impl SessionKernel {
     /// Installs a static Foundation compiler image into every current session
     /// and carries its immutable HBC programs into future sessions. Each
     /// session executes the image into its own namespace registry and runtime
-    /// state; no Books or Vars are shared between sessions.
+    /// state; no source values or Vars are shared between sessions.
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     pub fn install_source_foundation_image(&mut self, image: &[u8]) -> Result<(), String> {
         for session in self.session_registry.entries.values_mut() {
@@ -416,19 +415,6 @@ impl SessionKernel {
                 .bootstrap_source_foundation_image(image)?;
         }
         self.source_foundation_image = Some(image.to_vec());
-        Ok(())
-    }
-
-    /// Installs materialized immutable language-spec data after Foundation has
-    /// established each session's own registry atom.
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    pub fn install_source_language_spec_image(&mut self, image: &[u8]) -> Result<(), String> {
-        for session in self.session_registry.entries.values_mut() {
-            session
-                .runtime_mut()?
-                .install_source_language_spec_image(image)?;
-        }
-        self.source_language_spec_image = Some(image.to_vec());
         Ok(())
     }
 
@@ -463,10 +449,6 @@ impl SessionKernel {
         #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
         if let Some(image) = &self.source_foundation_image {
             runtime.bootstrap_source_foundation_image(image)?;
-        }
-        #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-        if let Some(image) = &self.source_language_spec_image {
-            runtime.install_source_language_spec_image(image)?;
         }
         for (resource, source) in &self.development_resources.entries {
             runtime.register_resource(resource, source);

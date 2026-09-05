@@ -11,6 +11,9 @@
 #[derive(Clone)]
 pub(crate) struct SourceBytecodeCache {
     directory: std::path::PathBuf,
+    fallback_directories: Vec<std::path::PathBuf>,
+    catalog: Option<crate::project::SourceCatalog>,
+    dependency_fingerprints: Rc<RefCell<HashMap<String, Option<[u8; 32]>>>>,
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -26,10 +29,70 @@ impl SourceBytecodeCache {
             directory: root
                 .join("target/hara/test-bytecode/v2")
                 .join(hex_digest(&source_index_fingerprint)),
+            fallback_directories: Vec::new(),
+            catalog: None,
+            dependency_fingerprints: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
-    fn path_for(&self, namespace: &str, source: &str) -> std::path::PathBuf {
+    /// Creates a portable cache for a source catalog. Entries are keyed by the
+    /// namespace's transitive source closure instead of the whole project, so
+    /// a verified Foundation artifact can be shared by a client project such
+    /// as Gwtrade without making client-owned namespaces immutable.
+    pub(crate) fn with_catalog(
+        root: &std::path::Path,
+        distribution_root: Option<&std::path::Path>,
+        catalog: crate::project::SourceCatalog,
+    ) -> Self {
+        let cache_root = |root: &std::path::Path| {
+            root.join("target/hara/source-bytecode/v3")
+                .join(format!("native-{}", env!("CARGO_PKG_VERSION")))
+        };
+        let distribution_cache_root = |root: &std::path::Path| {
+            root.join("source-bytecode/v3")
+                .join(format!("native-{}", env!("CARGO_PKG_VERSION")))
+        };
+        let fallback_directories = distribution_root
+            .filter(|candidate| candidate != &root)
+            .map(distribution_cache_root)
+            .into_iter()
+            .collect();
+        Self {
+            directory: cache_root(root),
+            fallback_directories,
+            catalog: Some(catalog),
+            dependency_fingerprints: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+
+    fn directory_for(&self, namespace: &str) -> Option<std::path::PathBuf> {
+        let Some(catalog) = &self.catalog else {
+            return Some(self.directory.clone());
+        };
+        let cached_fingerprint = self
+            .dependency_fingerprints
+            .borrow()
+            .get(namespace)
+            .cloned();
+        let fingerprint = if let Some(fingerprint) = cached_fingerprint {
+            fingerprint
+        } else {
+            let fingerprint = catalog
+                .content_fingerprint_dependencies(&[namespace])
+                .ok();
+            self.dependency_fingerprints
+                .borrow_mut()
+                .insert(namespace.into(), fingerprint);
+            fingerprint
+        }?;
+        Some(self.directory.join(hex_digest(&fingerprint)))
+    }
+
+    fn path_for_in(
+        directory: &std::path::Path,
+        namespace: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
         use sha2::{Digest, Sha256};
 
         let mut digest = Sha256::new();
@@ -39,12 +102,15 @@ impl SourceBytecodeCache {
         digest.update(namespace.as_bytes());
         digest.update([0]);
         digest.update(source.as_bytes());
-        self.directory
-            .join(format!("{}.hbc", hex_digest(&digest.finalize())))
+        directory.join(format!("{}.hbc", hex_digest(&digest.finalize())))
     }
 
-    fn namespace_path_for(&self, namespace: &str, source: &str) -> std::path::PathBuf {
-        self.path_for(namespace, source).with_extension("ns")
+    fn namespace_path_for(
+        directory: &std::path::Path,
+        namespace: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
+        Self::path_for_in(directory, namespace, source).with_extension("ns")
     }
 
     fn load(
@@ -52,17 +118,39 @@ impl SourceBytecodeCache {
         namespace: &str,
         source: &str,
     ) -> Option<SourceBytecodeCacheEntry> {
-        let path = self.path_for(namespace, source);
-        let namespace_form = std::fs::read_to_string(self.namespace_path_for(namespace, source)).ok()?;
-        let bytes = std::fs::read(path).ok()?;
-        let program = crate::vm::decode_program(&bytes).ok()?;
-        if program.namespace.as_deref() != Some(namespace) {
-            return None;
+        let directory = self.directory_for(namespace)?;
+        let suffix = directory
+            .file_name()
+            .expect("cache directory has a source-closure fingerprint")
+            .to_owned();
+        let mut directories = Vec::with_capacity(1 + self.fallback_directories.len());
+        directories.push(directory);
+        directories.extend(
+            self.fallback_directories
+                .iter()
+                .map(|root| root.join(&suffix)),
+        );
+        for directory in directories {
+            let path = Self::path_for_in(&directory, namespace, source);
+            let Ok(namespace_form) = std::fs::read_to_string(Self::namespace_path_for(
+                &directory, namespace, source,
+            )) else {
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(program) = crate::vm::decode_program(&bytes) else {
+                continue;
+            };
+            if program.namespace.as_deref() == Some(namespace) {
+                return Some(SourceBytecodeCacheEntry {
+                    namespace_form,
+                    program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program)),
+                });
+            }
         }
-        Some(SourceBytecodeCacheEntry {
-            namespace_form,
-            program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program)),
-        })
+        None
     }
 
     fn store(
@@ -72,15 +160,18 @@ impl SourceBytecodeCache {
         namespace_form: &str,
         program: &crate::vm::Program,
     ) {
-        let path = self.path_for(namespace, source);
-        let namespace_path = self.namespace_path_for(namespace, source);
+        let Some(directory) = self.directory_for(namespace) else {
+            return;
+        };
+        let path = Self::path_for_in(&directory, namespace, source);
+        let namespace_path = Self::namespace_path_for(&directory, namespace, source);
         if path.is_file() && namespace_path.is_file() {
             return;
         }
         let Ok(bytes) = crate::vm::encode_program(program) else {
             return;
         };
-        if std::fs::create_dir_all(&self.directory).is_err() {
+        if std::fs::create_dir_all(&directory).is_err() {
             return;
         }
         let id = std::process::id();
@@ -782,6 +873,7 @@ fn compile_direct_native_source_namespace(
 ))]
 mod source_cache_tests {
     use super::SourceBytecodeCache;
+    use crate::project;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -824,5 +916,32 @@ mod source_cache_tests {
         assert_eq!(loaded.namespace_form, "(ns example.cache)");
         assert!(cache.load(namespace, "(+ 1 3)").is_none());
         assert!(cache.load("example.other", source).is_none());
+    }
+
+    #[test]
+    fn catalog_cache_reads_a_matching_distribution_artifact() {
+        let root = temp_root();
+        let project_root = root.0.join("project");
+        let distribution_root = root.0.join("distribution");
+        let client_root = root.0.join("client");
+        fs::create_dir_all(project_root.join("src/example")).unwrap();
+        fs::write(
+            project_root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/cache :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        let namespace = "example.cache";
+        let source = "(ns example.cache)\n(def answer 42)\n";
+        fs::write(project_root.join("src/example/cache.hal"), source).unwrap();
+        let catalog = project::source_catalog(&project::discover(&project_root).unwrap()).unwrap();
+        let cached_source = "(+ 1 2)";
+        let mut program = crate::vm::compile_source(cached_source).unwrap();
+        program.namespace = Some(namespace.into());
+        let seeded = SourceBytecodeCache::with_catalog(&distribution_root, None, catalog.clone());
+        seeded.store(namespace, cached_source, "(ns example.cache)", &program);
+        let fallback = distribution_root.join("target/hara");
+        let client = SourceBytecodeCache::with_catalog(&client_root, Some(&fallback), catalog);
+
+        assert!(client.load(namespace, cached_source).is_some());
     }
 }

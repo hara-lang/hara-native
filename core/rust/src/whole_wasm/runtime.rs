@@ -508,9 +508,9 @@ fn encode_bridge_result(
             .map(Handle::to_abi)
             .map_err(host_error),
         RESULT_I64 => crate::numeric::to_i64_integer(&value).map_err(|_| {
-                caller.data_mut().error_code = ERROR_INTEGER_OVERFLOW;
-                host_error("integer overflow".into())
-            }),
+            caller.data_mut().error_code = ERROR_INTEGER_OVERFLOW;
+            host_error("integer overflow".into())
+        }),
         RESULT_BOOL => match value {
             Value::Bool(value) => Ok(i64::from(value)),
             _ => Err(host_error(

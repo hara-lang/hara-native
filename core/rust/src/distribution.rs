@@ -1,13 +1,13 @@
-//! Relocatable source-package distributions.
+//! Relocatable native distributions.
 //!
 //! A distribution keeps the generic native host and canonical HAL separate:
-//! the copied host sits in `bin/`, while the verified HARP archive and its
-//! declarative launch contract sit in `lib/` next to it.
+//! the copied host sits in `bin/`, while the verified HARP artifact and its
+//! declarative launch contract sit in `lib/` next to it. Source discovery and
+//! compilation are owned by the caller before this boundary.
 
 use crate::kernel::{parse_forms, Form};
 use crate::package;
 use crate::package_manifest::PackageManifest;
-use crate::project;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -218,7 +218,8 @@ pub fn verify_sealed(path: &Path) -> Result<Option<SealedManifest>, String> {
         let path = temporary_archive_path(archive, index);
         write_temporary_archive(&path, archive_bytes(payload, archive)?)?;
         let checked = (|| {
-            let package = PackageManifest::read_archive(&path).map_err(|error| error.to_string())?;
+            let package =
+                PackageManifest::read_archive(&path).map_err(|error| error.to_string())?;
             verify_embedded_package(archive, &package)
         })();
         let _ = fs::remove_file(&path);
@@ -259,7 +260,8 @@ pub fn install_sealed_at(
         let temporary = temporary_archive_path(archive, index);
         write_temporary_archive(&temporary, archive_bytes(payload, archive)?)?;
         let installed = (|| {
-            let package = PackageManifest::read_archive(&temporary).map_err(|error| error.to_string())?;
+            let package =
+                PackageManifest::read_archive(&temporary).map_err(|error| error.to_string())?;
             verify_embedded_package(archive, &package)?;
             package::install_path_at(&temporary, distribution_root)
         })();
@@ -290,7 +292,11 @@ fn validate_seal_spec(spec: &SealSpec) -> Result<(), String> {
     if spec.archives.is_empty() {
         return Err("sealed executable requires at least one HARP archive".into());
     }
-    let primary = spec.archives.iter().filter(|archive| archive.primary).count();
+    let primary = spec
+        .archives
+        .iter()
+        .filter(|archive| archive.primary)
+        .count();
     if primary != 1 {
         return Err("sealed executable requires exactly one primary HARP archive".into());
     }
@@ -332,18 +338,31 @@ fn sealed_descriptor(entry: &str, archives: &[SealedArchive]) -> Result<Vec<u8>,
         .iter()
         .map(|archive| {
             Ok(Form::Map(vec![
-                (Form::Keyword("identity".into()), Form::String(archive.identity.clone())),
-                (Form::Keyword("version".into()), Form::String(archive.version.clone())),
-                (Form::Keyword("sha256".into()), Form::String(archive.sha256.clone())),
+                (
+                    Form::Keyword("identity".into()),
+                    Form::String(archive.identity.clone()),
+                ),
+                (
+                    Form::Keyword("version".into()),
+                    Form::String(archive.version.clone()),
+                ),
+                (
+                    Form::Keyword("sha256".into()),
+                    Form::String(archive.sha256.clone()),
+                ),
                 (
                     Form::Keyword("offset".into()),
-                    Form::Number(i64::try_from(archive.offset)
-                        .map_err(|_| "sealed executable offset exceeds i64")?),
+                    Form::Number(
+                        i64::try_from(archive.offset)
+                            .map_err(|_| "sealed executable offset exceeds i64")?,
+                    ),
                 ),
                 (
                     Form::Keyword("length".into()),
-                    Form::Number(i64::try_from(archive.length)
-                        .map_err(|_| "sealed executable length exceeds i64")?),
+                    Form::Number(
+                        i64::try_from(archive.length)
+                            .map_err(|_| "sealed executable length exceeds i64")?,
+                    ),
                 ),
                 (Form::Keyword("primary".into()), Form::Bool(archive.primary)),
             ]))
@@ -481,11 +500,15 @@ fn parse_sealed_footer(bytes: &[u8]) -> Result<Option<SealedFooter>, String> {
         return Err("sealed executable footer reserved bytes must be zero".into());
     }
     let payload_start = usize::try_from(u64::from_be_bytes(
-        footer[16..24].try_into().expect("fixed footer payload start"),
+        footer[16..24]
+            .try_into()
+            .expect("fixed footer payload start"),
     ))
     .map_err(|_| "sealed executable payload start exceeds this platform")?;
     let payload_length = usize::try_from(u64::from_be_bytes(
-        footer[24..32].try_into().expect("fixed footer payload length"),
+        footer[24..32]
+            .try_into()
+            .expect("fixed footer payload length"),
     ))
     .map_err(|_| "sealed executable payload length exceeds this platform")?;
     let expected_payload_end = bytes
@@ -648,7 +671,12 @@ fn write_temporary_archive(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| format!("cannot create sealed archive temporary {}: {error}", path.display()))?;
+        .map_err(|error| {
+            format!(
+                "cannot create sealed archive temporary {}: {error}",
+                path.display()
+            )
+        })?;
     let result = file.write_all(bytes).map_err(io_error);
     if result.is_err() {
         let _ = fs::remove_file(path);
@@ -697,10 +725,16 @@ pub struct Manifest {
 }
 
 /// Builds a directory that can be relocated as one unit. The caller supplies
-/// the native executable that is copied as the launcher; the package is built
-/// from the declared project and verified again before this function succeeds.
-pub fn build(project_path: &Path, native_binary: &Path, output: &Path) -> Result<Manifest, String> {
-    build_with_options(project_path, native_binary, output, false)
+/// the already-built HARP archive, launcher metadata, and native executable;
+/// Native only copies and verifies those artifacts.
+pub fn build(
+    archive: &Path,
+    native_binary: &Path,
+    output: &Path,
+    launcher: &str,
+    entry: &str,
+) -> Result<Manifest, String> {
+    build_with_options(archive, native_binary, output, launcher, entry, false)
 }
 
 /// Rebuilds a known, integrity-checked Hara distribution in place.
@@ -709,24 +743,38 @@ pub fn build(project_path: &Path, native_binary: &Path, output: &Path) -> Result
 /// refresh its generated companion launcher without making the output path a
 /// broad deletion capability.
 pub fn build_replace(
-    project_path: &Path,
+    archive: &Path,
     native_binary: &Path,
     output: &Path,
+    launcher: &str,
+    entry: &str,
 ) -> Result<Manifest, String> {
-    build_with_options(project_path, native_binary, output, true)
+    build_with_options(archive, native_binary, output, launcher, entry, true)
 }
 
 fn build_with_options(
-    project_path: &Path,
+    archive_source: &Path,
     native_binary: &Path,
     output: &Path,
+    launcher_name: &str,
+    entry_name: &str,
     replace: bool,
 ) -> Result<Manifest, String> {
-    let project = project::read(project_path)?;
-    let declaration = project.distribution.as_ref().ok_or_else(|| {
-        "project.edn :project/distribution is required for distribution build".to_owned()
-    })?;
     validate_output(output, replace)?;
+    if !valid_launcher(launcher_name) {
+        return Err(
+            "distribution launcher must contain lowercase letters, digits, or hyphens".into(),
+        );
+    }
+    if !valid_entry(entry_name) {
+        return Err("distribution entry must name namespace/symbol".into());
+    }
+    if !archive_source.is_file() {
+        return Err(format!(
+            "distribution HARP archive is not a regular file: {}",
+            archive_source.display()
+        ));
+    }
     if !native_binary.is_file() {
         return Err(format!(
             "distribution native binary is not a regular file: {}",
@@ -736,7 +784,7 @@ fn build_with_options(
 
     let staging = create_staging_output(output)?;
     let archive = staging.join(ARCHIVE_PATH);
-    let launcher = launcher_path(&staging, &declaration.launcher);
+    let launcher = launcher_path(&staging, launcher_name);
     let archive_parent = archive
         .parent()
         .ok_or_else(|| "distribution archive path has no parent".to_owned())?;
@@ -746,13 +794,13 @@ fn build_with_options(
     let build = (|| {
         fs::create_dir_all(archive_parent).map_err(io_error)?;
         fs::create_dir_all(launcher_parent).map_err(io_error)?;
-        package::build_path(&project.root, Some(&archive))?;
+        fs::copy(archive_source, &archive).map_err(io_error)?;
         fs::copy(native_binary, &launcher).map_err(io_error)?;
 
         let package = PackageManifest::read_archive(&archive).map_err(|error| error.to_string())?;
         let manifest = Manifest {
-            launcher: declaration.launcher.clone(),
-            entry: declaration.entry.clone(),
+            launcher: launcher_name.into(),
+            entry: entry_name.into(),
             archive: PathBuf::from(ARCHIVE_PATH),
             archive_sha256: checksum(&archive)?,
             source_identity: package.identity,
@@ -806,13 +854,13 @@ fn verify_distribution_contents(root: &Path, manifest: &Manifest) -> Result<(), 
     let launcher = launcher_path(root, &manifest.launcher);
     check_checksum(&launcher, &manifest.native_sha256, "native launcher")?;
     let archive = root.join(&manifest.archive);
-    check_checksum(&archive, &manifest.archive_sha256, "source archive")?;
+    check_checksum(&archive, &manifest.archive_sha256, "package archive")?;
     let package = PackageManifest::read_archive(&archive).map_err(|error| error.to_string())?;
     if package.identity != manifest.source_identity
         || package.version.to_string() != manifest.source_version
     {
         return Err(format!(
-            "distribution source package mismatch: manifest {} {}, archive {} {}",
+            "distribution package mismatch: manifest {} {}, archive {} {}",
             manifest.source_identity, manifest.source_version, package.identity, package.version
         ));
     }
@@ -952,7 +1000,12 @@ fn create_staging_output(output: &Path) -> Result<PathBuf, String> {
         .unwrap_or_else(|| Path::new("."));
     let name = output
         .file_name()
-        .ok_or_else(|| format!("distribution output must name a directory: {}", output.display()))?
+        .ok_or_else(|| {
+            format!(
+                "distribution output must name a directory: {}",
+                output.display()
+            )
+        })?
         .to_string_lossy();
     fs::create_dir_all(parent).map_err(io_error)?;
     for index in 0..1024 {
@@ -978,8 +1031,12 @@ fn publish_output(staging: &Path, output: &Path, replace: bool) -> Result<(), St
 }
 
 fn has_sealed_footer(path: &Path) -> Result<bool, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("cannot inspect sealed executable {}: {error}", path.display()))?;
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "cannot inspect sealed executable {}: {error}",
+            path.display()
+        )
+    })?;
     if metadata.len() < SEALED_FOOTER_BYTES as u64 {
         return Ok(false);
     }
@@ -988,8 +1045,12 @@ fn has_sealed_footer(path: &Path) -> Result<bool, String> {
     file.seek(SeekFrom::End(-(SEALED_FOOTER_BYTES as i64)))
         .map_err(|error| format!("cannot seek sealed executable {}: {error}", path.display()))?;
     let mut footer = [0_u8; SEALED_FOOTER_BYTES];
-    file.read_exact(&mut footer)
-        .map_err(|error| format!("cannot read sealed executable footer {}: {error}", path.display()))?;
+    file.read_exact(&mut footer).map_err(|error| {
+        format!(
+            "cannot read sealed executable footer {}: {error}",
+            path.display()
+        )
+    })?;
     Ok(footer[..SEALED_MAGIC.len()] == SEALED_MAGIC[..])
 }
 
@@ -1095,7 +1156,7 @@ mod tests {
         build, build_replace, has_sealed_footer, inspect_sealed, install_sealed_at, read, seal,
         verify, verify_sealed, SealArchive, SealSpec, ARCHIVE_PATH, MANIFEST_PATH,
     };
-    use crate::package;
+    use crate::package::{self, ArtifactFile, ArtifactSpec};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1124,6 +1185,35 @@ mod tests {
         .unwrap();
     }
 
+    fn archive_fixture(root: &std::path::Path) -> PathBuf {
+        let archive = root.join("source.harp");
+        package::build_artifact(
+            ArtifactSpec {
+                identity: "hara:demo/app".into(),
+                version: "1.2.3".into(),
+                name: None,
+                files: vec![
+                    ArtifactFile {
+                        path: "project.edn".into(),
+                        bytes: fs::read(root.join("project.edn")).unwrap(),
+                    },
+                    ArtifactFile {
+                        path: "src/demo/cli.hal".into(),
+                        bytes: fs::read(root.join("src/demo/cli.hal")).unwrap(),
+                    },
+                ],
+                resources: [("demo.cli".into(), "src/demo/cli.hal".into())]
+                    .into_iter()
+                    .collect(),
+                bytecode: None,
+                extensions: "{}".into(),
+            },
+            &archive,
+        )
+        .unwrap();
+        archive
+    }
+
     #[test]
     fn builds_and_verifies_a_relocatable_source_distribution() {
         let root = temp("build");
@@ -1131,8 +1221,9 @@ mod tests {
         let native = root.join("native-host");
         fixture(&root);
         fs::write(&native, "native-host").unwrap();
+        let archive = archive_fixture(&root);
 
-        let manifest = build(&root, &native, &output).unwrap();
+        let manifest = build(&archive, &native, &output, "hara", "demo.cli/main").unwrap();
         assert_eq!(manifest.launcher, "hara");
         assert_eq!(manifest.entry, "demo.cli/main");
         assert!(output.join(ARCHIVE_PATH).is_file());
@@ -1155,17 +1246,23 @@ mod tests {
         let native = root.join("native-host");
         fixture(&root);
         fs::write(&native, "native-host").unwrap();
+        let archive = archive_fixture(&root);
 
-        build(&root, &native, &output).unwrap();
-        let rebuilt = build_replace(&root, &native, &output).unwrap();
+        build(&archive, &native, &output, "hara", "demo.cli/main").unwrap();
+        let rebuilt = build_replace(&archive, &native, &output, "hara", "demo.cli/main").unwrap();
         assert_eq!(rebuilt.entry, "demo.cli/main");
 
         fs::create_dir_all(&unrelated).unwrap();
         fs::write(unrelated.join("notes.txt"), "do not remove").unwrap();
-        assert!(build_replace(&root, &native, &unrelated)
-            .unwrap_err()
-            .contains("not a verified Hara distribution"));
-        assert_eq!(fs::read_to_string(unrelated.join("notes.txt")).unwrap(), "do not remove");
+        assert!(
+            build_replace(&archive, &native, &unrelated, "hara", "demo.cli/main")
+                .unwrap_err()
+                .contains("not a verified Hara distribution")
+        );
+        assert_eq!(
+            fs::read_to_string(unrelated.join("notes.txt")).unwrap(),
+            "do not remove"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1176,7 +1273,7 @@ mod tests {
         let output = root.join("demo");
         fixture(&root);
         fs::write(&native, "native-host").unwrap();
-        let archive = package::build_path(&root, None).unwrap();
+        let archive = archive_fixture(&root);
 
         let sealed = seal(&SealSpec {
             host: native.clone(),

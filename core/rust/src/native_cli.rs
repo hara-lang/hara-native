@@ -96,16 +96,11 @@ enum Request {
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     ConfigureNativeSourceCache {
         root: PathBuf,
-        source_index_fingerprint: [u8; 32],
+        distribution_root: Option<PathBuf>,
         reply: mpsc::Sender<Result<(), String>>,
     },
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     InstallSourceFoundationImage {
-        image: Vec<u8>,
-        reply: mpsc::Sender<Result<(), String>>,
-    },
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    InstallSourceLanguageSpecImage {
         image: Vec<u8>,
         reply: mpsc::Sender<Result<(), String>>,
     },
@@ -547,11 +542,11 @@ impl RuntimeBroker {
     pub fn configure_native_source_cache(
         &self,
         root: &Path,
-        source_index_fingerprint: [u8; 32],
+        distribution_root: Option<&Path>,
     ) -> Result<(), String> {
         self.call(|reply| Request::ConfigureNativeSourceCache {
             root: root.to_path_buf(),
-            source_index_fingerprint,
+            distribution_root: distribution_root.map(Path::to_path_buf),
             reply,
         })
     }
@@ -559,14 +554,6 @@ impl RuntimeBroker {
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     pub fn install_source_foundation_image(&self, image: &[u8]) -> Result<(), String> {
         self.call(|reply| Request::InstallSourceFoundationImage {
-            image: image.to_vec(),
-            reply,
-        })
-    }
-
-    #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-    pub fn install_source_language_spec_image(&self, image: &[u8]) -> Result<(), String> {
-        self.call(|reply| Request::InstallSourceLanguageSpecImage {
             image: image.to_vec(),
             reply,
         })
@@ -736,6 +723,8 @@ fn runtime(
             .expect("source Foundation bootstrap must be valid");
     }
     if let Some(root) = root {
+        runtime.add_extension_root(root.clone());
+        runtime.add_extension_root(root.join("extensions"));
         runtime.install_native_file_provider(root.to_string_lossy().as_ref());
     }
     if native_sockets {
@@ -767,6 +756,7 @@ fn run(
     let runtime_root = root.clone();
     let runtime_backend = execution_backend.clone();
     let runtime_catalog = source_catalog;
+    let kernel_catalog = runtime_catalog.clone();
     let runtime_factory: Rc<dyn Fn() -> Runtime> = Rc::new(move || {
         runtime(
             runtime_root.as_ref(),
@@ -780,6 +770,10 @@ fn run(
     });
     let root_runtime = runtime_factory();
     let mut kernel = SessionKernel::with_runtime_factory(root_runtime, runtime_factory);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(catalog) = &kernel_catalog {
+        kernel.register_source_catalog(catalog);
+    }
     kernel.register_sandbox_provider(Rc::new(InProcessSandboxProvider));
     while let Ok(request) = receiver.recv() {
         match request {
@@ -907,19 +901,15 @@ fn run(
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
             Request::ConfigureNativeSourceCache {
                 root,
-                source_index_fingerprint,
+                distribution_root,
                 reply,
             } => {
-                kernel.configure_native_source_cache(&root, source_index_fingerprint);
+                kernel.configure_native_source_cache(&root, distribution_root.as_deref());
                 let _ = reply.send(Ok(()));
             }
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
             Request::InstallSourceFoundationImage { image, reply } => {
                 let _ = reply.send(kernel.install_source_foundation_image(&image));
-            }
-            #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-            Request::InstallSourceLanguageSpecImage { image, reply } => {
-                let _ = reply.send(kernel.install_source_language_spec_image(&image));
             }
             Request::InstallModule {
                 session,
