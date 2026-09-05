@@ -1,6 +1,8 @@
 use super::{
-    import_wit, inspect_direct, project_wit, WasmInterface, WasmValueType, WitImportOptions,
-    WitProjectionOptions, WitRoute,
+    import_wit, inspect_direct, project_wit, validate_component_wit_contract,
+    validate_component_wit_contract_with_dependencies, validate_component_wit_world,
+    ExtensionExport, WasmInterface, WasmValueType, WitImportOptions, WitProjectionOptions,
+    WitRoute,
 };
 
 const START_SENTINEL: &[u8] = b"\0asm\x01\0\0\0\x08\x01\0";
@@ -33,6 +35,114 @@ const MEMORY_INTERFACE: &str = r#"
                      :wasm/type :i64
                      :lift :packed-i64
                      :ownership :caller}}}})"#;
+
+const COMPONENT_WIT: &str = r#"
+package hara:markdown@0.1.0;
+
+world markdown {
+  export render: func(source: string) -> string;
+}
+"#;
+
+const VALUES_WIT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../hara/extensions/values/wit/values.wit"
+));
+const VALUES_ECHO_WIT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../hara/extensions/values-echo/wit/echo.wit"
+));
+
+#[test]
+fn validates_the_component_manifest_world_against_wit() {
+    assert!(validate_component_wit_world(COMPONENT_WIT, "hara:markdown@0.1.0", "markdown").is_ok());
+    assert!(validate_component_wit_world(COMPONENT_WIT, "hara:markdown@0.1.0", "other").is_err());
+    assert!(validate_component_wit_world(COMPONENT_WIT, "hara:other@0.1.0", "markdown").is_err());
+}
+
+#[test]
+fn validates_component_exports_against_the_integrity_pinned_wit_world() {
+    let exports = vec![(
+        "render".into(),
+        ExtensionExport {
+            arguments: vec!["string".into()],
+            returns: "string".into(),
+            asynchronous: false,
+            raw_export: None,
+        },
+    )];
+    assert!(validate_component_wit_contract(
+        COMPONENT_WIT,
+        "hara:markdown@0.1.0",
+        "markdown",
+        &exports,
+    )
+    .is_ok());
+
+    let mut wrong_result = exports.clone();
+    wrong_result[0].1.returns = "bytes".into();
+    assert!(validate_component_wit_contract(
+        COMPONENT_WIT,
+        "hara:markdown@0.1.0",
+        "markdown",
+        &wrong_result,
+    )
+    .unwrap_err()
+    .contains("result WIT type string does not match manifest :bytes"));
+
+    let mut missing_argument = exports;
+    missing_argument[0].1.arguments.clear();
+    assert!(validate_component_wit_contract(
+        COMPONENT_WIT,
+        "hara:markdown@0.1.0",
+        "markdown",
+        &missing_argument,
+    )
+    .unwrap_err()
+    .contains("has 1 WIT arguments but 0 manifest arguments"));
+}
+
+#[test]
+fn value_wire_types_require_the_pinned_standard_hara_values_import() {
+    let exports = vec![(
+        "echo".into(),
+        ExtensionExport {
+            arguments: vec!["value".into()],
+            returns: "value".into(),
+            asynchronous: false,
+            raw_export: Some("hara:values-echo/value-echo@0.1.0#echo".into()),
+        },
+    )];
+    let dependencies = vec![("hara:values@0.1.0".into(), VALUES_WIT.into())];
+    assert!(validate_component_wit_contract_with_dependencies(
+        VALUES_ECHO_WIT,
+        "hara:values-echo@0.1.0",
+        "echo",
+        &exports,
+        &dependencies,
+    )
+    .is_ok());
+
+    let missing_dependency = validate_component_wit_contract(
+        VALUES_ECHO_WIT,
+        "hara:values-echo@0.1.0",
+        "echo",
+        &exports,
+    )
+    .unwrap_err();
+    assert!(missing_dependency.contains("argument WIT type value"));
+
+    let mutated = VALUES_WIT.replace("integer(s64)", "integer(u64)");
+    let error = validate_component_wit_contract_with_dependencies(
+        VALUES_ECHO_WIT,
+        "hara:values-echo@0.1.0",
+        "echo",
+        &exports,
+        &[("hara:values@0.1.0".into(), mutated)],
+    )
+    .unwrap_err();
+    assert!(error.contains("hara-values-contract-mismatch"));
+}
 
 #[test]
 fn parses_scalar_interface_without_evaluation() {

@@ -125,6 +125,21 @@ pub fn load_wasm_import_package(
                 "package/wit-digest-mismatch: declared WIT source differs from manifest".into(),
             );
         }
+        for dependency in &wit.dependencies {
+            let bytes = fs::read(package_root.join(&dependency.source)).map_err(|error| {
+                format!(
+                    "package/wit-missing: cannot read declared WIT dependency {}: {error}",
+                    dependency.source
+                )
+            })?;
+            let digest = format!("{:x}", Sha256::digest(&bytes));
+            if digest != dependency.sha256 {
+                return Err(
+                    "package/wit-digest-mismatch: declared WIT dependency differs from manifest"
+                        .into(),
+                );
+            }
+        }
     }
     if !variant.required_capabilities.iter().all(|capability| {
         extension_manifest

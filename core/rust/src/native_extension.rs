@@ -208,11 +208,30 @@ impl ExtensionPackage {
         }
         let source = String::from_utf8(bytes)
             .map_err(|_| format!("extension/wit-invalid: {} is not UTF-8", wit.source))?;
-        crate::wasm_binding::validate_component_wit_contract(
+        let mut dependencies = Vec::new();
+        for dependency in &wit.dependencies {
+            let path = self.resolve(&dependency.source)?;
+            let bytes = fs::read(&path).map_err(|error| {
+                format!("extension/wit-unavailable: {} ({error})", path.display())
+            })?;
+            let actual_digest = format!("{:x}", Sha256::digest(&bytes));
+            if actual_digest != dependency.sha256 {
+                return Err(format!(
+                    "extension/wit-digest-mismatch: {} differs from the manifest",
+                    dependency.source
+                ));
+            }
+            let dependency_source = String::from_utf8(bytes).map_err(|_| {
+                format!("extension/wit-invalid: {} is not UTF-8", dependency.source)
+            })?;
+            dependencies.push((dependency.package.clone(), dependency_source));
+        }
+        crate::wasm_binding::validate_component_wit_contract_with_dependencies(
             &source,
             &wit.package,
             self.manifest.world.as_deref().unwrap_or_default(),
             &self.manifest.exports,
+            &dependencies,
         )
         .map_err(|error| format!("extension/wit-mismatch: {error}"))
     }
@@ -224,6 +243,11 @@ impl ExtensionPackage {
         }
         if let Some(wit) = &self.manifest.wit {
             paths.push(wit.source.clone());
+            paths.extend(
+                wit.dependencies
+                    .iter()
+                    .map(|dependency| dependency.source.clone()),
+            );
         }
         paths.extend(
             self.manifest
@@ -526,7 +550,8 @@ world markdown {
                 :world "markdown"
                 :wit {{:package "hara:markdown@0.1.0"
                       :source "wit/markdown.wit"
-                      :sha256 "{digest}"}}
+                      :sha256 "{digest}"
+                      :dependencies []}}
                 :imports []
                 :exports {{"render" {{:args [:string] :returns :string}}}}
                 :capabilities []}}"#
@@ -571,7 +596,8 @@ world markdown {
                      :world "markdown"
                      :wit {{:package "hara:markdown@0.1.0"
                            :source "wit/markdown.wit"
-                           :sha256 "{digest}"}}
+                           :sha256 "{digest}"
+                           :dependencies []}}
                      :imports []
                      :exports {{"render" {{:args [:string] :returns :string}}}}
                      :capabilities []}}}}}}"#
@@ -588,5 +614,17 @@ world markdown {
             package.join("project.edn").canonicalize().unwrap()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discovers_and_verifies_the_workspace_component_fixtures() {
+        let extensions =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../hara/extensions");
+        for namespace in ["docs.markdown", "values.echo"] {
+            let package = ExtensionPackage::discover(namespace, &[extensions.clone()])
+                .unwrap()
+                .unwrap_or_else(|| panic!("missing workspace fixture {namespace}"));
+            assert!(package.verify_component_wit().is_ok(), "{namespace}");
+        }
     }
 }

@@ -275,10 +275,10 @@ impl WasmExtensionProvider for WasmtimeExtensionProvider {
             if manifest
                 .imports
                 .iter()
-                .any(|import| !import.starts_with("wasi:"))
+                .any(|import| !import.starts_with("wasi:") && import != "hara:values/values@0.1.0")
             {
                 return Err(
-                    "extension/import-unavailable: Component imports must be declared WASI interfaces"
+                    "extension/import-unavailable: Component imports must be declared WASI interfaces or the hara:values type contract"
                         .into(),
                 );
             }
@@ -423,7 +423,14 @@ impl WasmExtensionProvider for WasmtimeExtensionProvider {
             let values = parameter_types
                 .iter()
                 .zip(arguments)
-                .map(|(ty, value)| component_argument(export, ty, value))
+                .zip(&specification.arguments)
+                .map(|((ty, value), declared_type)| {
+                    if declared_type == "value" {
+                        crate::component_value::lower(ty, value)
+                    } else {
+                        component_argument(export, ty, value)
+                    }
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let mut results = function
                 .results(&session.store)
@@ -1935,6 +1942,9 @@ fn component_function<T>(
     export: &str,
 ) -> Option<wasmtime::component::Func> {
     let mut exports = instance.exports(store);
+    if let Some((interface, function)) = export.split_once('#') {
+        return exports.instance(interface)?.func(function);
+    }
     match export.split_once("::") {
         Some((interface, function)) => exports.instance(interface)?.func(function),
         None => exports.root().func(export),
@@ -2117,6 +2127,7 @@ fn component_result(
 ) -> Result<Value, String> {
     match (declared_type, value) {
         ("void", None) => Ok(Value::Nil),
+        ("value", Some(value)) => crate::component_value::lift(value),
         (_, Some(value)) => lift_component_value(export, value),
         _ => Err(format!(
             "extension/abi-type-unsupported: {export} has no Component result"
@@ -2335,7 +2346,8 @@ mod tests {
        :world "filesystem"
        :wit {:package "hara:filesystem@0.1.0"
              :source "wit/filesystem.wit"
-             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+             :dependencies []}
        :imports ["wasi:filesystem/preopens@0.2.0"]
        :exports {"render" {:args [] :returns :void}}
        :capabilities [:file]}"#;
@@ -2349,7 +2361,8 @@ mod tests {
        :world "markdown"
        :wit {:package "hara:markdown@0.1.0"
              :source "wit/markdown.wit"
-             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+             :dependencies []}
        :imports []
        :exports {"render" {:args [] :returns :void}}
        :capabilities []}"#;

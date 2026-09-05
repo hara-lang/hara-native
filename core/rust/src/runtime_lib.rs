@@ -8,6 +8,8 @@ mod browser_wasm_provider;
 mod clock;
 pub mod command;
 pub mod compiled_product;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod component_value;
 pub mod core;
 mod direct_wasm;
 #[cfg(not(target_arch = "wasm32"))]

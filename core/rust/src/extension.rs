@@ -1,5 +1,6 @@
 //! Strict metadata and host boundary for runtime-generated WASM namespaces.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -28,7 +29,8 @@ const MANIFEST_FIELDS: &[&str] = &[
 const EXPORT_FIELDS: &[&str] = &["args", "returns", "async", "wasm/export", "operation"];
 const HANDLE_FIELDS: &[&str] = &["tag", "release"];
 const TARGET_FIELDS: &[&str] = &["provider", "runtime"];
-const WIT_FIELDS: &[&str] = &["package", "source", "sha256"];
+const WIT_FIELDS: &[&str] = &["package", "source", "sha256", "dependencies"];
+const WIT_DEPENDENCY_FIELDS: &[&str] = &["package", "source", "sha256"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmAbi {
@@ -76,6 +78,17 @@ pub struct ExtensionTarget {
 /// package loader before a component is instantiated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionWit {
+    pub package: String,
+    pub source: String,
+    pub sha256: String,
+    /// Every imported WIT package is source- and digest-pinned alongside the
+    /// extension's primary source. This prevents an otherwise valid Component
+    /// from changing its wire contract through an untracked dependency.
+    pub dependencies: Vec<ExtensionWitDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionWitDependency {
     pub package: String,
     pub source: String,
     pub sha256: String,
@@ -293,11 +306,61 @@ fn parse_wit(form: &Form, origin: &str) -> Result<ExtensionWit, String> {
             "wit sha256 must be 64 lower-case hex digits",
         ));
     }
+    let dependencies = parse_wit_dependencies(required(entries, "dependencies", origin)?, origin)?;
     Ok(ExtensionWit {
         package,
         source,
         sha256,
+        dependencies,
     })
+}
+
+fn parse_wit_dependencies(
+    form: &Form,
+    origin: &str,
+) -> Result<Vec<ExtensionWitDependency>, String> {
+    let mut packages = HashSet::new();
+    let mut sources = HashSet::new();
+    let mut dependencies = Vec::new();
+    for form in vector(form, origin, "wit dependencies")? {
+        let entries = map(form, origin, "wit dependency")?;
+        reject_unknown(entries, WIT_DEPENDENCY_FIELDS, origin, "wit dependency")?;
+        let package = named_string(entries, "package", origin)?;
+        if !valid_wit_package(&package) {
+            return Err(malformed(
+                origin,
+                "wit dependency package must use namespace:name@major.minor.patch",
+            ));
+        }
+        let source = named_string(entries, "source", origin)?;
+        safe_relative(&source, Some(".wit"), origin, "wit dependency source")?;
+        let sha256 = named_string(entries, "sha256", origin)?;
+        if !valid_sha256(&sha256) {
+            return Err(malformed(
+                origin,
+                "wit dependency sha256 must be 64 lower-case hex digits",
+            ));
+        }
+        if !packages.insert(package.clone()) {
+            return Err(malformed(
+                origin,
+                format!("duplicate wit dependency package {package}"),
+            ));
+        }
+        if !sources.insert(source.clone()) {
+            return Err(malformed(
+                origin,
+                format!("duplicate wit dependency source {source}"),
+            ));
+        }
+        dependencies.push(ExtensionWitDependency {
+            package,
+            source,
+            sha256,
+        });
+    }
+    dependencies.sort_by(|left, right| left.package.cmp(&right.package));
+    Ok(dependencies)
 }
 
 fn parse_wit_imports(form: &Form, origin: &str) -> Result<Vec<String>, String> {
@@ -351,11 +414,29 @@ pub trait WasmExtensionProvider {
 struct ExtensionSession {
     manifest: ExtensionManifest,
     provider: Rc<dyn WasmExtensionProvider>,
+    closed: Cell<bool>,
+}
+
+impl ExtensionSession {
+    fn shutdown(&self) {
+        if !self.closed.replace(true) {
+            self.provider.shutdown(&self.manifest);
+        }
+    }
+
+    fn ensure_open(&self) -> Result<(), String> {
+        (!self.closed.get()).then_some(()).ok_or_else(|| {
+            format!(
+                "extension/closed: {} has been shut down",
+                self.manifest.namespace
+            )
+        })
+    }
 }
 
 impl Drop for ExtensionSession {
     fn drop(&mut self) {
-        self.provider.shutdown(&self.manifest);
+        self.shutdown();
     }
 }
 
@@ -369,6 +450,7 @@ pub struct ExtensionBinding {
 
 impl ExtensionBinding {
     pub fn invoke(&self, arguments: &[Value]) -> Result<Value, String> {
+        self.session.ensure_open()?;
         if arguments.len() != self.specification.arguments.len() {
             return Err(format!(
                 "extension/arity: {}/{} expects {} arguments, got {}",
@@ -392,6 +474,7 @@ impl ExtensionBinding {
     }
 
     pub fn release(&self, handle: &Value) -> Result<(), String> {
+        self.session.ensure_open()?;
         self.session
             .provider
             .release(&self.session.manifest, handle)
@@ -452,6 +535,7 @@ impl WasmExtension {
             self.session = Some(Rc::new(ExtensionSession {
                 manifest: self.manifest.clone(),
                 provider: self.provider.clone(),
+                closed: Cell::new(false),
             }));
         }
         let session = self.session.as_ref().expect("session started").clone();
@@ -475,10 +559,20 @@ impl WasmExtension {
                 self.manifest.namespace
             )
         })?;
+        session.ensure_open()?;
         session
             .provider
             .cancel(&session.manifest, request)
             .map_err(|error| format!("extension/cancel: {error}"))
+    }
+
+    /// Idempotently tears down the active provider session. Existing bindings
+    /// become unusable immediately, so a caller can restore a known baseline
+    /// even if it still holds a namespace function from an earlier require.
+    pub fn shutdown(&mut self) {
+        if let Some(session) = self.session.take() {
+            session.shutdown();
+        }
     }
 }
 
@@ -893,7 +987,44 @@ fn malformed(origin: &str, message: impl AsRef<str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExtensionManifest, WasmAbi};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::{ExtensionManifest, Value, WasmAbi, WasmExtension, WasmExtensionProvider};
+
+    #[derive(Clone)]
+    struct LifecycleProvider {
+        starts: Rc<Cell<usize>>,
+        shutdowns: Rc<Cell<usize>>,
+    }
+
+    impl WasmExtensionProvider for LifecycleProvider {
+        fn supports(&self, _abi: WasmAbi) -> bool {
+            true
+        }
+
+        fn start(&self, _manifest: &ExtensionManifest) -> Result<(), String> {
+            self.starts.set(self.starts.get() + 1);
+            Ok(())
+        }
+
+        fn invoke(
+            &self,
+            _manifest: &ExtensionManifest,
+            _export: &str,
+            _arguments: &[Value],
+        ) -> Result<Value, String> {
+            Ok(Value::Nil)
+        }
+
+        fn cancel(&self, _manifest: &ExtensionManifest, _request: u64) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn shutdown(&self, _manifest: &ExtensionManifest) {
+            self.shutdowns.set(self.shutdowns.get() + 1);
+        }
+    }
 
     const MANIFEST: &str = r#"
       {:namespace "crypto.hash"
@@ -939,7 +1070,8 @@ mod tests {
        :world "markdown"
        :wit {:package "hara:markdown@0.1.0"
              :source "wit/markdown.wit"
-             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+             :dependencies []}
        :imports ["wasi:filesystem/types@0.2.0" "wasi:io/streams@0.2.0"]
        :exports {"render" {:args [:string] :returns :string}}
        :capabilities [:file]}"#;
@@ -971,6 +1103,33 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_is_idempotent_and_invalidates_retained_extension_bindings() {
+        let manifest = ExtensionManifest::parse(ALIASED_MANIFEST, "fixture").unwrap();
+        let starts = Rc::new(Cell::new(0));
+        let shutdowns = Rc::new(Cell::new(0));
+        let provider = LifecycleProvider {
+            starts: starts.clone(),
+            shutdowns: shutdowns.clone(),
+        };
+        let mut extension = WasmExtension::new(manifest, provider).unwrap();
+        let binding = extension.require().unwrap().pop().unwrap();
+        assert_eq!(starts.get(), 1);
+
+        extension.shutdown();
+        extension.shutdown();
+        assert_eq!(shutdowns.get(), 1);
+        assert!(binding
+            .invoke(&[])
+            .unwrap_err()
+            .contains("extension/closed"));
+
+        extension.require().unwrap();
+        assert_eq!(starts.get(), 2);
+        extension.shutdown();
+        assert_eq!(shutdowns.get(), 2);
+    }
+
+    #[test]
     fn parses_an_integrity_pinned_component_world() {
         let manifest = ExtensionManifest::parse(COMPONENT_MANIFEST, "fixture").unwrap();
         assert_eq!(manifest.abi, WasmAbi::ComponentV1);
@@ -979,6 +1138,10 @@ mod tests {
             manifest.wit.as_ref().map(|wit| wit.package.as_str()),
             Some("hara:markdown@0.1.0")
         );
+        assert!(manifest
+            .wit
+            .as_ref()
+            .is_some_and(|wit| wit.dependencies.is_empty()));
         assert_eq!(
             manifest.imports,
             ["wasi:filesystem/types@0.2.0", "wasi:io/streams@0.2.0"]
@@ -994,6 +1157,7 @@ mod tests {
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 "not-a-digest",
             ),
+            COMPONENT_MANIFEST.replace(":dependencies []", ""),
             COMPONENT_MANIFEST.replace(
                 "\"wasi:io/streams@0.2.0\"",
                 "\"wasi:filesystem/types@0.2.0\"",
