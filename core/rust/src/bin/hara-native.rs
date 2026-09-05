@@ -1346,6 +1346,16 @@ fn run_project_tests(
                 })
                 .collect::<Result<BTreeMap<_, _>, String>>()?;
             let mut runtime = Runtime::core();
+            runtime.add_extension_root(project.root.clone());
+            let project_extension_roots = project
+                .extension_paths
+                .iter()
+                .map(|extension_path| project.root.join(extension_path))
+                .collect::<Vec<_>>();
+            for extension_path in &project.extension_paths {
+                runtime.add_extension_root(project.root.join(extension_path));
+            }
+            runtime.load_project_extensions(&project_extension_roots)?;
             runtime.install_native_file_provider(project.root.to_string_lossy().as_ref());
             runtime.install_native_socket_provider();
             runtime.install_native_process_provider();

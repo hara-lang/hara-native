@@ -1,10 +1,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use wasmtime::component::{
+    Component, Instance as ComponentInstance, Linker as ComponentLinker, Type as ComponentType,
+    Val as ComponentVal,
+};
 use wasmtime::{
     Caller, Config, Engine, Extern, Func, Instance, Linker, Memory, Module, Store, StoreLimits,
     StoreLimitsBuilder, Val, ValType,
@@ -12,12 +16,39 @@ use wasmtime::{
 
 use crate::core::{Promise, PromiseState, Value};
 use crate::extension::{ExtensionExport, ExtensionManifest, WasmAbi, WasmExtensionProvider};
+use crate::file::FileProvider;
 use crate::hta;
+use crate::wasi_file_provider::WasiFileProviderProjection;
 use crate::wasm_binding::{MemoryBindingPlan, WasmtimeMemoryExecutor};
+use wasmtime_wasi::preview2::{
+    DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiView,
+};
 
 struct Session {
     store: Store<StoreLimits>,
     instance: Instance,
+}
+
+struct ComponentSession {
+    store: Store<ComponentStore>,
+    instance: ComponentInstance,
+    filesystem: Option<WasiFileProviderProjection>,
+}
+
+struct ComponentStore {
+    limits: StoreLimits,
+    table: ResourceTable,
+    ctx: WasiCtx,
+}
+
+impl WasiView for ComponentStore {
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
+
+    fn ctx(&mut self) -> &mut WasiCtx {
+        &mut self.ctx
+    }
 }
 
 /// Process-shareable compiled code. Hosts can store one of these per artifact
@@ -74,6 +105,12 @@ enum ProviderMode {
         module: Module,
         session: RefCell<Option<Session>>,
     },
+    Component {
+        engine: Engine,
+        component: Component,
+        file_provider: Option<Rc<dyn FileProvider>>,
+        session: RefCell<Option<ComponentSession>>,
+    },
     Memory(WasmtimeMemoryExecutor),
     Hta(Rc<HtaProviderState>),
 }
@@ -86,6 +123,37 @@ impl WasmtimeExtensionProvider {
     pub fn compile_memory(bytes: &[u8], plan: MemoryBindingPlan) -> Result<Self, String> {
         Ok(Self {
             mode: ProviderMode::Memory(WasmtimeMemoryExecutor::compile(bytes, plan)?),
+        })
+    }
+
+    /// Compiles a standard Component Model artifact. Components are invoked
+    /// through their declared interface types; no raw Core Wasm function ABI
+    /// is exposed from this provider.
+    pub fn compile_component(bytes: &[u8]) -> Result<Self, String> {
+        Self::compile_component_with_file_provider(bytes, None)
+    }
+
+    /// Compiles a Component and binds an existing Hara file capability when
+    /// the eventual manifest imports WASI filesystem interfaces. The provider
+    /// is projected into a private preopened directory only at session start.
+    pub fn compile_component_with_file_provider(
+        bytes: &[u8],
+        file_provider: Option<Rc<dyn FileProvider>>,
+    ) -> Result<Self, String> {
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        config.wasm_component_model(true);
+        let engine = Engine::new(&config)
+            .map_err(|error| format!("extension/engine-unavailable: {error}"))?;
+        let component = Component::new(&engine, bytes)
+            .map_err(|error| format!("extension/component-invalid: {error}"))?;
+        Ok(Self {
+            mode: ProviderMode::Component {
+                engine,
+                component,
+                file_provider,
+                session: RefCell::new(None),
+            },
         })
     }
 
@@ -146,23 +214,30 @@ impl WasmExtensionProvider for WasmtimeExtensionProvider {
         matches!(
             (&self.mode, abi),
             (ProviderMode::Direct { .. }, WasmAbi::CoreV1)
+                | (ProviderMode::Component { .. }, WasmAbi::ComponentV1)
                 | (ProviderMode::Memory(_), WasmAbi::MemoryV1)
                 | (ProviderMode::Hta(_), WasmAbi::HtaV1)
         )
     }
 
     fn capabilities(&self) -> Vec<String> {
-        if matches!(&self.mode, ProviderMode::Hta(_)) {
-            return hta_capabilities();
+        match &self.mode {
+            ProviderMode::Hta(_) => hta_capabilities(),
+            ProviderMode::Component {
+                file_provider: Some(_),
+                ..
+            } => vec!["file".into()],
+            _ => Vec::new(),
         }
-        Vec::new()
     }
 
     fn start(&self, manifest: &ExtensionManifest) -> Result<(), String> {
         if let ProviderMode::Hta(state) = &self.mode {
             return state.start(manifest);
         }
-        if !manifest.capabilities.is_empty() || !manifest.host_call_capabilities.is_empty() {
+        if !matches!(&self.mode, ProviderMode::Component { .. })
+            && (!manifest.capabilities.is_empty() || !manifest.host_call_capabilities.is_empty())
+        {
             return Err(format!(
                 "extension/capability-denied: {:?} for {}",
                 manifest.capabilities, manifest.namespace
@@ -185,6 +260,102 @@ impl WasmExtensionProvider for WasmtimeExtensionProvider {
                     manifest.namespace
                 ));
             }
+            return Ok(());
+        }
+        if let ProviderMode::Component {
+            engine,
+            component,
+            file_provider,
+            session,
+        } = &self.mode
+        {
+            if manifest.abi != WasmAbi::ComponentV1 || manifest.wit.is_none() {
+                return Err("extension/manifest-mismatch: Component provider requires :component.v1 WIT metadata".into());
+            }
+            if manifest
+                .imports
+                .iter()
+                .any(|import| !import.starts_with("wasi:"))
+            {
+                return Err(
+                    "extension/import-unavailable: Component imports must be declared WASI interfaces"
+                        .into(),
+                );
+            }
+            let mut linker = ComponentLinker::<ComponentStore>::new(engine);
+            wasmtime_wasi::preview2::command::sync::add_to_linker(&mut linker)
+                .map_err(|error| format!("extension/wasi-linker-unavailable: {error}"))?;
+            let component_type = linker
+                .substituted_component_type(component)
+                .map_err(|error| format!("extension/component-import-invalid: {error}"))?;
+            validate_component_imports(
+                manifest,
+                component_type
+                    .imports()
+                    .map(|(import, _)| import.to_owned()),
+            )?;
+            let limits = StoreLimitsBuilder::new()
+                .memory_size(64 * 1024 * 1024)
+                .instances(1)
+                .memories(1)
+                .tables(1)
+                .build();
+            let requires_filesystem = manifest
+                .imports
+                .iter()
+                .any(|import| import.starts_with("wasi:filesystem/"));
+            let mut filesystem = match (requires_filesystem, file_provider) {
+                (true, Some(provider)) => Some(WasiFileProviderProjection::stage(provider.clone())?),
+                (true, None) => {
+                    return Err(
+                        "extension/file-provider-unavailable: Component imports WASI filesystem but the Hara Runtime has no FileProvider"
+                            .into(),
+                    )
+                }
+                (false, _) => None,
+            };
+            let mut wasi = WasiCtxBuilder::new();
+            if let Some(projection) = &filesystem {
+                wasi.preopened_dir(
+                    projection.preopened_dir()?,
+                    DirPerms::READ | DirPerms::MUTATE,
+                    FilePerms::READ | FilePerms::WRITE,
+                    "/",
+                );
+            }
+            let state = ComponentStore {
+                limits,
+                table: ResourceTable::new(),
+                ctx: wasi.build(),
+            };
+            let mut store = Store::new(engine, state);
+            store.limiter(|state| &mut state.limits);
+            let instance = linker
+                .instantiate(&mut store, component)
+                .map_err(|error| format!("extension/component-invalid: {error}"))?;
+            for (name, specification) in &manifest.exports {
+                let raw_name = specification.raw_name(name);
+                let function = component_function(&instance, &mut store, raw_name).ok_or_else(|| {
+                    format!(
+                        "extension/malformed: component has no export {raw_name} for public name {name}"
+                    )
+                })?;
+                if function.params(&store).len() != specification.arguments.len()
+                    || function.results(&store).len() > 1
+                {
+                    return Err(format!(
+                        "extension/manifest-mismatch: Component signature for {name} differs from its generated binding"
+                    ));
+                }
+            }
+            if let Some(projection) = &mut filesystem {
+                projection.sync()?;
+            }
+            *session.borrow_mut() = Some(ComponentSession {
+                store,
+                instance,
+                filesystem,
+            });
             return Ok(());
         }
         let ProviderMode::Direct {
@@ -233,6 +404,57 @@ impl WasmExtensionProvider for WasmtimeExtensionProvider {
         }
         if let ProviderMode::Hta(state) = &self.mode {
             return state.invoke(manifest, export, arguments);
+        }
+        if let ProviderMode::Component { session, .. } = &self.mode {
+            let specification = manifest
+                .exports
+                .iter()
+                .find(|(name, _)| name == export)
+                .map(|(_, specification)| specification)
+                .ok_or_else(|| format!("extension/export-missing: {export}"))?;
+            let raw_name = specification.raw_name(export);
+            let mut session = session.borrow_mut();
+            let session = session
+                .as_mut()
+                .ok_or_else(|| format!("extension/not-started: {}", manifest.namespace))?;
+            let function = component_function(&session.instance, &mut session.store, raw_name)
+                .ok_or_else(|| format!("extension/export-missing: {export} -> {raw_name}"))?;
+            let parameter_types = function.params(&session.store);
+            let values = parameter_types
+                .iter()
+                .zip(arguments)
+                .map(|(ty, value)| component_argument(export, ty, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut results = function
+                .results(&session.store)
+                .iter()
+                .cloned()
+                .map(component_default_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            session
+                .store
+                .set_fuel(10_000_000)
+                .map_err(|error| format!("extension/execution-limit: {error}"))?;
+            function
+                .call(&mut session.store, &values, &mut results)
+                .map_err(|error| {
+                    format!(
+                        "extension/invoke-failed: {}/{} ({error})",
+                        manifest.namespace, export
+                    )
+                })?;
+            let result = component_result(
+                export,
+                results.into_iter().next(),
+                specification.returns.as_str(),
+            );
+            function
+                .post_return(&mut session.store)
+                .map_err(|error| format!("extension/post-return-failed: {export} ({error})"))?;
+            if let Some(filesystem) = &mut session.filesystem {
+                filesystem.sync()?;
+            }
+            return result;
         }
         let ProviderMode::Direct { session, .. } = &self.mode else {
             unreachable!()
@@ -298,6 +520,15 @@ impl WasmExtensionProvider for WasmtimeExtensionProvider {
                 session.borrow_mut().take();
             }
             ProviderMode::Hta(state) => state.shutdown(manifest),
+            ProviderMode::Component { session, .. } => {
+                let mut session = session.borrow_mut();
+                if let Some(session) = session.as_mut() {
+                    if let Some(filesystem) = &mut session.filesystem {
+                        let _ = filesystem.sync();
+                    }
+                }
+                session.take();
+            }
             ProviderMode::Memory(_) => {}
         }
     }
@@ -1698,6 +1929,322 @@ fn host_failure(code: &str, message: &str) -> Value {
     )
 }
 
+fn component_function<T>(
+    instance: &ComponentInstance,
+    store: &mut Store<T>,
+    export: &str,
+) -> Option<wasmtime::component::Func> {
+    let mut exports = instance.exports(store);
+    match export.split_once("::") {
+        Some((interface, function)) => exports.instance(interface)?.func(function),
+        None => exports.root().func(export),
+    }
+}
+
+/// Refuses a capability declaration that differs from the imports recorded in
+/// the Component itself. The Component binary is authoritative: the manifest
+/// cannot manufacture a capability, and an undeclared import cannot receive a
+/// linker service merely because another WASI interface is available.
+fn validate_component_imports(
+    manifest: &ExtensionManifest,
+    actual_imports: impl IntoIterator<Item = String>,
+) -> Result<(), String> {
+    let declared = manifest.imports.iter().cloned().collect::<BTreeSet<_>>();
+    let actual = actual_imports.into_iter().collect::<BTreeSet<_>>();
+    if declared == actual {
+        return Ok(());
+    }
+    let missing = actual.difference(&declared).cloned().collect::<Vec<_>>();
+    let unexpected = declared.difference(&actual).cloned().collect::<Vec<_>>();
+    Err(format!(
+        "extension/wit-import-mismatch: component imports {:?}; manifest imports {:?}; undeclared {:?}; absent {:?}",
+        actual, declared, missing, unexpected
+    ))
+}
+
+fn component_type_error(export: &str, ty: &ComponentType) -> String {
+    format!("extension/type-error: {export} cannot lower Hara value to {ty:?}")
+}
+
+/// Lower the ordinary, first-order WIT value space. The `hara:values`
+/// interface owns the complete persistent Hara value mapping; this generic
+/// path intentionally refuses host-owned, mutable, and callable Hara values
+/// instead of silently flattening them to JSON or raw bytes.
+fn component_argument(
+    export: &str,
+    ty: &ComponentType,
+    value: &Value,
+) -> Result<ComponentVal, String> {
+    let type_error = || component_type_error(export, ty);
+    match (ty, value) {
+        (ComponentType::Bool, Value::Bool(value)) => Ok(ComponentVal::Bool(*value)),
+        (ComponentType::S8, Value::Number(value)) => i8::try_from(*value)
+            .map(ComponentVal::S8)
+            .map_err(|_| type_error()),
+        (ComponentType::U8, Value::Number(value)) => u8::try_from(*value)
+            .map(ComponentVal::U8)
+            .map_err(|_| type_error()),
+        (ComponentType::S16, Value::Number(value)) => i16::try_from(*value)
+            .map(ComponentVal::S16)
+            .map_err(|_| type_error()),
+        (ComponentType::U16, Value::Number(value)) => u16::try_from(*value)
+            .map(ComponentVal::U16)
+            .map_err(|_| type_error()),
+        (ComponentType::S32, Value::Number(value)) => i32::try_from(*value)
+            .map(ComponentVal::S32)
+            .map_err(|_| type_error()),
+        (ComponentType::U32, Value::Number(value)) => u32::try_from(*value)
+            .map(ComponentVal::U32)
+            .map_err(|_| type_error()),
+        (ComponentType::S64, Value::Number(value)) => Ok(ComponentVal::S64(*value)),
+        (ComponentType::U64, Value::Number(value)) => u64::try_from(*value)
+            .map(ComponentVal::U64)
+            .map_err(|_| type_error()),
+        (ComponentType::Float32, Value::Float(value)) => {
+            let value = *value as f32;
+            value
+                .is_finite()
+                .then_some(ComponentVal::Float32(value))
+                .ok_or_else(type_error)
+        }
+        (ComponentType::Float32, Value::Number(value)) => {
+            let value = *value as f32;
+            value
+                .is_finite()
+                .then_some(ComponentVal::Float32(value))
+                .ok_or_else(type_error)
+        }
+        (ComponentType::Float64, Value::Float(value)) if value.is_finite() => {
+            Ok(ComponentVal::Float64(*value))
+        }
+        (ComponentType::Float64, Value::Number(value)) => Ok(ComponentVal::Float64(*value as f64)),
+        (ComponentType::Char, Value::Character(value)) => Ok(ComponentVal::Char(*value)),
+        (ComponentType::String, Value::String(value)) => {
+            Ok(ComponentVal::String(value.clone().into()))
+        }
+        (ComponentType::List(list), Value::Bytes(bytes))
+            if matches!(list.ty(), ComponentType::U8) =>
+        {
+            list.new_val(
+                bytes
+                    .iter()
+                    .copied()
+                    .map(ComponentVal::U8)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+            .map_err(|_| type_error())
+        }
+        (ComponentType::List(list), Value::Vector(values)) => list
+            .new_val(
+                values
+                    .iter()
+                    .map(|value| component_argument(export, &list.ty(), value))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            )
+            .map_err(|_| type_error()),
+        (ComponentType::Option(option), Value::Nil) => {
+            option.new_val(None).map_err(|_| type_error())
+        }
+        (ComponentType::Option(option), value) => option
+            .new_val(Some(component_argument(export, &option.ty(), value)?))
+            .map_err(|_| type_error()),
+        _ => Err(type_error()),
+    }
+}
+
+fn component_default_value(ty: ComponentType) -> Result<ComponentVal, String> {
+    let error =
+        format!("extension/abi-type-unsupported: cannot initialize Component result {ty:?}");
+    match ty {
+        ComponentType::Bool => Ok(ComponentVal::Bool(false)),
+        ComponentType::S8 => Ok(ComponentVal::S8(0)),
+        ComponentType::U8 => Ok(ComponentVal::U8(0)),
+        ComponentType::S16 => Ok(ComponentVal::S16(0)),
+        ComponentType::U16 => Ok(ComponentVal::U16(0)),
+        ComponentType::S32 => Ok(ComponentVal::S32(0)),
+        ComponentType::U32 => Ok(ComponentVal::U32(0)),
+        ComponentType::S64 => Ok(ComponentVal::S64(0)),
+        ComponentType::U64 => Ok(ComponentVal::U64(0)),
+        ComponentType::Float32 => Ok(ComponentVal::Float32(0.0)),
+        ComponentType::Float64 => Ok(ComponentVal::Float64(0.0)),
+        ComponentType::Char => Ok(ComponentVal::Char('\0')),
+        ComponentType::String => Ok(ComponentVal::String("".into())),
+        ComponentType::List(list) => list
+            .new_val(Vec::new().into_boxed_slice())
+            .map_err(|_| error.clone()),
+        ComponentType::Option(option) => option.new_val(None).map_err(|_| error.clone()),
+        ComponentType::Result(result) => result
+            .new_val(Ok(result.ok().map(component_default_value).transpose()?))
+            .map_err(|_| error.clone()),
+        ComponentType::Tuple(tuple) => tuple
+            .new_val(
+                tuple
+                    .types()
+                    .map(component_default_value)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            )
+            .map_err(|_| error.clone()),
+        ComponentType::Record(record) => {
+            let fields = record
+                .fields()
+                .map(|field| Ok((field.name, component_default_value(field.ty)?)))
+                .collect::<Result<Vec<_>, String>>()?;
+            record.new_val(fields).map_err(|_| error.clone())
+        }
+        ComponentType::Variant(variant) => {
+            let case = variant.cases().next().ok_or_else(|| error.clone())?;
+            variant
+                .new_val(case.name, case.ty.map(component_default_value).transpose()?)
+                .map_err(|_| error.clone())
+        }
+        ComponentType::Enum(enumeration) => enumeration
+            .names()
+            .next()
+            .ok_or_else(|| error.clone())
+            .and_then(|name| enumeration.new_val(name).map_err(|_| error.clone())),
+        ComponentType::Flags(flags) => flags.new_val(&[]).map_err(|_| error.clone()),
+        ComponentType::Own(_) | ComponentType::Borrow(_) => Err(error),
+    }
+}
+
+fn component_result(
+    export: &str,
+    value: Option<ComponentVal>,
+    declared_type: &str,
+) -> Result<Value, String> {
+    match (declared_type, value) {
+        ("void", None) => Ok(Value::Nil),
+        (_, Some(value)) => lift_component_value(export, value),
+        _ => Err(format!(
+            "extension/abi-type-unsupported: {export} has no Component result"
+        )),
+    }
+}
+
+fn lift_component_value(export: &str, value: ComponentVal) -> Result<Value, String> {
+    let unsupported = || {
+        format!("extension/abi-type-unsupported: {export} returned an unsupported Component value")
+    };
+    match value {
+        ComponentVal::Bool(value) => Ok(Value::Bool(value)),
+        ComponentVal::S8(value) => Ok(Value::Number(i64::from(value))),
+        ComponentVal::U8(value) => Ok(Value::Number(i64::from(value))),
+        ComponentVal::S16(value) => Ok(Value::Number(i64::from(value))),
+        ComponentVal::U16(value) => Ok(Value::Number(i64::from(value))),
+        ComponentVal::S32(value) => Ok(Value::Number(i64::from(value))),
+        ComponentVal::U32(value) => Ok(Value::Number(i64::from(value))),
+        ComponentVal::S64(value) => Ok(Value::Number(value)),
+        ComponentVal::U64(value) => i64::try_from(value)
+            .map(Value::Number)
+            .map_err(|_| unsupported()),
+        ComponentVal::Float32(value) => Ok(Value::Float(value.into())),
+        ComponentVal::Float64(value) => Ok(Value::Float(value)),
+        ComponentVal::Char(value) => Ok(Value::Character(value)),
+        ComponentVal::String(value) => Ok(Value::String(value.into())),
+        ComponentVal::List(values) => {
+            let values = values
+                .iter()
+                .cloned()
+                .map(|value| lift_component_value(export, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            if values
+                .iter()
+                .all(|value| matches!(value, Value::Number(number) if (0..=255).contains(number)))
+                && matches!(values.first(), Some(Value::Number(_)))
+            {
+                Ok(Value::Bytes(
+                    values
+                        .into_iter()
+                        .map(|value| match value {
+                            Value::Number(value) => value as u8,
+                            _ => unreachable!("checked above"),
+                        })
+                        .collect(),
+                ))
+            } else {
+                Ok(Value::Vector(values.into_iter().collect()))
+            }
+        }
+        ComponentVal::Option(value) => value
+            .value()
+            .cloned()
+            .map(|value| lift_component_value(export, value))
+            .transpose()
+            .map(|value| value.unwrap_or(Value::Nil)),
+        ComponentVal::Tuple(values) => Ok(Value::Vector(
+            values
+                .values()
+                .iter()
+                .cloned()
+                .map(|value| lift_component_value(export, value))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect(),
+        )),
+        ComponentVal::Record(values) => Ok(Value::Map(
+            values
+                .fields()
+                .map(|(name, value)| {
+                    Ok((
+                        Value::Keyword(name.into()),
+                        lift_component_value(export, value.clone())?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .collect(),
+        )),
+        ComponentVal::Enum(value) => Ok(Value::Keyword(value.discriminant().into())),
+        ComponentVal::Variant(value) => Ok(Value::Map(
+            [
+                (
+                    Value::Keyword("case".into()),
+                    Value::Keyword(value.discriminant().into()),
+                ),
+                (
+                    Value::Keyword("value".into()),
+                    value
+                        .payload()
+                        .cloned()
+                        .map(|value| lift_component_value(export, value))
+                        .transpose()?
+                        .unwrap_or(Value::Nil),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )),
+        ComponentVal::Result(value) => {
+            let (key, payload) = match value.value() {
+                Ok(value) => ("ok", value),
+                Err(value) => ("err", value),
+            };
+            Ok(Value::Map(
+                [(
+                    Value::Keyword(key.into()),
+                    payload
+                        .cloned()
+                        .map(|value| lift_component_value(export, value))
+                        .transpose()?
+                        .unwrap_or(Value::Nil),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+        }
+        ComponentVal::Flags(value) => Ok(Value::Set(
+            value
+                .flags()
+                .map(|name| Value::Keyword(name.into()))
+                .collect(),
+        )),
+        ComponentVal::Resource(_) => Err(unsupported()),
+    }
+}
+
 fn argument(export: &str, wire_type: &str, value: &Value) -> Result<Val, String> {
     fn finite_f32(value: f64) -> Result<f32, String> {
         let value = value as f32;
@@ -1754,9 +2301,16 @@ fn result(export: &str, wire_type: &str, value: Option<Val>) -> Result<Value, St
 
 #[cfg(test)]
 mod tests {
-    use crate::extension::{ExtensionManifest, Value, WasmExtension};
+    use std::rc::Rc;
 
-    use super::{HtaProviderTrace, WasmtimeExtensionProvider, HTA_PROVIDER_EVENT_SCHEMA};
+    use crate::extension::{ExtensionManifest, Value, WasmExtension};
+    use crate::file::MemoryFileProvider;
+    use wasmtime::component::{Type as ComponentType, Val as ComponentVal};
+
+    use super::{
+        component_argument, lift_component_value, validate_component_imports, HtaProviderTrace,
+        WasmtimeExtensionProvider, HTA_PROVIDER_EVENT_SCHEMA,
+    };
 
     const ADD: &[u8] = b"\0asm\x01\0\0\0\x01\x07\x01\x60\x02\x7e\x7e\x01\x7e\x03\x02\x01\0\x07\x07\x01\x03add\0\0\x0a\x09\x01\x07\0\x20\0\x20\x01\x7c\x0b";
     const ALIASED_MANIFEST: &str = r#"
@@ -1768,6 +2322,36 @@ mod tests {
        :exports {"sum" {:wasm/export "add"
                          :args [:i64 :i64]
                          :returns :i64}}
+       :capabilities []}"#;
+
+    const EMPTY_COMPONENT: &[u8] = b"\0asm\r\0\x01\0";
+
+    const FILE_COMPONENT_MANIFEST: &str = r#"
+      {:namespace "docs.filesystem"
+       :version "0.1.0"
+       :provider :wasm
+       :module "filesystem.component.wasm"
+       :abi :component.v1
+       :world "filesystem"
+       :wit {:package "hara:filesystem@0.1.0"
+             :source "wit/filesystem.wit"
+             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+       :imports ["wasi:filesystem/preopens@0.2.0"]
+       :exports {"render" {:args [] :returns :void}}
+       :capabilities [:file]}"#;
+
+    const EMPTY_COMPONENT_MANIFEST: &str = r#"
+      {:namespace "docs.markdown"
+       :version "0.1.0"
+       :provider :wasm
+       :module "markdown.component.wasm"
+       :abi :component.v1
+       :world "markdown"
+       :wit {:package "hara:markdown@0.1.0"
+             :source "wit/markdown.wit"
+             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+       :imports []
+       :exports {"render" {:args [] :returns :void}}
        :capabilities []}"#;
 
     #[test]
@@ -1802,5 +2386,81 @@ mod tests {
         assert_eq!(events[1].operation.as_deref(), Some("demo/echo"));
         assert_eq!(events[2].event, "shutdown");
         assert_eq!(events[2].sequence, 3);
+    }
+
+    #[test]
+    fn enables_the_wasmtime_component_model_for_component_artifacts() {
+        assert!(WasmtimeExtensionProvider::compile_component(EMPTY_COMPONENT).is_ok());
+    }
+
+    #[test]
+    fn component_values_use_declared_wit_scalars_not_raw_frames() {
+        assert_eq!(
+            component_argument(
+                "render",
+                &ComponentType::String,
+                &Value::String("# title".into())
+            )
+            .unwrap(),
+            ComponentVal::String("# title".into())
+        );
+        assert_eq!(
+            lift_component_value("render", ComponentVal::String("<h1>title</h1>".into())).unwrap(),
+            Value::String("<h1>title</h1>".into())
+        );
+        assert!(component_argument("render", &ComponentType::String, &Value::Number(1)).is_err());
+    }
+
+    #[test]
+    fn refuses_manifest_imports_not_present_in_the_component_before_staging_filesystem() {
+        let provider = MemoryFileProvider::new("/");
+        provider.insert("/input.md", b"# title".to_vec()).unwrap();
+        let manifest = ExtensionManifest::parse(FILE_COMPONENT_MANIFEST, "fixture").unwrap();
+        let provider = WasmtimeExtensionProvider::compile_component_with_file_provider(
+            EMPTY_COMPONENT,
+            Some(Rc::new(provider)),
+        )
+        .unwrap();
+        let mut extension = WasmExtension::new(manifest, provider).unwrap();
+
+        let error = match extension.require() {
+            Ok(_) => panic!("the empty Component cannot claim a filesystem import"),
+            Err(error) => error,
+        };
+        assert!(error.contains("extension/wit-import-mismatch"));
+    }
+
+    #[test]
+    fn refuses_wasi_filesystem_components_without_a_runtime_file_provider() {
+        let manifest = ExtensionManifest::parse(FILE_COMPONENT_MANIFEST, "fixture").unwrap();
+        let provider = WasmtimeExtensionProvider::compile_component(EMPTY_COMPONENT).unwrap();
+        let mut extension = WasmExtension::new(manifest, provider).unwrap();
+
+        let error = match extension.require() {
+            Ok(_) => panic!("a WASI filesystem component must require Hara file capability"),
+            Err(error) => error,
+        };
+        assert!(error.contains("requires capability :file"));
+    }
+
+    #[test]
+    fn component_imports_must_match_the_manifest_exactly() {
+        let manifest = ExtensionManifest::parse(FILE_COMPONENT_MANIFEST, "fixture").unwrap();
+        assert!(validate_component_imports(
+            &manifest,
+            ["wasi:filesystem/preopens@0.2.0".to_owned()],
+        )
+        .is_ok());
+        let error = validate_component_imports(&manifest, std::iter::empty()).unwrap_err();
+        assert!(error.contains("extension/wit-import-mismatch"));
+        assert!(error.contains("wasi:filesystem/preopens@0.2.0"));
+
+        let manifest = ExtensionManifest::parse(EMPTY_COMPONENT_MANIFEST, "fixture").unwrap();
+        assert!(validate_component_imports(&manifest, std::iter::empty()).is_ok());
+        assert!(validate_component_imports(
+            &manifest,
+            ["wasi:filesystem/preopens@0.2.0".to_owned()],
+        )
+        .is_err());
     }
 }

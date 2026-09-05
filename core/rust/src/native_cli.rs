@@ -736,6 +736,8 @@ fn runtime(
             .expect("source Foundation bootstrap must be valid");
     }
     if let Some(root) = root {
+        runtime.add_extension_root(root.clone());
+        runtime.add_extension_root(root.join("extensions"));
         runtime.install_native_file_provider(root.to_string_lossy().as_ref());
     }
     if native_sockets {

@@ -64,6 +64,35 @@ impl ExtensionPackage {
         }
     }
 
+    /// Discovers every extension package beneath the supplied project-local
+    /// roots. A namespace is allowed one package only, just as it is for an
+    /// ordinary `require` lookup.
+    pub fn discover_all(roots: &[PathBuf]) -> Result<Vec<Self>, String> {
+        let mut packages = Vec::new();
+        for root in roots {
+            for project in project_manifests(root)? {
+                packages.extend(packages_from_manifest(&project)?);
+            }
+        }
+        packages.sort_by(|left, right| {
+            left.manifest
+                .namespace
+                .cmp(&right.manifest.namespace)
+                .then_with(|| left.descriptor.cmp(&right.descriptor))
+        });
+        packages.dedup_by(|left, right| left.descriptor == right.descriptor);
+        for pair in packages.windows(2) {
+            if pair[0].manifest.namespace == pair[1].manifest.namespace {
+                return Err(format!(
+                    "extension/ambiguous: multiple projects export {}: {:?}",
+                    pair[0].manifest.namespace,
+                    vec![&pair[0].descriptor, &pair[1].descriptor]
+                ));
+            }
+        }
+        Ok(packages)
+    }
+
     pub fn module_bytes(&self) -> Result<Vec<u8>, String> {
         let module =
             self.manifest.module.as_deref().ok_or_else(|| {
@@ -153,10 +182,48 @@ impl ExtensionPackage {
         Ok(plan)
     }
 
+    pub fn verify_component_wit(&self) -> Result<(), String> {
+        if self.manifest.abi != WasmAbi::ComponentV1 {
+            return Err(format!(
+                "extension/abi-invalid: {} is not a component.v1 package",
+                self.manifest.namespace
+            ));
+        }
+        let wit = self.manifest.wit.as_ref().ok_or_else(|| {
+            format!(
+                "extension/wit-missing: {} declares component.v1 without WIT metadata",
+                self.manifest.namespace
+            )
+        })?;
+        let source = self.resolve(&wit.source)?;
+        let bytes = fs::read(&source).map_err(|error| {
+            format!("extension/wit-unavailable: {} ({error})", source.display())
+        })?;
+        let actual_digest = format!("{:x}", Sha256::digest(&bytes));
+        if actual_digest != wit.sha256 {
+            return Err(format!(
+                "extension/wit-digest-mismatch: {} differs from the manifest",
+                wit.source
+            ));
+        }
+        let source = String::from_utf8(bytes)
+            .map_err(|_| format!("extension/wit-invalid: {} is not UTF-8", wit.source))?;
+        crate::wasm_binding::validate_component_wit_contract(
+            &source,
+            &wit.package,
+            self.manifest.world.as_deref().unwrap_or_default(),
+            &self.manifest.exports,
+        )
+        .map_err(|error| format!("extension/wit-mismatch: {error}"))
+    }
+
     pub fn declared_files(&self) -> Vec<String> {
         let mut paths = Vec::new();
         if let Some(module) = &self.manifest.module {
             paths.push(module.clone());
+        }
+        if let Some(wit) = &self.manifest.wit {
+            paths.push(wit.source.clone());
         }
         paths.extend(
             self.manifest
@@ -422,5 +489,104 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
             .map_err(|error| format!("extension/root-invalid: {error}"))
     } else {
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use sha2::{Digest, Sha256};
+
+    use super::{ExtensionManifest, ExtensionPackage};
+
+    const MARKDOWN_WIT: &str = r#"
+package hara:markdown@0.1.0;
+
+world markdown {
+  export render: func(source: string) -> string;
+}
+"#;
+
+    #[test]
+    fn verifies_a_raw_hex_component_wit_digest_and_callable_contract() {
+        let root = std::env::temp_dir().join(format!("hara-component-wit-{}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+        fs::create_dir_all(root.join("wit")).unwrap();
+        fs::write(root.join("wit/markdown.wit"), MARKDOWN_WIT).unwrap();
+        let digest = format!("{:x}", Sha256::digest(MARKDOWN_WIT.as_bytes()));
+        let source = format!(
+            r#"{{:namespace "docs.markdown"
+                :version "0.1.0"
+                :provider :wasm
+                :module "markdown.component.wasm"
+                :abi :component.v1
+                :world "markdown"
+                :wit {{:package "hara:markdown@0.1.0"
+                      :source "wit/markdown.wit"
+                      :sha256 "{digest}"}}
+                :imports []
+                :exports {{"render" {{:args [:string] :returns :string}}}}
+                :capabilities []}}"#
+        );
+        let package = ExtensionPackage {
+            root: root.clone(),
+            descriptor: root.join("project.edn"),
+            manifest: ExtensionManifest::parse(&source, "fixture").unwrap(),
+            source,
+        };
+
+        assert!(package.verify_component_wit().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discovers_all_component_packages_below_a_project_extension_root() {
+        let root = std::env::temp_dir().join(format!(
+            "hara-component-discover-all-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+        let package = root.join("markdown");
+        fs::create_dir_all(package.join("wit")).unwrap();
+        fs::write(package.join("markdown.component.wasm"), b"fixture").unwrap();
+        fs::write(package.join("wit/markdown.wit"), MARKDOWN_WIT).unwrap();
+        let digest = format!("{:x}", Sha256::digest(MARKDOWN_WIT.as_bytes()));
+        fs::write(
+            package.join("project.edn"),
+            format!(
+                r#"{{:hara/type :project
+                   :hara/version "1.0.0"
+                   :project/id fixture/markdown
+                   :project/version "0.1.0"
+                   :project/extensions
+                   {{docs.markdown
+                    {{:provider :wasm
+                     :module "markdown.component.wasm"
+                     :abi :component.v1
+                     :world "markdown"
+                     :wit {{:package "hara:markdown@0.1.0"
+                           :source "wit/markdown.wit"
+                           :sha256 "{digest}"}}
+                     :imports []
+                     :exports {{"render" {{:args [:string] :returns :string}}}}
+                     :capabilities []}}}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let packages = ExtensionPackage::discover_all(&[root.clone()]).unwrap();
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].manifest.namespace, "docs.markdown");
+        assert_eq!(
+            packages[0].descriptor,
+            package.join("project.edn").canonicalize().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

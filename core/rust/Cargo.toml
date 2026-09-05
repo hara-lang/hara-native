@@ -128,7 +128,9 @@ js-sys = "0.3"
 russh = "0.62.7"
 russh-sftp = "2.4.0"
 tokio = { version = "1.53", features = ["io-util", "net", "rt", "sync", "time"] }
-wasmtime = { version = "18.0.0", default-features = false, features = ["cranelift", "runtime"] }
+wasmtime = { version = "18.0.0", default-features = false, features = ["cranelift", "runtime", "component-model"] }
+wasmtime-wasi = { version = "18.0.4", default-features = false, features = ["preview2"] }
+cap-std = "2.0.0"
 rustyline = "14.0.0"
 home = "=0.5.9"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }

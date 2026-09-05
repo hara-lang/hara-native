@@ -58,6 +58,158 @@ pub use wit::{
     WIT_MANIFEST_SCHEMA,
 };
 
+/// Verifies that a Component manifest names a package and world actually
+/// declared by its integrity-pinned WIT source. This remains a data-only
+/// parse and never acquires host capabilities.
+pub fn validate_component_wit_world(
+    source: &str,
+    package: &str,
+    world: &str,
+) -> Result<(), String> {
+    let document = wit_parser::parse(source)
+        .map_err(|error| format!("wasm-wit/malformed component manifest: {error}"))?;
+    if document.package.as_deref() != Some(package) {
+        return Err("wasm-wit/package-mismatch: manifest package is not declared by WIT".into());
+    }
+    if !document.worlds.contains_key(world) {
+        return Err("wasm-wit/world-missing: manifest world is not declared by WIT".into());
+    }
+    Ok(())
+}
+
+/// Verifies the synchronous callable surface declared by a Component manifest
+/// against the selected standard WIT world.  The manifest may give a Hara
+/// function a friendlier public name, but its raw Component export must be a
+/// direct world function or an `interface::function` export from that world.
+///
+/// This is deliberately data-only: it validates the integrity-pinned WIT
+/// source before the host links imports or instantiates the Component.
+pub fn validate_component_wit_contract(
+    source: &str,
+    package: &str,
+    world: &str,
+    exports: &[(String, ExtensionExport)],
+) -> Result<(), String> {
+    let document = wit_parser::parse(source)
+        .map_err(|error| format!("wasm-wit/malformed component manifest: {error}"))?;
+    if document.package.as_deref() != Some(package) {
+        return Err("wasm-wit/package-mismatch: manifest package is not declared by WIT".into());
+    }
+    let selected = document.worlds.get(world).ok_or_else(|| {
+        "wasm-wit/world-missing: manifest world is not declared by WIT".to_owned()
+    })?;
+    let mut declared = BTreeMap::new();
+    if selected.functions.is_empty() {
+        for interface_name in &selected.exports {
+            let interface = document.interfaces.get(interface_name).ok_or_else(|| {
+                format!(
+                    "wasm-wit/export-mismatch: world {world} exports unknown interface {interface_name}"
+                )
+            })?;
+            for function in &interface.functions {
+                let raw_name = format!("{interface_name}::{}", function.name);
+                if declared.insert(raw_name.clone(), function).is_some() {
+                    return Err(format!(
+                        "wasm-wit/export-mismatch: world {world} has duplicate Component export {raw_name}"
+                    ));
+                }
+            }
+        }
+    } else {
+        for function in &selected.functions {
+            if declared.insert(function.name.clone(), function).is_some() {
+                return Err(format!(
+                    "wasm-wit/export-mismatch: world {world} has duplicate Component export {}",
+                    function.name
+                ));
+            }
+        }
+    }
+    if declared.len() != exports.len() {
+        return Err(format!(
+            "wasm-wit/export-mismatch: WIT world {world} declares {:?}, manifest declares {:?}",
+            declared.keys().collect::<Vec<_>>(),
+            exports
+                .iter()
+                .map(|(name, specification)| specification.raw_name(name))
+                .collect::<Vec<_>>()
+        ));
+    }
+    for (public_name, specification) in exports {
+        let raw_name = specification.raw_name(public_name);
+        let function = declared.get(raw_name).ok_or_else(|| {
+            format!(
+                "wasm-wit/export-mismatch: manifest export {public_name} maps to undeclared WIT export {raw_name}"
+            )
+        })?;
+        if specification.asynchronous || function.async_ {
+            return Err(format!(
+                "wasm-wit/async-unsupported: Component export {raw_name} is asynchronous"
+            ));
+        }
+        if function.arguments.len() != specification.arguments.len() {
+            return Err(format!(
+                "wasm-wit/export-mismatch: {raw_name} has {} WIT arguments but {} manifest arguments",
+                function.arguments.len(),
+                specification.arguments.len()
+            ));
+        }
+        for ((_, wit_type), manifest_type) in
+            function.arguments.iter().zip(&specification.arguments)
+        {
+            if !component_wire_type_matches(manifest_type, wit_type) {
+                return Err(format!(
+                    "wasm-wit/export-mismatch: {raw_name} argument WIT type {} does not match manifest :{}",
+                    wit_parser::type_label(wit_type),
+                    manifest_type
+                ));
+            }
+        }
+        match (function.result.as_ref(), specification.returns.as_str()) {
+            (None, "void") => {}
+            (Some(wit_type), manifest_type)
+                if component_wire_type_matches(manifest_type, wit_type) => {}
+            (None, manifest_type) => {
+                return Err(format!(
+                    "wasm-wit/export-mismatch: {raw_name} has no WIT result but manifest declares :{manifest_type}"
+                ))
+            }
+            (Some(wit_type), "void") => {
+                return Err(format!(
+                    "wasm-wit/export-mismatch: {raw_name} returns WIT type {} but manifest declares :void",
+                    wit_parser::type_label(wit_type)
+                ))
+            }
+            (Some(wit_type), manifest_type) => {
+                return Err(format!(
+                    "wasm-wit/export-mismatch: {raw_name} result WIT type {} does not match manifest :{manifest_type}",
+                    wit_parser::type_label(wit_type)
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn component_wire_type_matches(manifest_type: &str, wit_type: &wit_parser::Type) -> bool {
+    match (manifest_type, wit_type) {
+        ("value", _) => true,
+        ("bool", wit_parser::Type::Atom(value)) => value == "bool",
+        ("i32", wit_parser::Type::Atom(value)) => {
+            matches!(value.as_str(), "s8" | "u8" | "s16" | "u16" | "s32" | "u32")
+        }
+        ("i64", wit_parser::Type::Atom(value)) => value == "s64",
+        ("f32", wit_parser::Type::Atom(value)) => value == "f32",
+        ("f64", wit_parser::Type::Atom(value)) => value == "f64",
+        ("char", wit_parser::Type::Atom(value)) => value == "char",
+        ("string", wit_parser::Type::Atom(value)) => value == "string",
+        ("bytes", wit_parser::Type::List(value)) => {
+            matches!(value.as_ref(), wit_parser::Type::Atom(element) if element == "u8")
+        }
+        _ => false,
+    }
+}
+
 pub const WASM_INTERFACE_SCHEMA: &str = "hara.wasm-interface/0-alpha";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -90,6 +90,8 @@ pub mod jit;
 #[cfg(feature = "bytecode-vm")]
 pub mod vm;
 #[cfg(not(target_arch = "wasm32"))]
+mod wasi_file_provider;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod wasmtime_provider;
 #[cfg(feature = "whole-wasm")]
 pub mod whole_wasm;

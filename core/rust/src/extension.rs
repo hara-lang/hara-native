@@ -14,6 +14,9 @@ const MANIFEST_FIELDS: &[&str] = &[
     "provider",
     "module",
     "abi",
+    "world",
+    "wit",
+    "imports",
     "exports",
     "capabilities",
     "host-calls",
@@ -25,9 +28,16 @@ const MANIFEST_FIELDS: &[&str] = &[
 const EXPORT_FIELDS: &[&str] = &["args", "returns", "async", "wasm/export", "operation"];
 const HANDLE_FIELDS: &[&str] = &["tag", "release"];
 const TARGET_FIELDS: &[&str] = &["provider", "runtime"];
+const WIT_FIELDS: &[&str] = &["package", "source", "sha256"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmAbi {
+    /// Standard WebAssembly Component Model boundary. The component's world
+    /// and WIT source form the public contract; Hara values cross through the
+    /// `hara:values` WIT mapping, never a raw core-Wasm frame.
+    ComponentV1,
+    /// Transitional raw-core transports. These remain loadable only while
+    /// package migration is in progress; new manifests must use ComponentV1.
     CoreV1,
     HtaV1,
     MemoryV1,
@@ -59,6 +69,18 @@ pub struct ExtensionTarget {
     pub runtime: String,
 }
 
+/// Integrity-pinned WIT source for a Component Model extension.
+///
+/// `package` uses the standard `namespace:name@version` spelling, while
+/// `source` is a package-relative `.wit` file whose SHA-256 is checked by the
+/// package loader before a component is instantiated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionWit {
+    pub package: String,
+    pub source: String,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionManifest {
     pub namespace: String,
@@ -68,6 +90,9 @@ pub struct ExtensionManifest {
     pub provider: String,
     pub module: Option<String>,
     pub abi: WasmAbi,
+    pub world: Option<String>,
+    pub wit: Option<ExtensionWit>,
+    pub imports: Vec<String>,
     pub targets: HashMap<String, ExtensionTarget>,
     pub assets: Vec<String>,
     pub exports: Vec<(String, ExtensionExport)>,
@@ -145,6 +170,7 @@ impl ExtensionManifest {
             }
         }
         let abi = match named_keyword(entries, "abi", origin)?.as_str() {
+            "component.v1" => WasmAbi::ComponentV1,
             "core.v1" => WasmAbi::CoreV1,
             "hta.v1" => WasmAbi::HtaV1,
             "memory.v1" => WasmAbi::MemoryV1,
@@ -153,12 +179,53 @@ impl ExtensionManifest {
         if provider == "hta" && abi != WasmAbi::HtaV1 {
             return Err(malformed(origin, "HTA providers require :abi :hta.v1"));
         }
+        let world = optional(entries, "world")
+            .map(|form| string(form, origin, "world").map(str::to_owned))
+            .transpose()?;
+        let wit = optional(entries, "wit")
+            .map(|form| parse_wit(form, origin))
+            .transpose()?;
+        let imports = optional(entries, "imports")
+            .map_or_else(|| Ok(Vec::new()), |form| parse_wit_imports(form, origin))?;
+        if abi == WasmAbi::ComponentV1 {
+            if world
+                .as_deref()
+                .map_or(true, |world| !valid_wit_identifier(world))
+            {
+                return Err(malformed(
+                    origin,
+                    "component.v1 requires :world to be a lower-case WIT identifier",
+                ));
+            }
+            if wit.is_none() {
+                return Err(malformed(
+                    origin,
+                    "component.v1 requires an integrity-pinned :wit declaration",
+                ));
+            }
+        } else if world.is_some() || wit.is_some() || !imports.is_empty() {
+            return Err(malformed(
+                origin,
+                "WIT world, source, and imports require :abi :component.v1",
+            ));
+        }
         let (exports, operations) = parse_exports(required(entries, "exports", origin)?, origin)?;
         let capabilities = keyword_vector(
             required(entries, "capabilities", origin)?,
             origin,
             "capabilities",
         )?;
+        if abi == WasmAbi::ComponentV1
+            && imports.iter().any(|import| {
+                import.starts_with("wasi:filesystem/") || import.starts_with("wasi:io/")
+            })
+            && !capabilities.iter().any(|capability| capability == "file")
+        {
+            return Err(malformed(
+                origin,
+                "WASI filesystem and I/O imports require the :file capability",
+            ));
+        }
         let (host_calls, host_call_capabilities) = optional(entries, "host-calls").map_or_else(
             || Ok((HashMap::new(), HashMap::new())),
             |form| parse_host_calls(form, origin),
@@ -179,6 +246,9 @@ impl ExtensionManifest {
             targets,
             assets,
             abi,
+            world,
+            wit,
+            imports,
             exports,
             operations,
             capabilities,
@@ -202,6 +272,55 @@ impl ExtensionManifest {
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
+}
+
+fn parse_wit(form: &Form, origin: &str) -> Result<ExtensionWit, String> {
+    let entries = map(form, origin, "wit")?;
+    reject_unknown(entries, WIT_FIELDS, origin, "wit")?;
+    let package = named_string(entries, "package", origin)?;
+    if !valid_wit_package(&package) {
+        return Err(malformed(
+            origin,
+            "wit package must use namespace:name@major.minor.patch",
+        ));
+    }
+    let source = named_string(entries, "source", origin)?;
+    safe_relative(&source, Some(".wit"), origin, "wit source")?;
+    let sha256 = named_string(entries, "sha256", origin)?;
+    if !valid_sha256(&sha256) {
+        return Err(malformed(
+            origin,
+            "wit sha256 must be 64 lower-case hex digits",
+        ));
+    }
+    Ok(ExtensionWit {
+        package,
+        source,
+        sha256,
+    })
+}
+
+fn parse_wit_imports(form: &Form, origin: &str) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    vector(form, origin, "imports")?
+        .iter()
+        .map(|form| {
+            let import = string(form, origin, "component import")?.to_owned();
+            if !valid_wit_import(&import) {
+                return Err(malformed(
+                    origin,
+                    "component imports must use namespace:name/interface@major.minor.patch",
+                ));
+            }
+            if !seen.insert(import.clone()) {
+                return Err(malformed(
+                    origin,
+                    format!("duplicate component import {import}"),
+                ));
+            }
+            Ok(import)
+        })
+        .collect()
 }
 
 pub trait WasmExtensionProvider {
@@ -578,7 +697,12 @@ fn parse_callbacks(
     for (name, specification) in map(form, origin, "callbacks")? {
         let name = string(name, origin, "callback name")?.to_owned();
         let entries = map(specification, origin, "callback specification")?;
-        reject_unknown(entries, &["args", "returns", "reentrant"], origin, "callback")?;
+        reject_unknown(
+            entries,
+            &["args", "returns", "reentrant"],
+            origin,
+            "callback",
+        )?;
         let arguments = wire_vector(required(entries, "args", origin)?, origin, "callback args")?;
         let returns = wire_type(
             required(entries, "returns", origin)?,
@@ -608,6 +732,40 @@ fn valid_identity(value: &str) -> bool {
     value
         .split_once("/")
         .is_some_and(|(owner, name)| valid_component(owner) && valid_tag(name))
+}
+
+fn valid_wit_identifier(value: &str) -> bool {
+    valid_component(value)
+}
+
+fn valid_wit_package(value: &str) -> bool {
+    let Some((coordinate, version)) = value.rsplit_once('@') else {
+        return false;
+    };
+    let Some((namespace, name)) = coordinate.split_once(':') else {
+        return false;
+    };
+    if !valid_component(namespace) || !valid_component(name) {
+        return false;
+    }
+    semver::Version::parse(version).is_ok()
+}
+
+fn valid_wit_import(value: &str) -> bool {
+    let Some((coordinate, version)) = value.rsplit_once('@') else {
+        return false;
+    };
+    let Some((package, interface)) = coordinate.rsplit_once('/') else {
+        return false;
+    };
+    valid_wit_package(&format!("{package}@{version}")) && valid_wit_identifier(interface)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn valid_namespace(value: &str) -> bool {
@@ -771,6 +929,21 @@ mod tests {
                           :returns :bytes}}
        :capabilities []}"#;
 
+    const COMPONENT_MANIFEST: &str = r#"
+      {:namespace "docs.markdown"
+       :identity "hara/docs.markdown"
+       :version "0.1.0"
+       :provider :wasm
+       :module "markdown.component.wasm"
+       :abi :component.v1
+       :world "markdown"
+       :wit {:package "hara:markdown@0.1.0"
+             :source "wit/markdown.wit"
+             :sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+       :imports ["wasi:filesystem/types@0.2.0" "wasi:io/streams@0.2.0"]
+       :exports {"render" {:args [:string] :returns :string}}
+       :capabilities [:file]}"#;
+
     #[test]
     fn parses_the_wasm_manifest_contract() {
         let manifest = ExtensionManifest::parse(MANIFEST, "fixture").unwrap();
@@ -795,6 +968,40 @@ mod tests {
         let manifest = ExtensionManifest::parse(ALIASED_MANIFEST, "fixture").unwrap();
         assert_eq!(manifest.exports[0].0, "sum");
         assert_eq!(manifest.exports[0].1.raw_name("sum"), "add_i64");
+    }
+
+    #[test]
+    fn parses_an_integrity_pinned_component_world() {
+        let manifest = ExtensionManifest::parse(COMPONENT_MANIFEST, "fixture").unwrap();
+        assert_eq!(manifest.abi, WasmAbi::ComponentV1);
+        assert_eq!(manifest.world.as_deref(), Some("markdown"));
+        assert_eq!(
+            manifest.wit.as_ref().map(|wit| wit.package.as_str()),
+            Some("hara:markdown@0.1.0")
+        );
+        assert_eq!(
+            manifest.imports,
+            ["wasi:filesystem/types@0.2.0", "wasi:io/streams@0.2.0"]
+        );
+    }
+
+    #[test]
+    fn rejects_component_manifests_without_a_complete_wit_contract() {
+        for source in [
+            COMPONENT_MANIFEST.replace(":world \"markdown\"", ""),
+            COMPONENT_MANIFEST.replace(":wit {:package", ":wit {:unknown true :package"),
+            COMPONENT_MANIFEST.replace(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "not-a-digest",
+            ),
+            COMPONENT_MANIFEST.replace(
+                "\"wasi:io/streams@0.2.0\"",
+                "\"wasi:filesystem/types@0.2.0\"",
+            ),
+            COMPONENT_MANIFEST.replace(":capabilities [:file]", ":capabilities []"),
+        ] {
+            assert!(ExtensionManifest::parse(&source, "fixture").is_err());
+        }
     }
 
     #[test]
@@ -826,7 +1033,10 @@ mod tests {
         let manifest = ExtensionManifest::parse(source, "fixture").unwrap();
         assert_eq!(manifest.targets["browser"].provider, "browser/provider.mjs");
         assert!(ExtensionManifest::parse(
-            &source.replace(":provider \"browser/provider.mjs\"", ":module \"browser/worker.mjs\""),
+            &source.replace(
+                ":provider \"browser/provider.mjs\"",
+                ":module \"browser/worker.mjs\""
+            ),
             "fixture"
         )
         .is_err());
