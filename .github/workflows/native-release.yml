@@ -136,6 +136,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --manifest-path core/rust/Cargo.toml --release --bin hara-native
       - name: Verify the native CLI release identity
@@ -163,6 +165,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -188,6 +192,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -221,6 +227,8 @@ jobs:
       macros_sha256: ${{ steps.publish.outputs.macros_sha256 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: dtolnay/rust-toolchain@stable
       - id: publish
         name: Publish or verify public Cargo packages in dependency order
@@ -317,6 +325,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Package and inspect the root crate against crates.io dependencies
         shell: bash
@@ -349,6 +359,8 @@ jobs:
       native_sha256: ${{ steps.publish.outputs.native_sha256 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: dtolnay/rust-toolchain@stable
       - id: publish
         name: Publish or verify the root Cargo package
@@ -446,6 +458,8 @@ jobs:
       jar_sha256: ${{ steps.publish.outputs.jar_sha256 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: hara-native-jvm
@@ -534,6 +548,8 @@ jobs:
       hta_integrity: ${{ steps.publish.outputs.hta_integrity }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: hara-native-browser
@@ -648,6 +664,8 @@ jobs:
       digest: ${{ steps.record.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: hara-native-linux-x86_64
@@ -767,6 +785,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-ref.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
