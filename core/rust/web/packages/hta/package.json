@@ -1,6 +1,6 @@
 {
   "name": "@hara-lang/hta",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "HTA codecs, browser hosts, and provider transports for Hara",
   "license": "Apache-2.0",
   "type": "module",
