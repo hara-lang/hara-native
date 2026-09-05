@@ -4133,6 +4133,7 @@ fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn native_package_precompile_values(arguments: Vec<Value>) -> Result<Value, String> {
     if arguments.len() != 1 {
         return Err("std.native.Package/precompile expects one descriptor map".into());
@@ -4159,6 +4160,7 @@ fn native_package_precompile_values(arguments: Vec<Value>) -> Result<Value, Stri
     Ok(Value::Bytes(bytes))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn package_precompile_modules(value: &Value) -> Result<Vec<crate::package::PrecompileModule>, String> {
     iterator_values(value.clone())?
         .into_iter()
@@ -4194,6 +4196,12 @@ fn package_precompile_modules(value: &Value) -> Result<Vec<crate::package::Preco
         .collect()
 }
 
+#[cfg(target_arch = "wasm32")]
+fn native_package_precompile_values(_arguments: Vec<Value>) -> Result<Value, String> {
+    Err("package/unsupported: Package/precompile is unavailable on wasm".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn native_package_artifact_spec(value: &Value) -> Result<crate::package::ArtifactSpec, String> {
     let required_string = |key: &str| match map_value(value, &Value::Keyword(key.into())) {
         Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
@@ -4265,6 +4273,7 @@ fn native_package_artifact_spec(value: &Value) -> Result<crate::package::Artifac
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn native_package_artifact_bytecode(value: &Value) -> Result<crate::package::ArtifactBytecode, String> {
     let path = match map_value(value, &Value::Keyword("path".into())) {
         Some(Value::String(value)) if !value.is_empty() => value.clone(),
