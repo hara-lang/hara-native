@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "hara-abi"
-version = "0.1.25"
+version = "0.1.26"
 
 [[package]]
 name = "hara-compiler"
@@ -1335,14 +1335,14 @@ dependencies = [
 
 [[package]]
 name = "hara-hta"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "hara-abi",
 ]
 
 [[package]]
 name = "hara-native"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "cap-std",
  "console_error_panic_hook",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "hara-protocol-macros"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "proc-macro2",
  "quote",
