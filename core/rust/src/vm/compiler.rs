@@ -923,9 +923,7 @@ impl Compiler {
                 if values.len() > MAX_PRIMITIVE_ARGUMENTS {
                     return Err(CompileError::new(
                         CompileErrorKind::Limit,
-                        format!(
-                            "#arr supports at most {MAX_PRIMITIVE_ARGUMENTS} elements"
-                        ),
+                        format!("#arr supports at most {MAX_PRIMITIVE_ARGUMENTS} elements"),
                         Some(span.start),
                     ));
                 }

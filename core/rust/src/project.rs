@@ -676,14 +676,6 @@ pub fn register_native_imports(project: &Project, runtime: &mut Runtime) -> Resu
     }
 }
 
-pub(crate) fn native_archive_entries(project: &Project) -> Result<Vec<PathBuf>, String> {
-    if project.native_imports.is_empty() {
-        Ok(Vec::new())
-    } else {
-        npm::archive_entries(project)
-    }
-}
-
 pub fn main_file(project: &Project) -> Result<PathBuf, String> {
     let namespace = project
         .main

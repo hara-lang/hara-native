@@ -28,7 +28,7 @@ pub(crate) mod declarations {
             "session-create", "session-close", "session-list", "session-info", "session-eval",
             "session-namespace", "session-complete", "resource-register", "resource-remove",
             "resource-list", "filesystem-create", "filesystem-attach", "filesystem-detach",
-            "filesystem-info", "filesystem-close", "capabilities", "package-check", "package-build", "package-inspect",
+            "filesystem-info", "filesystem-close", "capabilities", "package-inspect",
             "package-install", "package-publish", "package-registry-verify", "tap-config-root", "tap-add",
             "tap-bootstrap", "tap-remove", "tap-list", "tap-mirror-add", "tap-initialize", "tap-verify",
             "snapshot-build", "snapshot-verify", "snapshot-inspect", "snapshot-diff"
@@ -53,7 +53,7 @@ pub(crate) mod declarations {
         availability = "capability-gated",
         capability = "kernel",
         methods = [
-            "catalog", "find", "read", "ensure", "load", "unload", "state", "build", "inspect",
+            "catalog", "find", "read", "ensure", "load", "unload", "state", "precompile", "build", "inspect",
             "seal", "inspect-seal", "verify-seal", "distribute"
         ],
         provider = native_package_provider

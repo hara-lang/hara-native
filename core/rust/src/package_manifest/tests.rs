@@ -286,7 +286,10 @@ fn schema_catalog_descriptor_is_bound_to_declared_bytes_and_canonical_admission(
     assert_eq!(admission.format, "std.typed.catalog/2");
     assert_eq!(admission.report, "{}");
     assert!(matches!(
-        manifest.admit_catalog_bytes(br#"{"unexpected":true}"#).unwrap_err().code,
+        manifest
+            .admit_catalog_bytes(br#"{"unexpected":true}"#)
+            .unwrap_err()
+            .code,
         "package/size-mismatch" | "package/digest-mismatch"
     ));
 }

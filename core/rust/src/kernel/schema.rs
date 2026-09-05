@@ -466,7 +466,8 @@ fn normalize_longhand(entries: &[(Form, Form)]) -> Result<SchemaType, String> {
                 Some(Form::Bool(value)) => *value,
                 Some(_) => return Err("struct schema :mutable? must be boolean".into()),
             };
-            let name = longhand_value(entries, "name").or_else(|| children.first())
+            let name = longhand_value(entries, "name")
+                .or_else(|| children.first())
                 .ok_or_else(|| ":struct schema requires a qualified name".to_string())?;
             let field_fallback = if children.is_empty() {
                 &[][..]
@@ -1022,7 +1023,10 @@ mod tests {
             SchemaType::Primitive("long".into()),
             SchemaType::Primitive("bigint".into()),
         ]);
-        assert_eq!(normalize_schema(&parse(":integer").unwrap()).unwrap(), expected);
+        assert_eq!(
+            normalize_schema(&parse(":integer").unwrap()).unwrap(),
+            expected
+        );
         assert_eq!(
             normalize_schema(&parse("[:integer]").unwrap()).unwrap(),
             expected
@@ -1064,7 +1068,10 @@ mod tests {
                 ],
             }
         );
-        assert_eq!(normalize_schema(&schema_shorthand(&schema)).unwrap(), schema);
+        assert_eq!(
+            normalize_schema(&schema_shorthand(&schema)).unwrap(),
+            schema
+        );
     }
 
     #[test]

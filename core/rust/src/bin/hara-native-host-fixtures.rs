@@ -1,6 +1,6 @@
 use hara_native::{
     kernel::{halc, parse_forms},
-    package,
+    package::{build_artifact, ArtifactFile, ArtifactSpec},
     vm::{compile_bytecode_bundle, ModuleSource},
     work::plan::WorkPlan,
 };
@@ -114,7 +114,29 @@ fn build_harp_fixture() -> Result<Vec<u8>, String> {
             .map_err(|error| error.to_string())?;
         fs::write(project.join("project.edn"), HARP_PROJECT).map_err(|error| error.to_string())?;
         fs::write(source, HARP_SOURCE).map_err(|error| error.to_string())?;
-        package::build_path(&project, Some(&archive))?;
+        build_artifact(
+            ArtifactSpec {
+                identity: "hara:fixture/rust-host-fixtures".into(),
+                version: "1.0.0".into(),
+                name: None,
+                files: vec![
+                    ArtifactFile {
+                        path: "project.edn".into(),
+                        bytes: HARP_PROJECT.as_bytes().to_vec(),
+                    },
+                    ArtifactFile {
+                        path: "src/fixture/harp/main.hal".into(),
+                        bytes: HARP_SOURCE.as_bytes().to_vec(),
+                    },
+                ],
+                resources: [("fixture.harp".into(), "src/fixture/harp/main.hal".into())]
+                    .into_iter()
+                    .collect(),
+                bytecode: None,
+                extensions: "{}".into(),
+            },
+            &archive,
+        )?;
         fs::read(archive).map_err(|error| error.to_string())
     })();
     let cleanup = fs::remove_dir_all(&root).map_err(|error| error.to_string());

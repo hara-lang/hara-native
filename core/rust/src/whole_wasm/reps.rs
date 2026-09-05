@@ -226,13 +226,16 @@ fn transfer(
             let start = state.stack.len() - usize::from(*argc);
             let arguments = state.stack.split_off(start);
             let target = target_name(program, *target)?;
-            state.stack.push(if target.ends_with("/lookup")
-                && next_instruction.is_some_and(|next| is_scalar_numeric_consumer(program, next))
-            {
-                Rep::I64
-            } else {
-                target_rep(target, &arguments)
-            });
+            state.stack.push(
+                if target.ends_with("/lookup")
+                    && next_instruction
+                        .is_some_and(|next| is_scalar_numeric_consumer(program, next))
+                {
+                    Rep::I64
+                } else {
+                    target_rep(target, &arguments)
+                },
+            );
         }
         Instruction::CallStatic { argc, prototype } => {
             let start = state.stack.len() - usize::from(*argc);
@@ -331,23 +334,23 @@ fn constant_rep(value: &Value) -> Rep {
 fn target_rep(target: &str, arguments: &[Rep]) -> Rep {
     if let Some(op) = IntrinsicOp::from_symbol(target) {
         return match op {
-        IntrinsicOp::Add
-        | IntrinsicOp::Subtract
-        | IntrinsicOp::Multiply
-        | IntrinsicOp::Divide
-        | IntrinsicOp::Remainder
-        | IntrinsicOp::Modulo => {
-            if arguments.iter().all(|rep| *rep == Rep::I64) {
-                Rep::I64
-            } else {
-                Rep::Unknown
+            IntrinsicOp::Add
+            | IntrinsicOp::Subtract
+            | IntrinsicOp::Multiply
+            | IntrinsicOp::Divide
+            | IntrinsicOp::Remainder
+            | IntrinsicOp::Modulo => {
+                if arguments.iter().all(|rep| *rep == Rep::I64) {
+                    Rep::I64
+                } else {
+                    Rep::Unknown
+                }
             }
-        }
-        IntrinsicOp::Equal
-        | IntrinsicOp::Less
-        | IntrinsicOp::LessOrEqual
-        | IntrinsicOp::Greater
-        | IntrinsicOp::GreaterOrEqual => Rep::Bool,
+            IntrinsicOp::Equal
+            | IntrinsicOp::Less
+            | IntrinsicOp::LessOrEqual
+            | IntrinsicOp::Greater
+            | IntrinsicOp::GreaterOrEqual => Rep::Bool,
         };
     }
     match target {
@@ -393,7 +396,9 @@ fn function_uses_tagged_collections(program: &Program, function: &FunctionProtot
 fn target_name(program: &Program, target: u32) -> Result<&str, String> {
     match program.constants.get(target as usize) {
         Some(Value::String(name)) => Ok(name),
-        _ => Err(format!("intrinsic target constant {target} is not a string")),
+        _ => Err(format!(
+            "intrinsic target constant {target} is not a string"
+        )),
     }
 }
 

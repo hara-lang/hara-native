@@ -384,6 +384,13 @@ pub trait FileProvider {
         logical_resolve(root, path)
     }
 
+    /// Resolves a mounted logical path to a host path for native operations
+    /// that must hand the resource to a host-only subsystem. Providers that
+    /// do not own a host filesystem deliberately leave this unsupported.
+    fn host_path(&self, _path: &str) -> Result<String, FileError> {
+        Err(FileError::Unsupported)
+    }
+
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, FileError>;
     fn write_bytes(
         &self,
@@ -702,6 +709,11 @@ impl NativeFileProvider {
 
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 impl FileProvider for NativeFileProvider {
+    fn host_path(&self, path: &str) -> Result<String, FileError> {
+        self.scoped(path)
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, FileError> {
         let host = self.scoped(path)?;
         let metadata = fs::symlink_metadata(&host).map_err(io_error)?;

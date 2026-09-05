@@ -613,10 +613,7 @@ fn host_calls_form(interface: &WasmInterface) -> Form {
                         ),
                     ));
                 }
-                (
-                    string_form(service),
-                    Form::Map(fields),
-                )
+                (string_form(service), Form::Map(fields))
             })
             .collect(),
     )
@@ -661,10 +658,7 @@ fn callbacks_form(interface: &WasmInterface) -> Result<Form, String> {
                                 .collect::<Result<Vec<_>, _>>()?,
                         ),
                     ),
-                    (
-                        keyword_form("returns"),
-                        manifest_type(&contract.returns)?,
-                    ),
+                    (keyword_form("returns"), manifest_type(&contract.returns)?),
                 ];
                 fields.push((keyword_form("reentrant"), Form::Bool(contract.reentrant)));
                 Ok((string_form(name), Form::Map(fields)))

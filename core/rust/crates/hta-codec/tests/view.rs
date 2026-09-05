@@ -48,13 +48,7 @@ fn vector(values: &[Vec<u8>]) -> Vec<u8> {
 }
 
 fn map_entry(key: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
-    [
-        vec![MAP_ENTRY],
-        2_u32.to_be_bytes().to_vec(),
-        key,
-        value,
-    ]
-    .concat()
+    [vec![MAP_ENTRY], 2_u32.to_be_bytes().to_vec(), key, value].concat()
 }
 
 fn map(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
@@ -220,7 +214,13 @@ fn rejects_noncanonical_big_integer_text() {
     let valid = frame(sized(BIG_INTEGER, b"9223372036854775808"));
     FrameView::parse(&valid).unwrap();
 
-    for text in [b"9223372036854775807".as_slice(), b"009223372036854775808", b"+9223372036854775808", b"-0", b"not-an-integer"] {
+    for text in [
+        b"9223372036854775807".as_slice(),
+        b"009223372036854775808",
+        b"+9223372036854775808",
+        b"-0",
+        b"not-an-integer",
+    ] {
         assert!(FrameView::parse(&frame(sized(BIG_INTEGER, text))).is_err());
     }
 }

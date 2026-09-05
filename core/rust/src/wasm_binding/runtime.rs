@@ -449,9 +449,7 @@ fn scalar_argument(export: &str, expected: &HaraValueType, value: &Value) -> Res
             .map_err(|_| type_error()),
         (HaraValueType::Boolean, Value::Bool(value)) => Ok(Val::I32(i32::from(*value))),
         (HaraValueType::I64, Value::Number(value)) => Ok(Val::I64(*value)),
-        (HaraValueType::F32, Value::Float(value)) => {
-            Ok(Val::F32(finite_f32(*value)?.to_bits()))
-        }
+        (HaraValueType::F32, Value::Float(value)) => Ok(Val::F32(finite_f32(*value)?.to_bits())),
         (HaraValueType::F32, Value::Number(value)) => {
             Ok(Val::F32(finite_f32(*value as f64)?.to_bits()))
         }
@@ -473,14 +471,12 @@ fn scalar_result(
         (HaraValueType::I32, Some(Val::I32(value))) => Ok(Value::Number(i64::from(value))),
         (HaraValueType::Boolean, Some(Val::I32(value))) => Ok(Value::Bool(value != 0)),
         (HaraValueType::I64, Some(Val::I64(value))) => Ok(Value::Number(value)),
-        (HaraValueType::F32, Some(Val::F32(value))) => {
-            Ok(Value::Float(crate::numeric::finite_float(
-                f32::from_bits(value) as f64,
-            )?))
-        }
-        (HaraValueType::F64, Some(Val::F64(value))) => {
-            Ok(Value::Float(crate::numeric::finite_float(f64::from_bits(value))?))
-        }
+        (HaraValueType::F32, Some(Val::F32(value))) => Ok(Value::Float(
+            crate::numeric::finite_float(f32::from_bits(value) as f64)?,
+        )),
+        (HaraValueType::F64, Some(Val::F64(value))) => Ok(Value::Float(
+            crate::numeric::finite_float(f64::from_bits(value))?,
+        )),
         _ => Err(format!(
             "extension/abi-type-unsupported: {export} -> :{}",
             hara_type_name(expected)

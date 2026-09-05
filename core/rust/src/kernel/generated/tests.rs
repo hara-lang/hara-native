@@ -25,7 +25,10 @@ fn config_role_defaults_validates_and_is_retained() {
             &parse_forms(&format!("(:config {{:role :{role}}})")).unwrap(),
         )
         .unwrap();
-        assert_eq!(config.role(), if role == "default" { "standard" } else { role });
+        assert_eq!(
+            config.role(),
+            if role == "default" { "standard" } else { role }
+        );
     }
     assert!(GeneratedNamespaceConfig::configure(
         &parse_forms("(:config {:role \"internal\"})").unwrap()
@@ -169,9 +172,10 @@ fn global_aliases_are_source_declared_not_runtime_defaults() {
     let config = GeneratedNamespaceConfig::defaults();
     assert_eq!(config.global_alias(), None);
 
-    let declared =
-        GeneratedNamespaceConfig::configure(&parse_forms("(:config {:set-global-alias str})").unwrap())
-            .unwrap();
+    let declared = GeneratedNamespaceConfig::configure(
+        &parse_forms("(:config {:set-global-alias str})").unwrap(),
+    )
+    .unwrap();
     assert_eq!(declared.global_alias(), Some("str"));
 
     let rebound = GeneratedNamespaceConfig::configure_with(
@@ -192,7 +196,10 @@ fn set_global_records_qualified_vars_and_rejects_unqualified_vars() {
     .unwrap();
     assert_eq!(
         config.declared_global_imports(),
-        &["demo.global/value".to_owned(), "IColl/start-string".to_owned()]
+        &[
+            "demo.global/value".to_owned(),
+            "IColl/start-string".to_owned()
+        ]
     );
     assert!(GeneratedNamespaceConfig::configure(
         &parse_forms("(:config {:set-global [value]})").unwrap()

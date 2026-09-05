@@ -38,8 +38,8 @@ pub mod interpreter_observation;
 pub mod journal;
 pub mod json;
 pub mod kernel;
-pub mod lang_harness;
 pub mod lang;
+pub mod lang_harness;
 pub mod live_session;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_cli;

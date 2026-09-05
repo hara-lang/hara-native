@@ -12,12 +12,7 @@ pub(crate) fn unit_kind(form: &Form) -> UnitKind {
     match list_head(without_metadata(form)) {
         Some("defmacro") => UnitKind::Macro,
         Some(
-            "defprotocol"
-                | "extend-type"
-                | "defmulti"
-                | "defmethod"
-                | "defstruct"
-                | "defmutable",
+            "defprotocol" | "extend-type" | "defmulti" | "defmethod" | "defstruct" | "defmutable",
         ) => UnitKind::Registration,
         Some("def" | "defn" | "declare") => UnitKind::Definition,
         _ => UnitKind::Initializer,

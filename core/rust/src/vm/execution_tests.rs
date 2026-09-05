@@ -81,11 +81,8 @@ fn eval_native_mutable(body: &str) -> String {
 #[test]
 fn protocol_count_executes_in_bytecode() {
     let registry = crate::embedding_namespace_registry();
-    let program = compile_source_with(
-        "(std.protocol.icount.ICount/count [1 2 3 4])",
-        &registry,
-    )
-    .expect("protocol count compiles against the native registry");
+    let program = compile_source_with("(std.protocol.icount.ICount/count [1 2 3 4])", &registry)
+        .expect("protocol count compiles against the native registry");
     assert_eq!(
         execute_program_with_globals(Rc::new(program), &registry).unwrap(),
         Value::Number(4)
@@ -267,7 +264,10 @@ fn runtime_native_array_and_object_calls_lower_to_vm_primitives() {
         .compile_bytecode(source)
         .expect("native calls must compile");
     let disassembly = crate::vm::disassemble(&program);
-    assert!(disassembly.matches("IntrinsicCall target").count() >= 7, "{disassembly}");
+    assert!(
+        disassembly.matches("IntrinsicCall target").count() >= 7,
+        "{disassembly}"
+    );
     assert!(!disassembly.contains("GetGlobal"), "{disassembly}");
     assert_eq!(
         runtime
@@ -658,7 +658,9 @@ fn mutable_conversion_is_not_constant_folded_across_executions() {
         "10"
     );
     assert_eq!(
-        execute_program_with_globals(program, &registry).unwrap().display(),
+        execute_program_with_globals(program, &registry)
+            .unwrap()
+            .display(),
         "10"
     );
 }
@@ -751,7 +753,9 @@ fn inline_metadata_lowers_forwarding_calls_to_the_declared_target() {
 #[test]
 fn comment_compiles_to_nil_without_compiling_its_contents() {
     assert_eq!(
-        eval("(comment missing-symbol (throw (ex :generic {} :ex/message \"boom\")) (def leaked 1))"),
+        eval(
+            "(comment missing-symbol (throw (ex :generic {} :ex/message \"boom\")) (def leaked 1))"
+        ),
         "nil"
     );
     assert!(compile_source("(do (comment (def leaked 1)) leaked)").is_err());
@@ -993,7 +997,10 @@ fn try_compile_errors() {
     );
     // Malformed catch clauses are compile errors.
     let (_, message) = compile_error("(try 1 (catch 42 0))");
-    assert!(message.contains("catch binding must be symbol"), "{message}");
+    assert!(
+        message.contains("catch binding must be symbol"),
+        "{message}"
+    );
     let (_, message) = compile_error("(try 1 (catch))");
     assert!(
         message.contains("catch expects a binding symbol and one handler form"),

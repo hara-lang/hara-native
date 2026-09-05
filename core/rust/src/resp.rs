@@ -21,6 +21,21 @@ const MAX_BULK: usize = 64 * 1024 * 1024;
 const MAX_NESTING: usize = 64;
 const MAX_DIAGNOSTIC_DATA_BYTES: usize = 16 * 1024;
 
+/// Allows a native host to prepare immutable evaluation inputs immediately
+/// before a RESP EVAL is expanded. Hooks never alter the wire protocol or the
+/// source being evaluated; they only install independently validated runtime
+/// data needed by a package before a form is evaluated.
+pub trait RespEvaluationHook: Send + Sync {
+    fn before_eval(
+        &self,
+        broker: &RuntimeBroker,
+        session: &str,
+        source: &str,
+    ) -> Result<(), String>;
+
+    fn after_eval(&self, broker: &RuntimeBroker, session: &str, source: &str);
+}
+
 #[derive(Clone, Debug)]
 struct RespFailure {
     code: &'static str,
@@ -254,6 +269,18 @@ pub struct RespServer {
 
 impl RespServer {
     pub fn start(host: &str, port: u16, broker: RuntimeBroker) -> Result<Self, String> {
+        Self::start_with_evaluation_hook(host, port, broker, None)
+    }
+
+    /// Starts a RESP server with an optional host-owned evaluation preparation
+    /// hook. The default [`RespServer::start`] remains wire-compatible and has
+    /// no hook.
+    pub fn start_with_evaluation_hook(
+        host: &str,
+        port: u16,
+        broker: RuntimeBroker,
+        hook: Option<Arc<dyn RespEvaluationHook>>,
+    ) -> Result<Self, String> {
         let listener = TcpListener::bind((host, port))
             .map_err(|error| format!("RESP bind {host}:{port} failed: {error}"))?;
         let address = listener
@@ -281,9 +308,10 @@ impl RespServer {
                             let broker = broker.clone();
                             let instance = instance.clone();
                             let root = root.clone();
+                            let hook = hook.clone();
                             let _ = std::thread::Builder::new()
                                 .name("hara-resp-client".into())
-                                .spawn(move || serve(stream, broker, &instance, &root));
+                                .spawn(move || serve(stream, broker, &instance, &root, hook));
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(10));
@@ -319,7 +347,13 @@ impl Drop for RespServer {
     }
 }
 
-fn serve(stream: TcpStream, broker: RuntimeBroker, instance: &str, root: &str) {
+fn serve(
+    stream: TcpStream,
+    broker: RuntimeBroker,
+    instance: &str,
+    root: &str,
+    hook: Option<Arc<dyn RespEvaluationHook>>,
+) {
     let Ok(mut connection) = RespConnection::new(stream) else {
         return;
     };
@@ -383,6 +417,7 @@ fn serve(stream: TcpStream, broker: RuntimeBroker, instance: &str, root: &str) {
                 &operation,
                 &id,
                 &words[2..],
+                hook.as_deref(),
             );
         } else {
             handle_legacy(
@@ -391,6 +426,7 @@ fn serve(stream: TcpStream, broker: RuntimeBroker, instance: &str, root: &str) {
                 &mut attached,
                 &operation,
                 &words[1..],
+                hook.as_deref(),
             );
         }
     }
@@ -403,8 +439,9 @@ fn handle_v4(
     operation: &str,
     id: &str,
     arguments: &[String],
+    hook: Option<&dyn RespEvaluationHook>,
 ) {
-    let result = operation_result(broker, attached, operation, arguments);
+    let result = operation_result(broker, attached, operation, arguments, hook);
     match result {
         Ok(value) => {
             let _ = connection.write(&RespValue::Array(Some(vec![
@@ -436,14 +473,21 @@ fn handle_legacy(
     attached: &mut String,
     operation: &str,
     arguments: &[String],
+    hook: Option<&dyn RespEvaluationHook>,
 ) {
     let result = if operation == "EVAL" && arguments.len() >= 2 {
-        broker
-            .eval(&arguments[0], &arguments[1])
-            .map(RespValue::bulk)
+        hook.map(|hook| hook.before_eval(broker, &arguments[0], &arguments[1]))
+            .transpose()
+            .and_then(|_| broker.eval(&arguments[0], &arguments[1]))
+            .map(|value| {
+                if let Some(hook) = hook {
+                    hook.after_eval(broker, &arguments[0], &arguments[1]);
+                }
+                RespValue::bulk(value)
+            })
             .map_err(|message| RespFailure::new("EVAL_ERROR", message))
     } else {
-        operation_result(broker, attached, operation, arguments)
+        operation_result(broker, attached, operation, arguments, hook)
     };
     let response = match result {
         Ok(value) => legacy_value(value),
@@ -457,16 +501,26 @@ fn operation_result(
     attached: &mut String,
     operation: &str,
     arguments: &[String],
+    hook: Option<&dyn RespEvaluationHook>,
 ) -> Result<RespValue, RespFailure> {
     match operation {
         "EVAL" => {
             let source = arguments
                 .first()
                 .ok_or_else(|| RespFailure::new("BAD_REQUEST", "EVAL requires source"))?;
-            broker
+            hook.map(|hook| hook.before_eval(broker, attached, source))
+                .transpose()
+                .map_err(|message| RespFailure::new("EVAL_ERROR", message))?;
+            let result = broker
                 .eval_diagnostic(attached, source)
                 .map(RespValue::bulk)
-                .map_err(|diagnostic| RespFailure::evaluation(diagnostic, eval_origin(arguments)))
+                .map_err(|diagnostic| RespFailure::evaluation(diagnostic, eval_origin(arguments)));
+            if result.is_ok() {
+                if let Some(hook) = hook {
+                    hook.after_eval(broker, attached, source);
+                }
+            }
+            result
         }
         "COMPLETE" => {
             let prefix = arguments.first().map_or("", String::as_str);

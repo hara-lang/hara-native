@@ -552,9 +552,7 @@ fn parse_config(
                         ":config :only expects a vector of unqualified symbols",
                     )?;
                     if qualified_symbol(name) {
-                        return Err(
-                            ":config :only expects a vector of unqualified symbols".into()
-                        );
+                        return Err(":config :only expects a vector of unqualified symbols".into());
                     }
                     if !exposed.insert(name.into()) {
                         return Err(format!("Duplicate Foundation selection: {name}"));
@@ -654,8 +652,10 @@ fn parse_rename(
                         library_form,
                         ":rename :alias expects library symbols",
                     )?)?;
-                    let alias =
-                        symbol(alias_form, "Foundation library aliases must be unqualified symbols")?;
+                    let alias = symbol(
+                        alias_form,
+                        "Foundation library aliases must be unqualified symbols",
+                    )?;
                     if alias.contains('/') {
                         return Err("Foundation library aliases must be unqualified symbols".into());
                     }

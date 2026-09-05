@@ -354,7 +354,8 @@ pub(crate) fn lower_function(
                 }),
                 Instruction::Pop => {}
                 Instruction::IntrinsicCall { target, argc: 2 }
-                    if intrinsic_op(program, *target).is_some_and(scalar_binary) => {
+                    if intrinsic_op(program, *target).is_some_and(scalar_binary) =>
+                {
                     let op = intrinsic_op(program, *target).expect("guarded intrinsic operator");
                     for offset in 0..2 {
                         if matches!(
@@ -376,7 +377,8 @@ pub(crate) fn lower_function(
                 }
                 Instruction::IntrinsicCall { target, argc }
                     if *argc > 2
-                        && intrinsic_op(program, *target).is_some_and(scalar_arithmetic) => {
+                        && intrinsic_op(program, *target).is_some_and(scalar_arithmetic) =>
+                {
                     let op = intrinsic_op(program, *target).expect("guarded intrinsic operator");
                     let base = height - usize::from(*argc);
                     for offset in 1..usize::from(*argc) {
@@ -389,7 +391,8 @@ pub(crate) fn lower_function(
                     }
                 }
                 Instruction::IntrinsicCall { target, argc }
-                    if target_is(program, *target, "std.native.Arr/new") => {
+                    if target_is(program, *target, "std.native.Arr/new") =>
+                {
                     let base = height - usize::from(*argc);
                     let values = (0..usize::from(*argc))
                         .map(|index| stack(base + index))
@@ -407,20 +410,27 @@ pub(crate) fn lower_function(
                     });
                 }
                 Instruction::IntrinsicCall { target, argc: 2 }
-                    if target_is(program, *target, "std.native.Arr/get") => operations.push(MirOp::ArrayGetI64 {
-                    destination: stack(height - 2)?,
-                    array: stack(height - 2)?,
-                    index: stack(height - 1)?,
-                }),
+                    if target_is(program, *target, "std.native.Arr/get") =>
+                {
+                    operations.push(MirOp::ArrayGetI64 {
+                        destination: stack(height - 2)?,
+                        array: stack(height - 2)?,
+                        index: stack(height - 1)?,
+                    })
+                }
                 Instruction::IntrinsicCall { target, argc: 3 }
-                    if target_is(program, *target, "std.native.Arr/set") => operations.push(MirOp::ArraySetI64 {
-                    destination: stack(height - 3)?,
-                    array: stack(height - 3)?,
-                    index: stack(height - 2)?,
-                    value: stack(height - 1)?,
-                }),
+                    if target_is(program, *target, "std.native.Arr/set") =>
+                {
+                    operations.push(MirOp::ArraySetI64 {
+                        destination: stack(height - 3)?,
+                        array: stack(height - 3)?,
+                        index: stack(height - 2)?,
+                        value: stack(height - 1)?,
+                    })
+                }
                 Instruction::IntrinsicCall { target, argc }
-                    if target_is(program, *target, "std.native.Obj/new") => {
+                    if target_is(program, *target, "std.native.Obj/new") =>
+                {
                     if *argc % 2 != 0 {
                         return Err(unsupported(id, ip, "object constructor pairs"));
                     }
@@ -444,18 +454,24 @@ pub(crate) fn lower_function(
                     });
                 }
                 Instruction::IntrinsicCall { target, argc: 2 }
-                    if target_is(program, *target, "std.native.Obj/get") => operations.push(MirOp::ObjectGetI64 {
-                    destination: stack(height - 2)?,
-                    object: stack(height - 2)?,
-                    key: stack(height - 1)?,
-                }),
+                    if target_is(program, *target, "std.native.Obj/get") =>
+                {
+                    operations.push(MirOp::ObjectGetI64 {
+                        destination: stack(height - 2)?,
+                        object: stack(height - 2)?,
+                        key: stack(height - 1)?,
+                    })
+                }
                 Instruction::IntrinsicCall { target, argc: 3 }
-                    if target_is(program, *target, "std.native.Obj/set") => operations.push(MirOp::ObjectSetI64 {
-                    destination: stack(height - 3)?,
-                    object: stack(height - 3)?,
-                    key: stack(height - 2)?,
-                    value: stack(height - 1)?,
-                }),
+                    if target_is(program, *target, "std.native.Obj/set") =>
+                {
+                    operations.push(MirOp::ObjectSetI64 {
+                        destination: stack(height - 3)?,
+                        object: stack(height - 3)?,
+                        key: stack(height - 2)?,
+                        value: stack(height - 1)?,
+                    })
+                }
                 Instruction::BuildVector(count) => {
                     let base = height - usize::from(*count);
                     if super::reps::function_enables_tagged_vectors(program, id)
@@ -541,7 +557,8 @@ pub(crate) fn lower_function(
                     });
                 }
                 Instruction::ProtocolCall { target, argc: 3 }
-                    if declared_target_is(program, *target, "std.protocol.iassoc.IAssoc/assoc") => {
+                    if declared_target_is(program, *target, "std.protocol.iassoc.IAssoc/assoc") =>
+                {
                     let base = height - 3;
                     if representations[ip].stack[base..height].contains(&Rep::TaggedRef) {
                         return Err(unsupported(id, ip, "tagged value escapes through assoc"));
@@ -563,7 +580,12 @@ pub(crate) fn lower_function(
                     });
                 }
                 Instruction::ProtocolCall { target, argc: 2 }
-                    if declared_target_is(program, *target, "std.protocol.ilookup.ILookup/lookup") => {
+                    if declared_target_is(
+                        program,
+                        *target,
+                        "std.protocol.ilookup.ILookup/lookup",
+                    ) =>
+                {
                     let numeric_consumer =
                         function.code.get(ip + 1).is_some_and(|next| match next {
                             Instruction::IntrinsicCall { target, .. } => {
@@ -586,7 +608,8 @@ pub(crate) fn lower_function(
                     }
                 }
                 Instruction::IntrinsicCall { target, argc: 1 }
-                    if declared_target_is(program, *target, "std.native.Base/number?") => {
+                    if declared_target_is(program, *target, "std.native.Base/number?") =>
+                {
                     let operation = if representations[ip].stack[height - 1] == Rep::TaggedRef {
                         MirOp::TaggedIsNumber {
                             destination: stack(height - 1)?,
@@ -601,7 +624,8 @@ pub(crate) fn lower_function(
                     operations.push(operation);
                 }
                 Instruction::ProtocolCall { target, argc: 1 }
-                    if declared_target_is(program, *target, "std.protocol.icount.ICount/count") => {
+                    if declared_target_is(program, *target, "std.protocol.icount.ICount/count") =>
+                {
                     let operation = if representations[ip].stack[height - 1] == Rep::TaggedRef {
                         MirOp::TaggedCount {
                             destination: stack(height - 1)?,
@@ -616,7 +640,8 @@ pub(crate) fn lower_function(
                     operations.push(operation);
                 }
                 Instruction::ProtocolCall { target, argc: 2 }
-                    if declared_target_is(program, *target, "std.protocol.inth.INth/nth") => {
+                    if declared_target_is(program, *target, "std.protocol.inth.INth/nth") =>
+                {
                     let operation = if representations[ip].stack[height - 2] == Rep::TaggedRef {
                         MirOp::TaggedNth {
                             destination: stack(height - 2)?,

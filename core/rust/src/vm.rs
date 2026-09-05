@@ -53,11 +53,11 @@ pub mod validate;
 #[path = "vm/conformance_tests.rs"]
 mod conformance_tests;
 #[cfg(test)]
-#[path = "vm/language_conformance_tests.rs"]
-mod language_conformance_tests;
-#[cfg(test)]
 #[path = "vm/execution_tests.rs"]
 mod execution_tests;
+#[cfg(test)]
+#[path = "vm/language_conformance_tests.rs"]
+mod language_conformance_tests;
 #[cfg(all(test, feature = "bytecode-vm"))]
 mod numeric_predicate_tests;
 #[cfg(test)]

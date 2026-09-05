@@ -2650,7 +2650,12 @@ fn file_error(operation: &str, error: FileError) -> String {
 }
 
 fn socket_error(operation: &str, error: SocketError) -> String {
-    format!("{operation} failed: socket/{}", error.code())
+    match error {
+        SocketError::Invalid(detail) => {
+            format!("{operation} failed: socket/invalid: {detail}")
+        }
+        other => format!("{operation} failed: socket/{}", other.code()),
+    }
 }
 
 fn active_file_provider() -> Option<Rc<dyn FileProvider>> {
@@ -3830,6 +3835,9 @@ fn native_package_values(
     let method = operation
         .strip_prefix("std.native.Package/")
         .unwrap_or(operation);
+    if method == "precompile" {
+        return native_package_precompile_values(arguments);
+    }
     if matches!(
         method,
         "build" | "inspect" | "seal" | "inspect-seal" | "verify-seal" | "distribute"
@@ -4017,37 +4025,45 @@ fn native_package_values(
 fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result<Value, String> {
     match method {
         "build" => {
-            if !(1..=4).contains(&arguments.len()) {
-                return Err(
-                    "std.native.Package/build expects input and up to three options".into(),
-                );
+            if arguments.len() != 1
+                || !matches!(arguments.first(), Some(Value::Map(_)) | Some(Value::OrderedMap(_)))
+            {
+                return Err("std.native.Package/build expects one artifact descriptor".into());
             }
-            let input =
-                package_string_argument(&arguments, 0, "std.native.Package/build")?.to_owned();
-            let output =
-                package_optional_string_argument(&arguments, 1, "std.native.Package/build")?
-                    .map(str::to_owned);
-            let package =
-                package_optional_string_argument(&arguments, 2, "std.native.Package/build")?
-                    .map(str::to_owned);
-            let profile =
-                package_optional_string_argument(&arguments, 3, "std.native.Package/build")?
-                    .map(str::to_owned);
+            let descriptor = native_package_artifact_spec(&arguments[0])?;
+            let output = match map_value(&arguments[0], &Value::Keyword("output".into())) {
+                Some(Value::String(value)) if !value.is_empty() => value.clone(),
+                Some(_) => {
+                    return Err(
+                        "std.native.Package/build :output must be a non-empty string".into(),
+                    )
+                }
+                None => return Err("std.native.Package/build is missing :output".into()),
+            };
+            let output_path = active_file_provider()
+                .map(|provider| provider.host_path(&output))
+                .transpose()
+                .map_err(|error| {
+                    format!(
+                        "std.native.Package/build cannot resolve :output through the active file capability: file/{}",
+                        error.code()
+                    )
+                })?
+                .unwrap_or_else(|| output.clone());
             let built = std::thread::Builder::new()
-                .name("hara-package-build".into())
+                .name("hara-package-artifact".into())
                 .stack_size(crate::package::BUILD_THREAD_STACK_SIZE)
                 .spawn(move || {
-                    crate::package::build_path_with_package(
-                        std::path::Path::new(&input),
-                        output.as_deref().map(std::path::Path::new),
-                        package.as_deref(),
-                        profile.as_deref().map(std::path::Path::new),
+                    crate::package::build_artifact(
+                        descriptor,
+                        std::path::Path::new(&output_path),
                     )
                 })
                 .map_err(|error| format!("std.native.Package/build thread failed: {error}"))?
                 .join()
                 .map_err(|_| "std.native.Package/build thread panicked".to_owned())??;
-            Ok(Value::String(built.to_string_lossy().into_owned()))
+            let _ = built;
+            Ok(Value::String(output))
         }
         "inspect" => {
             if arguments.len() != 1 {
@@ -4074,9 +4090,21 @@ fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result
             }
             let spec = distribution_build_spec(&arguments[0])?;
             let manifest = if spec.replace {
-                crate::distribution::build_replace(&spec.project, &spec.host, &spec.output)?
+                crate::distribution::build_replace(
+                    &spec.archive,
+                    &spec.host,
+                    &spec.output,
+                    &spec.launcher,
+                    &spec.entry,
+                )?
             } else {
-                crate::distribution::build(&spec.project, &spec.host, &spec.output)?
+                crate::distribution::build(
+                    &spec.archive,
+                    &spec.host,
+                    &spec.output,
+                    &spec.launcher,
+                    &spec.entry,
+                )?
             };
             Ok(distribution_manifest_value(&manifest))
         }
@@ -4103,6 +4131,158 @@ fn native_package_artifact_values(method: &str, arguments: Vec<Value>) -> Result
         }
         _ => unreachable!("caller restricts native package artifact methods"),
     }
+}
+
+fn native_package_precompile_values(arguments: Vec<Value>) -> Result<Value, String> {
+    if arguments.len() != 1 {
+        return Err("std.native.Package/precompile expects one descriptor map".into());
+    }
+    let descriptor = &arguments[0];
+    if map_entries(descriptor).is_none() {
+        return Err("std.native.Package/precompile expects one descriptor map".into());
+    }
+    let context = package_precompile_modules(
+        map_value(descriptor, &Value::Keyword("context".into()))
+            .ok_or("std.native.Package/precompile is missing :context")?,
+    )?;
+    let modules = package_precompile_modules(
+        map_value(descriptor, &Value::Keyword("modules".into()))
+            .ok_or("std.native.Package/precompile is missing :modules")?,
+    )?;
+    let bytes = std::thread::Builder::new()
+        .name("hara-package-precompile".into())
+        .stack_size(crate::package::BUILD_THREAD_STACK_SIZE)
+        .spawn(move || crate::package::precompile(&context, &modules))
+        .map_err(|error| format!("std.native.Package/precompile thread failed: {error}"))?
+        .join()
+        .map_err(|_| "std.native.Package/precompile thread panicked".to_owned())??;
+    Ok(Value::Bytes(bytes))
+}
+
+fn package_precompile_modules(value: &Value) -> Result<Vec<crate::package::PrecompileModule>, String> {
+    iterator_values(value.clone())?
+        .into_iter()
+        .map(|value| {
+            let namespace = match map_value(&value, &Value::Keyword("module/namespace".into())) {
+                Some(Value::String(value)) if !value.is_empty() => value.clone(),
+                Some(_) => {
+                    return Err(
+                        "std.native.Package/precompile module :module/namespace must be a non-empty string".into(),
+                    )
+                }
+                None => {
+                    return Err(
+                        "std.native.Package/precompile module is missing :module/namespace".into(),
+                    )
+                }
+            };
+            let source = match map_value(&value, &Value::Keyword("module/source".into())) {
+                Some(Value::String(value)) => value.clone(),
+                Some(_) => {
+                    return Err(
+                        "std.native.Package/precompile module :module/source must be a string".into(),
+                    )
+                }
+                None => {
+                    return Err(
+                        "std.native.Package/precompile module is missing :module/source".into(),
+                    )
+                }
+            };
+            Ok(crate::package::PrecompileModule { namespace, source })
+        })
+        .collect()
+}
+
+fn native_package_artifact_spec(value: &Value) -> Result<crate::package::ArtifactSpec, String> {
+    let required_string = |key: &str| match map_value(value, &Value::Keyword(key.into())) {
+        Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
+        Some(_) => Err(format!(
+            "std.native.Package/build :{key} must be a non-empty string"
+        )),
+        None => Err(format!("std.native.Package/build is missing :{key}")),
+    };
+    let files = iterator_values(
+        map_value(value, &Value::Keyword("files".into()))
+            .ok_or("std.native.Package/build is missing :files")?
+            .clone(),
+    )?
+    .into_iter()
+    .map(|value| {
+        let path = match map_value(&value, &Value::Keyword("path".into())) {
+            Some(Value::String(value)) if !value.is_empty() => value.clone(),
+            Some(_) => return Err("std.native.Package/build file :path must be a non-empty string".into()),
+            None => return Err("std.native.Package/build file is missing :path".into()),
+        };
+        let bytes = match map_value(&value, &Value::Keyword("bytes".into())) {
+            Some(Value::Bytes(value)) => value.clone(),
+            Some(Value::ByteBuffer(value)) => value.borrow().clone(),
+            Some(_) => return Err("std.native.Package/build file :bytes must be bytes".into()),
+            None => return Err("std.native.Package/build file is missing :bytes".into()),
+        };
+        Ok(crate::package::ArtifactFile { path, bytes })
+    })
+    .collect::<Result<Vec<_>, String>>()?;
+    let resources = match map_value(value, &Value::Keyword("resources".into())) {
+        Some(resources) => map_entries(resources)
+            .ok_or("std.native.Package/build :resources must be a map")?
+            .into_iter()
+            .map(|(namespace, path)| {
+                let namespace = match namespace {
+                    Value::String(value) if !value.is_empty() => value,
+                    _ => return Err("std.native.Package/build resource keys must be strings".into()),
+                };
+                let path = match path {
+                    Value::String(value) if !value.is_empty() => value,
+                    _ => return Err("std.native.Package/build resource paths must be strings".into()),
+                };
+                Ok((namespace, path))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?,
+        None => std::collections::BTreeMap::new(),
+    };
+    let bytecode = match map_value(value, &Value::Keyword("bytecode".into())) {
+        None | Some(Value::Nil) => None,
+        Some(value) => Some(native_package_artifact_bytecode(value)?),
+    };
+    let name = match map_value(value, &Value::Keyword("name".into())) {
+        None | Some(Value::Nil) => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        Some(_) => return Err("std.native.Package/build :name must be a non-empty string".into()),
+    };
+    let extensions = match map_value(value, &Value::Keyword("extensions".into())) {
+        None => "{}".into(),
+        Some(value) => value_to_form(value)?.to_string(),
+    };
+    Ok(crate::package::ArtifactSpec {
+        identity: required_string("identity")?,
+        version: required_string("version")?,
+        name,
+        files,
+        resources,
+        bytecode,
+        extensions,
+    })
+}
+
+fn native_package_artifact_bytecode(value: &Value) -> Result<crate::package::ArtifactBytecode, String> {
+    let path = match map_value(value, &Value::Keyword("path".into())) {
+        Some(Value::String(value)) if !value.is_empty() => value.clone(),
+        Some(_) => return Err("std.native.Package/build bytecode :path must be a non-empty string".into()),
+        None => return Err("std.native.Package/build bytecode is missing :path".into()),
+    };
+    let format = match map_value(value, &Value::Keyword("format".into())) {
+        Some(Value::String(value)) if !value.is_empty() => value.clone(),
+        Some(_) => return Err("std.native.Package/build bytecode :format must be a non-empty string".into()),
+        None => return Err("std.native.Package/build bytecode is missing :format".into()),
+    };
+    let bytes = match map_value(value, &Value::Keyword("bytes".into())) {
+        Some(Value::Bytes(value)) => value.clone(),
+        Some(Value::ByteBuffer(value)) => value.borrow().clone(),
+        Some(_) => return Err("std.native.Package/build bytecode :bytes must be bytes".into()),
+        None => return Err("std.native.Package/build bytecode is missing :bytes".into()),
+    };
+    Ok(crate::package::ArtifactBytecode { path, format, bytes })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4173,7 +4353,9 @@ fn sealed_package_spec(value: &Value) -> Result<crate::distribution::SealSpec, S
 
 #[cfg(not(target_arch = "wasm32"))]
 struct DistributionBuildSpec {
-    project: std::path::PathBuf,
+    archive: std::path::PathBuf,
+    launcher: String,
+    entry: String,
     host: std::path::PathBuf,
     output: std::path::PathBuf,
     replace: bool,
@@ -4191,13 +4373,26 @@ fn distribution_build_spec(value: &Value) -> Result<DistributionBuildSpec, Strin
         )),
         None => Err(format!("std.native.Package/distribute is missing :{key}")),
     };
+    let entry = match map_value(&descriptor, &Value::Keyword("entry".into())) {
+        Some(Value::Symbol(value)) => value.as_str().to_owned(),
+        Some(Value::String(value)) if !value.is_empty() => value.clone(),
+        Some(_) => {
+            return Err(
+                "std.native.Package/distribute :entry must be a namespace/symbol string or symbol"
+                    .into(),
+            )
+        }
+        None => return Err("std.native.Package/distribute is missing :entry".into()),
+    };
     let replace = match map_value(&descriptor, &Value::Keyword("replace?".into())) {
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err("std.native.Package/distribute :replace? must be boolean".into()),
         None => false,
     };
     Ok(DistributionBuildSpec {
-        project: std::path::PathBuf::from(required_string("project")?),
+        archive: std::path::PathBuf::from(required_string("archive")?),
+        launcher: required_string("launcher")?.clone(),
+        entry,
         host: std::path::PathBuf::from(required_string("host")?),
         output: std::path::PathBuf::from(required_string("output")?),
         replace,
@@ -4314,21 +4509,6 @@ fn package_string_argument<'a>(
         Some(Value::String(value)) => Ok(value),
         _ => Err(format!(
             "{operation} expects a string argument at position {index}"
-        )),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn package_optional_string_argument<'a>(
-    arguments: &'a [Value],
-    index: usize,
-    operation: &str,
-) -> Result<Option<&'a str>, String> {
-    match arguments.get(index) {
-        None | Some(Value::Nil) => Ok(None),
-        Some(Value::String(value)) => Ok(Some(value)),
-        _ => Err(format!(
-            "{operation} expects an optional string at position {index}"
         )),
     }
 }

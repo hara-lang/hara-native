@@ -59,35 +59,6 @@ pub(super) fn validate_locked_cache(project: &Project, lock: &Path) -> Result<()
     Ok(())
 }
 
-pub(super) fn archive_entries(project: &Project) -> Result<Vec<PathBuf>, String> {
-    let lock = project.root.join("project.lock.edn");
-    let imports = locked_imports(project, &lock)?;
-    let mut paths = imports
-        .into_values()
-        .map(|import| PathBuf::from(import.cache))
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    for path in &paths {
-        let logical = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("cached WASM artifact");
-        let import = LockedImport {
-            package: String::new(),
-            module: String::new(),
-            abi: String::new(),
-            sha256: logical.to_owned(),
-            size: fs::metadata(project.root.join(path))
-                .map_err(|error| format!("npm/cache-unavailable: {} ({error})", path.display()))?
-                .len(),
-            cache: path_text(path)?,
-        };
-        verified_cache_bytes(project, logical, &import)?;
-    }
-    Ok(paths)
-}
-
 fn locked_imports(
     project: &Project,
     lock: &Path,

@@ -66,18 +66,16 @@ pub mod ihashcached;
 pub mod iindexed;
 #[path = "protocol/iindexedkv.rs"]
 pub mod iindexedkv;
-#[path = "protocol/imaptype.rs"]
-pub mod imaptype;
 #[path = "protocol/iiter.rs"]
 pub mod iiter;
 #[path = "protocol/iiterator.rs"]
 pub mod iiterator;
 #[path = "protocol/ilineartype.rs"]
 pub mod ilineartype;
-#[path = "protocol/isequential.rs"]
-pub mod isequential;
 #[path = "protocol/ilookup.rs"]
 pub mod ilookup;
+#[path = "protocol/imaptype.rs"]
+pub mod imaptype;
 #[path = "protocol/imatch.rs"]
 pub mod imatch;
 #[path = "protocol/imetadata.rs"]
@@ -118,6 +116,10 @@ pub mod irealize;
 pub mod ireduce;
 #[path = "protocol/ireset.rs"]
 pub mod ireset;
+#[path = "protocol/isequential.rs"]
+pub mod isequential;
+#[path = "protocol/isettype.rs"]
+pub mod isettype;
 #[path = "protocol/ispace.rs"]
 pub mod ispace;
 #[path = "protocol/istream.rs"]
@@ -132,8 +134,6 @@ pub mod istreampoll;
 pub mod istreamwrite;
 #[path = "protocol/istringlike.rs"]
 pub mod istringlike;
-#[path = "protocol/isettype.rs"]
-pub mod isettype;
 #[path = "protocol/itomutable.rs"]
 pub mod itomutable;
 #[path = "protocol/itopersistent.rs"]
@@ -190,12 +190,11 @@ pub use ihash::{HashType, IHash};
 pub use ihashcached::IHashCached;
 pub use iindexed::IIndexed;
 pub use iindexedkv::IIndexedKV;
-pub use imaptype::IMapType;
 pub use iiter::IIter;
 pub use iiterator::IIterator;
 pub use ilineartype::ILinearType;
-pub use isequential::ISequential;
 pub use ilookup::ILookup;
+pub use imaptype::IMapType;
 pub use imatch::IMatch;
 pub use imetadata::{IMetadata, MetaType};
 pub use imutable::IMutable;
@@ -216,6 +215,7 @@ pub use ipushlast::IPushLast;
 pub use irealize::IRealize;
 pub use ireduce::IReduce;
 pub use ireset::IReset;
+pub use isequential::ISequential;
 pub use isettype::ISetType;
 pub use ispace::ISpace;
 pub use istream::IStream;

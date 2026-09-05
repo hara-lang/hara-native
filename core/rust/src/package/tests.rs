@@ -3,12 +3,13 @@ use crate::package_manifest::{
     PackageArtifactType, PackageManifest, PackageRuntime, PackageRuntimeRequirements,
     PackageSelection,
 };
+use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{CompressionMethod, ZipWriter};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
@@ -21,8 +22,7 @@ fn fixture() -> PathBuf {
             .as_nanos(),
         NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::create_dir_all(root.join("src/example")).unwrap();
-    fs::write(root.join("src/example/main.hal"), "(ns example.main) 42\n").unwrap();
+    fs::create_dir_all(&root).unwrap();
     fs::write(root.join("project.edn"), "{:hara/type :project :hara/version \"1.0.0\" :project/id example/app :project/version \"1.2.3\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [\"extensions\"] :project/capabilities #{} :project/dependencies {\"hara:hara/graph\" {:version \"^1.2.0\"}}}").unwrap();
     fs::write(
         root.join("project.lock.edn"),
@@ -129,46 +129,123 @@ fn wasm_requirements() -> PackageRuntimeRequirements {
 }
 
 #[test]
-fn validates_and_builds_deterministic_archive() {
+fn generic_artifact_builder_only_assembles_supplied_bytes() {
     let root = fixture();
-    let project = read_project(&root).unwrap();
-    let first = root.join("one.harp");
-    let second = root.join("two.harp");
-    build_archive(&project, &first).unwrap();
-    build_archive(&project, &second).unwrap();
-    assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
-    let manifest = inspect_archive(&first).unwrap();
-    assert!(manifest.contains(":harp/format \"0.0.0-alpha\""));
-    assert!(manifest.contains(":identity \"hara:example/app\""));
-    assert!(manifest.contains("\"example.main\" \"src/example/main.hal\""));
-    let file = File::open(&first).unwrap();
-    let mut zip = ZipArchive::new(file).unwrap();
-    assert!(zip.by_name("project.edn").is_ok());
+    let archive = root.join("generic.harp");
+    let output = build_artifact(
+        ArtifactSpec {
+            identity: "hara:example/generic".into(),
+            version: "1.0.0".into(),
+            name: Some("generic".into()),
+            files: vec![ArtifactFile {
+                path: "payload.bin".into(),
+                bytes: b"payload".to_vec(),
+            }],
+            resources: [("demo.payload".into(), "payload.bin".into())]
+                .into_iter()
+                .collect(),
+            bytecode: None,
+            extensions: "{}".into(),
+        },
+        &archive,
+    )
+    .unwrap();
+    assert_eq!(output, archive);
+    let manifest = PackageManifest::read_archive(&archive).unwrap();
+    assert_eq!(manifest.identity, "hara:example/generic");
+    assert_eq!(manifest.name.as_deref(), Some("generic"));
+    assert_eq!(manifest.resources["demo.payload"], Path::new("payload.bin"));
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn packages_only_explicit_source_files_from_custom_manifest() {
+fn generic_artifact_builder_rejects_unsafe_and_duplicate_paths() {
     let root = fixture();
-    fs::write(
-        root.join("src/example/provider.hal"),
-        "(ns example.provider) 7\n",
+    let unsafe_error = build_artifact(
+        ArtifactSpec {
+            identity: "hara:example/generic".into(),
+            version: "1.0.0".into(),
+            name: None,
+            files: vec![ArtifactFile {
+                path: "../payload.bin".into(),
+                bytes: b"payload".to_vec(),
+            }],
+            resources: BTreeMap::new(),
+            bytecode: None,
+            extensions: "{}".into(),
+        },
+        &root.join("unsafe.harp"),
     )
-    .unwrap();
-    fs::write(
-        root.join("portable.edn"),
-        "{:hara/type :project :hara/version \"1.0.0\" :project/id \"hara:example/portable\" :project/version \"1.0.0\" :project/source-paths [] :project/source-files [\"src/example/main.hal\"] :project/test-paths [] :project/extension-paths [] :project/capabilities #{} :project/dependencies {}}",
+    .unwrap_err();
+    assert!(unsafe_error.contains("unsafe package archive path"));
+
+    let duplicate_error = build_artifact(
+        ArtifactSpec {
+            identity: "hara:example/generic".into(),
+            version: "1.0.0".into(),
+            name: None,
+            files: vec![
+                ArtifactFile {
+                    path: "payload.bin".into(),
+                    bytes: b"one".to_vec(),
+                },
+                ArtifactFile {
+                    path: "payload.bin".into(),
+                    bytes: b"two".to_vec(),
+                },
+            ],
+            resources: BTreeMap::new(),
+            bytecode: None,
+            extensions: "{}".into(),
+        },
+        &root.join("duplicate.harp"),
     )
-    .unwrap();
-    let project = read_project(&root.join("portable.edn")).unwrap();
-    let archive = root.join("portable.harp");
-    build_archive(&project, &archive).unwrap();
-    let file = File::open(&archive).unwrap();
-    let mut zip = ZipArchive::new(file).unwrap();
-    assert!(zip.by_name("project.edn").is_ok());
-    assert!(zip.by_name("src/example/main.hal").is_ok());
-    assert!(zip.by_name("src/example/provider.hal").is_err());
+    .unwrap_err();
+    assert!(duplicate_error.contains("duplicate package archive path"));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn generic_artifacts_install_without_a_project_declaration() {
+    let root = fixture();
+    let archive = root.join("generic-install.harp");
+    build_artifact(
+        ArtifactSpec {
+            identity: "hara:example/generic-install".into(),
+            version: "1.0.0".into(),
+            name: None,
+            files: vec![ArtifactFile {
+                path: "payload.bin".into(),
+                bytes: b"payload".to_vec(),
+            }],
+            resources: [("demo.payload".into(), "payload.bin".into())]
+                .into_iter()
+                .collect(),
+            bytecode: None,
+            extensions: "{}".into(),
+        },
+        &archive,
+    )
+    .unwrap();
+    let distribution = root.join("generic-install-dist");
+    let installed = install_archive_at(&archive, &distribution).unwrap();
+    assert_eq!(fs::read(installed.join("payload.bin")).unwrap(), b"payload");
+    assert!(distribution
+        .join("packages/hara/example/generic-install/1.0.0.edn")
+        .is_file());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(feature = "bytecode-vm")]
+#[test]
+fn precompile_accepts_only_caller_supplied_module_plans() {
+    let modules = vec![PrecompileModule {
+        namespace: "demo.main".into(),
+        source: "(ns demo.main) (def answer 42)".into(),
+    }];
+    let bytes = precompile(&modules, &modules).unwrap();
+    assert!(!bytes.is_empty());
+    assert_eq!(bytes, precompile(&modules, &modules).unwrap());
 }
 
 #[test]
@@ -176,120 +253,6 @@ fn rejects_missing_project_keys_and_bad_ranges() {
     let root = fixture();
     fs::write(root.join("project.edn"), "{:hara/type :project}").unwrap();
     assert!(read_project(&root).unwrap_err().contains(":hara/version"));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn packages_declared_artifacts_under_the_archive_root() {
-    let root = fixture();
-    fs::create_dir_all(root.join("target/package/ledger/noir/assets")).unwrap();
-    fs::write(
-        root.join("target/package/ledger/noir/assets/worker.mjs"),
-        "export {};\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("project.edn"),
-        "{:hara/type :project :hara/version \"1.0.0\" :project/id hara/ledger-noir :project/version \"0.1.0\" :project/source-paths [] :project/test-paths [\"test\"] :project/extension-paths [\"target/package\"] :project/capabilities #{} :project/artifact-paths [\"target/package\"] :project/archive-root \"target/package\" :project/extensions {ledger.noir {:provider :hta :abi :hta.v1 :targets {:node {:provider \"ledger/noir/assets/worker.mjs\" :runtime :process}}}}}",
-    )
-    .unwrap();
-    let project = read_project(&root).unwrap();
-    let archive = root.join("ledger-noir.harp");
-    build_archive(&project, &archive).unwrap();
-    let file = File::open(&archive).unwrap();
-    let mut zip = ZipArchive::new(file).unwrap();
-    assert!(zip.by_name("ledger/noir/assets/worker.mjs").is_ok());
-    let mut package = String::new();
-    zip.by_name("package.edn")
-        .unwrap()
-        .read_to_string(&mut package)
-        .unwrap();
-    assert!(package.contains(":extensions {ledger.noir"));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn preserves_hal_artifact_data_without_compiling_it() {
-    let root = fixture();
-    fs::create_dir_all(root.join("spec/fixtures")).unwrap();
-    let fixture_source = "(ns spec.fixture) (bytes? (Bytes/new 1))\n";
-    fs::write(
-        root.join("spec/fixtures/native-behavioral.hal"),
-        fixture_source,
-    )
-    .unwrap();
-    fs::write(
-        root.join("spec/fixtures/duplicate-namespace.hal"),
-        "(ns spec.fixture) 0\n",
-    )
-    .unwrap();
-    let source = fs::read_to_string(root.join("project.edn")).unwrap();
-    fs::write(
-        root.join("project.edn"),
-        source.trim().strip_suffix('}').unwrap().to_owned()
-            + " :project/artifact-paths [\"spec\"]}",
-    )
-    .unwrap();
-
-    let archive = root.join("specs.harp");
-    build_archive(&read_project(&root).unwrap(), &archive).unwrap();
-
-    let file = File::open(&archive).unwrap();
-    let mut zip = ZipArchive::new(file).unwrap();
-    let mut archived = String::new();
-    zip.by_name("spec/fixtures/native-behavioral.hal")
-        .unwrap()
-        .read_to_string(&mut archived)
-        .unwrap();
-    assert_eq!(archived, fixture_source);
-    assert!(zip.by_name("spec/fixtures/duplicate-namespace.hal").is_ok());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn rejects_missing_declared_artifacts() {
-    let root = fixture();
-    fs::write(
-        root.join("project.edn"),
-        "{:hara/type :project :hara/version \"1.0.0\" :project/id example/app :project/version \"1.2.3\" :project/source-paths [] :project/test-paths [\"test\"] :project/extension-paths [\"extensions\"] :project/capabilities #{} :project/artifact-paths [\"target/package\"]}",
-    )
-    .unwrap();
-    let project = read_project(&root).unwrap();
-    assert!(build_archive(&project, &root.join("missing.harp"))
-        .unwrap_err()
-        .contains("does not exist"));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn packages_lock_and_explicit_portable_workspace_only() {
-    let root = fixture();
-    fs::write(
-        root.join("project.lock.edn"),
-        "{:lock/format \"0.0.1\" :packages {}}\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("workspace.edn"),
-        "{:hara/type :workspace :hara/version \"1.0.0\"}\n",
-    )
-    .unwrap();
-    let undeclared = root.join("undeclared-workspace.harp");
-    build_archive(&read_project(&root).unwrap(), &undeclared).unwrap();
-    let file = File::open(&undeclared).unwrap();
-    let mut zip = ZipArchive::new(file).unwrap();
-    assert!(zip.by_name("workspace.edn").is_err());
-    fs::write(
-        root.join("project.edn"),
-        "{:hara/type :project :hara/version \"1.0.0\" :project/id example/app :project/version \"1.2.3\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [\"extensions\"] :project/capabilities #{} :project/dependencies {\"hara:hara/graph\" {:version \"^1.2.0\"}} :project/package {:workspace true}}",
-    )
-    .unwrap();
-    let archive = root.join("workspace.harp");
-    build_archive(&read_project(&root).unwrap(), &archive).unwrap();
-    let file = File::open(&archive).unwrap();
-    let mut zip = ZipArchive::new(file).unwrap();
-    assert!(zip.by_name("project.lock.edn").is_ok());
-    assert!(zip.by_name("workspace.edn").is_ok());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -310,7 +273,28 @@ fn validates_typed_recipes_and_installs_content_addressed_roots() {
         root.join("project.receipe.edn")
     );
     let archive = root.join("package.harp");
-    build_archive(&project, &archive).unwrap();
+    build_artifact(
+        ArtifactSpec {
+            identity: "hara:example/app".into(),
+            version: "1.2.3".into(),
+            name: None,
+            files: vec![
+                ArtifactFile {
+                    path: "project.edn".into(),
+                    bytes: fs::read(root.join("project.edn")).unwrap(),
+                },
+                ArtifactFile {
+                    path: "project.receipe.edn".into(),
+                    bytes: fs::read(root.join("project.receipe.edn")).unwrap(),
+                },
+            ],
+            resources: BTreeMap::new(),
+            bytecode: None,
+            extensions: "{}".into(),
+        },
+        &archive,
+    )
+    .unwrap();
     let dist = root.join("dist");
     let installed = install_archive_at(&archive, &dist).unwrap();
     assert!(installed.join("project.receipe.edn").is_file());
@@ -344,43 +328,6 @@ fn publication_error_diagnostics_are_bounded() {
 fn direct_package_publication_requires_the_source_workflow() {
     let error = run(&["publish".into()]).unwrap_err();
     assert!(error.contains("publication-github-workflow-required"));
-}
-
-#[test]
-fn installs_semantic_packages_under_their_manifest_identity() {
-    let root = fixture();
-    fs::create_dir_all(root.join("config")).unwrap();
-    fs::write(
-        root.join("config/packages.edn"),
-        "{demo.public {:include [[demo.public :complete]]}}\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/example/public.hal"),
-        "(ns demo.public) (def answer 42)\n",
-    )
-    .unwrap();
-    let source = fs::read_to_string(root.join("project.edn")).unwrap();
-    fs::write(
-        root.join("project.edn"),
-        source.trim().strip_suffix('}').unwrap().to_owned()
-            + " :project/package {:name \"demo.public\" :profile \"config/packages.edn\"}}\n",
-    )
-    .unwrap();
-
-    let project = read_project(&root).unwrap();
-    let archive = root.join("semantic.harp");
-    build_archive(&project, &archive).unwrap();
-    let manifest = PackageManifest::read_archive(&archive).unwrap();
-    assert_eq!(manifest.identity, "hara:demo/public");
-    assert_eq!(manifest.name.as_deref(), Some("demo.public"));
-
-    let distribution = root.join("dist");
-    install_archive_at(&archive, &distribution).unwrap();
-    assert!(distribution
-        .join("packages/hara/demo/public/1.2.3.edn")
-        .is_file());
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -423,7 +370,7 @@ fn rejects_tampered_and_undeclared_archive_payloads_before_activation() {
     let tampered = runtime_archive(&root, b"wasm", b"evil", false);
     let error = PackageManifest::read_archive(&tampered).unwrap_err();
     assert_eq!(error.code, "package/digest-mismatch");
-    assert!(inspect_archive(&tampered)
+    assert!(inspect_path(&tampered)
         .unwrap_err()
         .contains("package/digest-mismatch"));
 

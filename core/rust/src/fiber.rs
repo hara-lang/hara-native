@@ -1729,7 +1729,8 @@ mod tests {
         let p = Promise::new();
         let mut e = HashMap::new();
         e.insert("p".into(), Value::Promise(p.clone()));
-        let mut f = EvalFiber::start("(let [x 1] (+ x (std.protocol.ideref.IDeref/deref p)))", e).unwrap();
+        let mut f =
+            EvalFiber::start("(let [x 1] (+ x (std.protocol.ideref.IDeref/deref p)))", e).unwrap();
         assert_eq!(f.state(), EvalFiberState::Suspended);
         p.resolve(Value::Number(41));
         assert_eq!(
@@ -1740,8 +1741,11 @@ mod tests {
 
     #[test]
     fn drive_sync_waits_for_a_deferred_promise() {
-        let mut fiber =
-            EvalFiber::start("(std.protocol.ideref.IDeref/deref (std.native.Promise/delay 1 (fn [] 42)))", HashMap::new()).unwrap();
+        let mut fiber = EvalFiber::start(
+            "(std.protocol.ideref.IDeref/deref (std.native.Promise/delay 1 (fn [] 42)))",
+            HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(fiber.drive_sync(), Ok(Value::Number(42)));
     }
 
@@ -1753,7 +1757,8 @@ mod tests {
         promise.set_cancel_hook(Rc::new(move || observed.set(true)));
         let mut environment = HashMap::new();
         environment.insert("p".into(), Value::Promise(promise));
-        let mut fiber = EvalFiber::start("(std.protocol.ideref.IDeref/deref p)", environment).unwrap();
+        let mut fiber =
+            EvalFiber::start("(std.protocol.ideref.IDeref/deref p)", environment).unwrap();
         assert_eq!(fiber.state(), EvalFiberState::Suspended);
         assert!(fiber.cancel());
         assert!(cancelled.get());
@@ -1836,13 +1841,31 @@ mod tests {
     fn numeric_and_boolean_predicates_match_foundation_types() {
         let cases = [
             ("(std.native.Base/long? 42)", Value::Bool(true)),
-            ("(= (std.native.Base/type 9223372036854775808) :std.native.BigInteger)", Value::Bool(true)),
-            ("(= (std.native.Base/type 9223372036854775808) :std.native.BigInteger)", Value::Bool(true)),
-            ("(= (std.native.Base/type 1.0) :std.native.BigInteger)", Value::Bool(false)),
-            ("(= (std.native.Base/type 42.0) :std.native.Float)", Value::Bool(true)),
+            (
+                "(= (std.native.Base/type 9223372036854775808) :std.native.BigInteger)",
+                Value::Bool(true),
+            ),
+            (
+                "(= (std.native.Base/type 9223372036854775808) :std.native.BigInteger)",
+                Value::Bool(true),
+            ),
+            (
+                "(= (std.native.Base/type 1.0) :std.native.BigInteger)",
+                Value::Bool(false),
+            ),
+            (
+                "(= (std.native.Base/type 42.0) :std.native.Float)",
+                Value::Bool(true),
+            ),
             ("(std.native.Base/number? 42)", Value::Bool(true)),
-            ("(= (std.native.Base/type false) :std.native.Boolean)", Value::Bool(true)),
-            ("(= (std.native.Base/type nil) :std.native.Boolean)", Value::Bool(false)),
+            (
+                "(= (std.native.Base/type false) :std.native.Boolean)",
+                Value::Bool(true),
+            ),
+            (
+                "(= (std.native.Base/type nil) :std.native.Boolean)",
+                Value::Bool(false),
+            ),
         ];
         for (source, expected) in cases {
             let fiber = EvalFiber::start(source, HashMap::new()).unwrap();
@@ -1853,8 +1876,14 @@ mod tests {
     #[test]
     fn character_predicate_matches_foundation_types() {
         let cases = [
-            ("(= (std.native.Base/type \\x) :std.native.Character)", Value::Bool(true)),
-            ("(= (std.native.Base/type \"x\") :std.native.Character)", Value::Bool(false)),
+            (
+                "(= (std.native.Base/type \\x) :std.native.Character)",
+                Value::Bool(true),
+            ),
+            (
+                "(= (std.native.Base/type \"x\") :std.native.Character)",
+                Value::Bool(false),
+            ),
         ];
         for (source, expected) in cases {
             let fiber = EvalFiber::start(source, HashMap::new()).unwrap();

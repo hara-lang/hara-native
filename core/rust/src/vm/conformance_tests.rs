@@ -32,7 +32,8 @@ fn required<'a>(entries: &'a [(Form, Form)], key: &str, id: &str) -> &'a Form {
 fn eval_native_vm(source: &str) -> Result<crate::core::Value, String> {
     let registry = crate::embedding_namespace_registry();
     let program = compile_source_with(source, &registry).map_err(|error| error.to_string())?;
-    execute_program_with_globals(std::rc::Rc::new(program), &registry).map_err(|error| error.to_string())
+    execute_program_with_globals(std::rc::Rc::new(program), &registry)
+        .map_err(|error| error.to_string())
 }
 
 #[test]

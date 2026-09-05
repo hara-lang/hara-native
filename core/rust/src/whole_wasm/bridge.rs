@@ -93,14 +93,17 @@ pub fn operation_declarations() -> &'static [OperationDeclaration] {
             }
 
             for declaration in crate::lang::protocol::protocol_declarations() {
-                for method in declaration.methods.iter().filter(|method| method.whole_wasm) {
+                for method in declaration
+                    .methods
+                    .iter()
+                    .filter(|method| method.whole_wasm)
+                {
                     let (minimum, _) = method.arity.range();
                     operations.push(OperationDeclaration {
                         key: format!("{}/{}", declaration.runtime_name(), method.name),
                         kind: TargetKind::Protocol,
                         arity: Some(
-                            u16::try_from(minimum)
-                                .expect("whole-Wasm protocol arity fits u16"),
+                            u16::try_from(minimum).expect("whole-Wasm protocol arity fits u16"),
                         ),
                     });
                 }
@@ -170,9 +173,12 @@ fn validate_native_operation(operation: &OperationDeclaration) -> Result<(), Str
     if !declared.method(method) {
         return Err(format!("native method is not declared: {}", operation.key));
     }
-    let declared_operation = declared
-        .whole_wasm_method(method)
-        .ok_or_else(|| format!("native method is not in the HNW0 registry: {}", operation.key))?;
+    let declared_operation = declared.whole_wasm_method(method).ok_or_else(|| {
+        format!(
+            "native method is not in the HNW0 registry: {}",
+            operation.key
+        )
+    })?;
     if operation.arity != Some(declared_operation.arity) {
         return Err(format!(
             "HNW0 native operation arity does not match declaration: {}",
@@ -201,9 +207,12 @@ fn validate_protocol_operation(operation: &OperationDeclaration) -> Result<(), S
         ));
     }
     let (minimum, _) = method_declaration.arity.range();
-    if operation.arity != Some(u16::try_from(minimum).map_err(|_| {
-        format!("protocol operation arity is too large: {}", operation.key)
-    })?) {
+    if operation.arity
+        != Some(
+            u16::try_from(minimum)
+                .map_err(|_| format!("protocol operation arity is too large: {}", operation.key))?,
+        )
+    {
         return Err(format!(
             "HNW0 operation arity does not match protocol declaration: {}",
             operation.key
@@ -238,10 +247,8 @@ pub fn validate_target_table(targets: &[TargetDescriptor]) -> Result<(), String>
     if targets.len() != operation_declarations().len() {
         return Err("native artifact target table is incomplete".into());
     }
-    for (expected_id, (actual, expected)) in targets
-        .iter()
-        .zip(operation_declarations())
-        .enumerate()
+    for (expected_id, (actual, expected)) in
+        targets.iter().zip(operation_declarations()).enumerate()
     {
         if actual.id != u16::try_from(expected_id).expect("target inventory fits u16")
             || actual.symbol != expected.key.as_str()
@@ -336,10 +343,7 @@ mod tests {
     #[test]
     fn operation_ids_are_derived_from_runtime_declarations() {
         assert!(validate_operation_declarations().is_ok());
-        assert_eq!(
-            operation_id("std.protocol.icount.ICount/count"),
-            Ok(4)
-        );
+        assert_eq!(operation_id("std.protocol.icount.ICount/count"), Ok(4));
         assert_eq!(target_table().len(), 7);
         assert!(validate_target_table(&target_table()).is_ok());
     }

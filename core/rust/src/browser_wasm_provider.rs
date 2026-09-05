@@ -431,9 +431,9 @@ fn scalar_argument(
         }
         (HaraValueType::I64, value) => crate::numeric::to_i64_integer(value)
             .map(|value| js_sys::BigInt::from(value).into())
-            .map_err(|_| format!(
-                "native/integer-overflow: {export} expects signed 64-bit integer"
-            )),
+            .map_err(|_| {
+                format!("native/integer-overflow: {export} expects signed 64-bit integer")
+            }),
         (HaraValueType::F32 | HaraValueType::F64, Value::Float(value)) => {
             if !value.is_finite() {
                 return Err(format!("non-finite number: {export}"));
