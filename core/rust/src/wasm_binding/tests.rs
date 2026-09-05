@@ -44,14 +44,8 @@ world markdown {
 }
 "#;
 
-const VALUES_WIT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../hara/extensions/values/wit/values.wit"
-));
-const VALUES_ECHO_WIT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../hara/extensions/values-echo/wit/echo.wit"
-));
+const VALUES_WIT: &str = include_str!("../../test-fixtures/wit/values.wit");
+const VALUES_ECHO_WIT: &str = include_str!("../../test-fixtures/wit/echo.wit");
 
 #[test]
 fn validates_the_component_manifest_world_against_wit() {

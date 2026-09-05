@@ -1,0 +1,110 @@
+package hara:values@0.1.0;
+
+/// Portable Hara persistent values for Component Model boundaries.
+///
+/// `value` is an indexed, post-order graph rather than a recursive WIT type:
+/// every child index is smaller than its owner, `root` is the final node, and
+/// nodes unreachable from `root` are invalid. This is the canonical form for
+/// a value and makes nesting unbounded without relying on unsupported
+/// recursive WIT declarations.
+interface values {
+  record node-entry {
+    key: u32,
+    value: u32,
+  }
+
+  record sequence {
+    values: list<u32>,
+    metadata: option<list<node-entry>>,
+  }
+
+  record mapping {
+    entries: list<node-entry>,
+    metadata: option<list<node-entry>>,
+  }
+
+  record symbol-value {
+    text: string,
+    metadata: option<list<node-entry>>,
+  }
+
+  record tagged-value {
+    tag: string,
+    form: u32,
+  }
+
+  record map-entry-value {
+    key: u32,
+    value: u32,
+    metadata: option<list<node-entry>>,
+  }
+
+  record pointer-value {
+    context: string,
+    fields: list<node-entry>,
+    metadata: option<list<node-entry>>,
+  }
+
+  record struct-value {
+    name: string,
+    fields: list<string>,
+    values: list<u32>,
+    metadata: option<list<node-entry>>,
+  }
+
+  record exception-site {
+    namespace: option<string>,
+    source-resource: option<string>,
+    line: u64,
+    column: u64,
+  }
+
+  record exception-provenance {
+    created-at: option<exception-site>,
+    throws: list<exception-site>,
+  }
+
+  record exception-value {
+    message: string,
+    data: u32,
+    cause: option<u32>,
+    provenance: exception-provenance,
+  }
+
+  variant node {
+    nil,
+    boolean(bool),
+    integer(s64),
+    float(f64),
+    character(char),
+    big-integer(string),
+    regex(string),
+    text(string),
+    byte-vector(list<u8>),
+    keyword(string),
+    symbol(symbol-value),
+    linear-list(sequence),
+    vector(sequence),
+    cons(sequence),
+    deque(sequence),
+    queue(sequence),
+    set(sequence),
+    ordered-set(sequence),
+    sorted-set(sequence),
+    dictionary(mapping),
+    ordered-map(mapping),
+    sorted-map(mapping),
+    priority-map(mapping),
+    trie(mapping),
+    tagged(tagged-value),
+    map-entry(map-entry-value),
+    pointer(pointer-value),
+    structure(struct-value),
+    exception(exception-value),
+  }
+
+  record value {
+    root: u32,
+    nodes: list<node>,
+  }
+}
