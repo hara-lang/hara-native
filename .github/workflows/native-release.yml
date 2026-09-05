@@ -45,9 +45,20 @@ jobs:
             git merge-base --is-ancestor "${parents[1]}" origin/main
           fi
           version="$(jq -er '.version' release/version.json)"
+          tag="v${version}"
+          commit="$GITHUB_SHA"
+          # A resumed intent may carry a workflow-only fix committed after
+          # the immutable tag was created. Keep the tag commit as the release
+          # identity while requiring it to remain in the current release
+          # branch lineage.
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            git merge-base --is-ancestor "$tagged_commit" "$GITHUB_SHA"
+            commit="$tagged_commit"
+          fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'commit=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
 
   npm-publish-credential:
     name: npm publish credential
@@ -89,13 +100,15 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin release --tags --force
-          test "$(git rev-parse origin/release)" = "$RELEASE_COMMIT"
+          test "$(git rev-parse origin/release)" = "$GITHUB_SHA"
           if ! git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            test "$RELEASE_COMMIT" = "$GITHUB_SHA"
             git tag "$RELEASE_TAG" "$RELEASE_COMMIT"
             git push origin "refs/tags/${RELEASE_TAG}"
             git fetch origin --tags --force
           fi
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" "$GITHUB_SHA"
           if gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = true
             printf 'resuming=true\n' >> "$GITHUB_OUTPUT"
