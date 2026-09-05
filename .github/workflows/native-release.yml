@@ -693,7 +693,7 @@ jobs:
           set -euo pipefail
           if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
             test "$RESUMING" = true
-            digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" | awk '/Digest:/ {print $2; exit}')"
+            digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" | awk '/Digest:/ && !found {print $2; found=1} END {if (!found) exit 1}')"
             test -n "$digest"
             printf 'exists=true\n' >> "$GITHUB_OUTPUT"
             printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
