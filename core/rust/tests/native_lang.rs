@@ -1,6 +1,46 @@
 use hara_native::Runtime;
 
 #[test]
+fn macro_arguments_preserve_unqualified_division() {
+    let registry = hara_native::core::minimal_namespace_registry();
+    hara_native::core::install_foundation_intrinsics(&registry);
+    hara_native::core::with_namespace_registry(&registry, || {
+        let mut runtime = Runtime::core();
+        assert_eq!(
+            runtime
+                .eval_native(
+                    "(ns example.division-macro)\n\
+                 (defmacro capture-division [form] (Base/list 'quote (Base/list form &form)))\n\
+                 (capture-division (/ 6 2))",
+                )
+                .unwrap(),
+            "((/ 6 2) (capture-division (/ 6 2)))"
+        );
+        assert_eq!(runtime.eval_native("(/ 6 2)").unwrap(), "3");
+        assert_eq!(runtime.eval_native("(std.foundation// 6 2)").unwrap(), "3");
+        assert_eq!(
+            runtime
+                .eval_native("(capture-division (std.foundation// 6 2))")
+                .unwrap(),
+            "((std.foundation// 6 2) (capture-division (std.foundation// 6 2)))"
+        );
+        runtime.register_resource(
+            "example.division-owner",
+            "(ns example.division-owner) (defn divide [a b] (/ a b))",
+        );
+        assert_eq!(
+            runtime
+                .eval_native(
+                    "(ns example.division-client (:require [example.division-owner :as owner]))\n\
+                 (owner/divide 6 2)",
+                )
+                .unwrap(),
+            "3"
+        );
+    });
+}
+
+#[test]
 fn direct_native_conforms_to_the_portable_catch_shape() {
     let mut runtime = Runtime::core();
     runtime
