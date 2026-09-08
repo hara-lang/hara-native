@@ -438,6 +438,9 @@ impl GraphBuilder {
                 })
             }
             Value::Struct(value) => {
+                if value.ty.open {
+                    return Err("open records require explicit map conversion at the component boundary".into());
+                }
                 let values = value
                     .ordered_values()
                     .into_iter()
@@ -473,6 +476,7 @@ impl GraphBuilder {
             }
             Value::Promise(_) => Err("extension/value-unsupported: promise".into()),
             Value::Atom(_) => Err("extension/value-unsupported: atom".into()),
+            Value::Delay(_) => Err("extension/value-unsupported: delay".into()),
             Value::Recur(_) => Err("extension/value-unsupported: recur".into()),
             Value::Function(_) => Err("extension/value-unsupported: function".into()),
             Value::MutableCollection(_) => {

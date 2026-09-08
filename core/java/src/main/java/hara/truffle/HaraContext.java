@@ -3951,6 +3951,15 @@ public final class HaraContext {
         new UnaryBuiltin(
             "atom", value -> new hara.lang.data.Atom.Standard<>(HaraBox.unwrap(value))));
     target.define(
+        "delay",
+        new UnaryBuiltin("Base/delay", value -> {
+          if (!isNativeFunctionValue(value)) {
+            throw new HaraException("Base/delay expects one function");
+          }
+          return new hara.lang.base.primitive.Delay<>(
+              () -> invokeInContext(() -> invokeCallable(value, new Object[0])));
+        }));
+    target.define(
         "pointer",
         new UnaryBuiltin(
             "pointer", value -> hara.lang.data.Pointer.fromDescriptor(HaraBox.unwrap(value))));
@@ -4078,6 +4087,7 @@ public final class HaraContext {
     else if (raw instanceof hara.lang.protocol.ICoroutine) type = "Coroutine";
     else if (raw instanceof IPromise) type = "Promise";
     else if (raw instanceof hara.lang.data.Atom.Struct<?, ?>) type = "Atom";
+    else if (raw instanceof hara.lang.base.primitive.Delay<?>) type = "Delay";
     else if (raw instanceof byte[]) type = "ByteBuffer";
     else if (raw instanceof HaraArray) type = "Array";
     else if (raw instanceof HaraObject) type = "Object";

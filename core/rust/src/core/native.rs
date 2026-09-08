@@ -3493,9 +3493,12 @@ fn native_runtime_values(
             if values.len() != 1 {
                 return Err("std.native.Runtime/eval expects one form".into());
             }
+            let previous = registry.current().name().as_str().to_owned();
+            registry.set_current(&evaluation_namespace()?);
             let mut environment = crate::core::current_namespace_environment()?;
             let result = eval_value(values[0].clone(), &mut environment);
             crate::core::save_namespace_environment(&registry, &mut environment);
+            registry.set_current(&previous);
             result
         }
         "load-string" => {
@@ -3552,6 +3555,9 @@ fn native_runtime_values(
                 .collect::<Result<Vec<_>, _>>()?;
             let previous = registry.current().name().as_str().to_owned();
             select_namespace_environment(&registry, env, &target);
+            let _evaluation_scope = EvaluationNamespaceGuard(
+                ACTIVE_EVALUATION_NAMESPACE.with(|active| active.replace(Some(target.clone()))),
+            );
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
             let result = if direct_native_execution() {
                 let source = if forms.is_empty() {
@@ -4693,11 +4699,13 @@ impl NativeCallbackContext {
     pub(crate) fn with<R>(&self, action: impl FnOnce() -> R) -> R {
         #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
         {
-            return crate::direct_native::with_captured_context(
-                self.scope.as_ref(),
-                self.context.as_ref(),
-                action,
-            );
+            return with_caller_evaluation_namespace(|| {
+                crate::direct_native::with_captured_context(
+                    self.scope.as_ref(),
+                    self.context.as_ref(),
+                    action,
+                )
+            });
         }
         #[cfg(not(all(feature = "direct-native", not(target_arch = "wasm32"))))]
         {

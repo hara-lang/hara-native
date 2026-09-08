@@ -895,6 +895,7 @@ pub fn portable_type_name(value: &Value) -> &str {
         Value::Object(_) => "object",
         Value::Promise(_) => "promise",
         Value::Atom(_) => "atom",
+        Value::Delay(_) => "delay",
         Value::Recur(_) => "recur",
         Value::List(_) => "list",
         Value::Cons(_) => "cons",

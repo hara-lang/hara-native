@@ -89,6 +89,11 @@ impl GeneratedNamespaceConfig {
         if let Some(canonical) = self.refers.get(symbol) {
             return canonical.clone();
         }
+        // Like Symbol::parse, treat bare division as unqualified. Resolving it
+        // through the registry would change macro input into std.foundation//.
+        if symbol == "/" {
+            return symbol.into();
+        }
         if symbol.contains('/') {
             if let Ok(registry) = crate::core::namespace_registry() {
                 if let Some(variable) = registry.resolve(&crate::lang::data::Symbol::parse(symbol))

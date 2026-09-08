@@ -239,7 +239,7 @@ pub(crate) mod declarations {
         namespace = "std.native",
         name = "Base",
         methods = [
-            "list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "atom", "bytes", "pointer", "symbol",
+            "list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "atom", "delay", "bytes", "pointer", "symbol",
             "keyword", "uuid", "reduced", "unreduced", "hash", "apply", "resolve",
             "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "with-declaration", "extend", "multimethod", "method", "field",
             "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"

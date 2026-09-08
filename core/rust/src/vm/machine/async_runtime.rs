@@ -96,6 +96,30 @@ impl Machine {
         count
     }
 
+    fn wait_async_result(scheduler: &Rc<RefCell<AsyncScheduler>>, identity: usize) {
+        loop {
+            Self::poll_scheduler(scheduler);
+            // Wait only for this result's current child, not unrelated siblings.
+            // Release the scheduler borrow before invoking a host waiter: settling
+            // the promise queues a continuation back onto this scheduler.
+            let pending = scheduler.borrow().children.values().find_map(|child| {
+                child.result.upgrade().and_then(|result| {
+                    (result.identity_address() == identity).then(|| child.pending.clone())
+                })
+            });
+            let Some(pending) = pending else {
+                return;
+            };
+            if matches!(pending.wait_state(), PromiseState::Pending) {
+                // An externally controlled promise may have no blocking waiter.
+                // Leave it pending rather than spinning or manufacturing a result.
+                Self::poll_scheduler(scheduler);
+                return;
+            }
+            // Resumption may suspend again on a different host promise.
+        }
+    }
+
     fn cancel_async_result(scheduler: &Rc<RefCell<AsyncScheduler>>, identity: usize) {
         let ids = scheduler
             .borrow()
@@ -133,8 +157,9 @@ impl Machine {
         }));
         let wait = scheduler.clone();
         let wait_context = context.clone();
+        let wait_identity = result.identity_address();
         result.set_waiter(Rc::new(move || {
-            wait_context.with(|| Self::poll_scheduler(&wait));
+            wait_context.with(|| Self::wait_async_result(&wait, wait_identity));
         }));
         let cancel_scheduler = scheduler.clone();
         let cancel_identity = result.identity_address();
@@ -176,8 +201,9 @@ pub(super) fn async_result_from_outcome(mut machine: Machine, outcome: VmOutcome
     }));
     let wait = scheduler.clone();
     let wait_context = context.clone();
+    let wait_identity = result.identity_address();
     result.set_waiter(Rc::new(move || {
-        wait_context.with(|| Machine::poll_scheduler(&wait));
+        wait_context.with(|| Machine::wait_async_result(&wait, wait_identity));
     }));
     let cancel_scheduler = scheduler.clone();
     let cancel_identity = result.identity_address();

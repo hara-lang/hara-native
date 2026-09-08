@@ -18,7 +18,11 @@ impl Compiler {
         let value = crate::core::form_to_value(children[1].form).map_err(|message| {
             CompileError::new(CompileErrorKind::UnsupportedForm, message, Some(span.start))
         })?;
-        self.constant(value, span)
+        // Language equality intentionally ignores metadata, including metadata
+        // nested in quoted collections. Value-keyed interning would therefore
+        // replace later annotations (or their absence) with the first quote's.
+        // Preserve each quoted literal, as for literal vectors.
+        self.unique_constant(value, span)
     }
 
     pub(super) fn compile_syntax_quote(

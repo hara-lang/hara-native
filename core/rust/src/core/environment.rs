@@ -681,6 +681,8 @@ impl ProtocolRegistry {
         registry.register("std.protocol.icoll.IColl", "end-string", protocol_coll_end);
         registry.register("std.protocol.icoll.IColl", "sep-string", protocol_coll_sep);
         registry.register("std.protocol.ideref.IDeref", "deref", protocol_deref);
+        registry.register("std.protocol.irealize.IRealize", "realized?", protocol_realized);
+        registry.register("std.protocol.irealize.IRealize", "realize", protocol_realize);
         registry.register(
             "std.protocol.iapplicable.IApplicable",
             "apply-default",
@@ -798,6 +800,7 @@ impl ProtocolRegistry {
 }
 
 thread_local! {
+    static ACTIVE_EVALUATION_NAMESPACE: RefCell<Option<String>> = const { RefCell::new(None) };
     static ACTIVE_PROTOCOLS: RefCell<Option<ProtocolRegistry>> = const { RefCell::new(None) };
     static ACTIVE_NAMESPACES: RefCell<Option<NamespaceRegistry<Value>>> = const { RefCell::new(None) };
     static ACTIVE_DEFINITION_ORIGIN: Cell<VarOrigin> = const { Cell::new(VarOrigin::Source) };
@@ -1503,6 +1506,7 @@ pub(crate) fn publish_named_value(
             let ty = Rc::new(StructType {
                 name: type_name.clone(),
                 fields: field_names,
+                open: matches!(metadata.get_keyword("open"), Some(MetadataValue::Boolean(true))),
                 declaration: Some(declaration),
             });
             let map_type = ty.clone();
@@ -1517,11 +1521,24 @@ pub(crate) fn publish_named_value(
                             .unwrap_or(Value::Nil)
                     })
                     .collect();
-                Ok(Value::Struct(Rc::new(StructValue::from_values(
+                let mut record = StructValue::from_values(
                     map_type.clone(),
                     values,
                     None,
-                )?)))
+                )?;
+                if map_type.open {
+                    record.metadata = value_metadata(source);
+                    let entries = match source {
+                        Value::Struct(value) => value.ordered_entries(),
+                        Value::Nil => Vec::new(),
+                        _ => map_entries(source)
+                            .ok_or_else(|| "open struct constructor expects a map".to_string())?,
+                    };
+                    for (key, value) in entries {
+                        record.values = record.values.assoc_value(key, value);
+                    }
+                }
+                Ok(Value::Struct(Rc::new(record)))
             });
             (Value::StructType(ty), constructor)
         };
@@ -1739,6 +1756,40 @@ pub(crate) fn namespace_registry() -> Result<NamespaceRegistry<Value>, String> {
     ACTIVE_NAMESPACES
         .with(|active| active.borrow().clone())
         .ok_or_else(|| "namespace runtime is unavailable".into())
+}
+
+/// Dynamic evaluation context is distinct from the lexical namespace restored
+/// when a compiled callable re-enters its captured runtime context.
+pub(crate) fn evaluation_namespace() -> Result<String, String> {
+    ACTIVE_EVALUATION_NAMESPACE.with(|active| {
+        active.borrow().clone().map(Ok).unwrap_or_else(|| {
+            Ok(namespace_registry()?.current().name().as_str().to_owned())
+        })
+    })
+}
+
+struct EvaluationNamespaceGuard(Option<String>);
+
+impl Drop for EvaluationNamespaceGuard {
+    fn drop(&mut self) {
+        ACTIVE_EVALUATION_NAMESPACE.with(|active| {
+            active.replace(self.0.take());
+        });
+    }
+}
+
+pub(crate) fn with_evaluation_namespace<R>(namespace: String, action: impl FnOnce() -> R) -> R {
+    let _guard = EvaluationNamespaceGuard(
+        ACTIVE_EVALUATION_NAMESPACE.with(|active| active.replace(Some(namespace))),
+    );
+    action()
+}
+
+pub(crate) fn with_caller_evaluation_namespace<R>(action: impl FnOnce() -> R) -> R {
+    match evaluation_namespace() {
+        Ok(namespace) => with_evaluation_namespace(namespace, action),
+        Err(_) => action(),
+    }
 }
 
 /// Returns a fresh evaluator environment for the registry's current

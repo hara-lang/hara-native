@@ -3,9 +3,9 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "477419aa733bc0889877224dbca8f9734cb74b7ef232548c8f93539e57ee039d"
- :binary-sha256 "1ba6f3832d234a806bc8fc969b750b5bb5471d6182017e1937db8c636cef414c"
- :case-count 416
+ :source-sha256 "f753e45c588a84c826f05869f860969c186c01906dbcc998f0e17ded151803f0"
+ :binary-sha256 "af0694025aa3af7cedd3f8ec0cd41c6e8bb716019e08a5101dbe4613e1f55338"
+ :case-count 417
  :suites
  [{:id :native
   :setup nil
@@ -63,6 +63,9 @@
     :expect {:display "true"}}
    {:id :native/base-portable-surface
     :program (let [atom (std.native.Base/atom 1) entry (std.native.Base/map-entry :a 1) pointer (std.native.Base/pointer {:context :base})] (= [true [1 2] [1 2] #{1 2} {:a 1} #{1 2} 3 true :a 1 1 :base (quote base/value) :base/value true true true] [(= (quote (1 2)) (std.native.Base/list 1 2)) (std.native.Base/vector 1 2) (std.native.Base/vec (std.native.Base/list 1 2)) (std.native.Base/set [1 2 1]) (std.native.Base/hash-map :a 1) (std.native.Base/hash-set 1 2) (std.native.Bytes/count (std.native.Base/bytes 1 2 -3)) (= (std.native.Base/hash [1 2]) (std.native.Base/hash (std.native.Base/list 1 2))) (std.protocol.ipair.IPair/key entry) (std.protocol.ipair.IPair/value entry) (std.protocol.ideref.IDeref/deref atom) (std.protocol.ipointer.IPointer/ptr-context pointer) (std.native.Base/symbol "base" "value") (std.native.Base/keyword "base" "value") (std.native.Base/number? (std.native.Num/parse-double "1.5")) (std.native.Base/long? 1) (std.native.Base/instance? (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.native.Promise))) (std.native.Promise/from 1))]))
+    :expect {:display "true"}}
+   {:id :native/base-delay-semantics
+    :program (let [calls (std.native.Base/atom 0) lazy (std.native.Base/delay (fn [] (std.protocol.ireset.IReset/reset calls (+ 1 (std.protocol.ideref.IDeref/deref calls))) false)) before [(std.protocol.ideref.IDeref/deref calls) (std.protocol.irealize.IRealize/realized? lazy)]] (= [[0 false] false false 1 true :std.native.Delay] [before (std.protocol.ideref.IDeref/deref lazy) (std.protocol.irealize.IRealize/realize lazy) (std.protocol.ideref.IDeref/deref calls) (std.protocol.irealize.IRealize/realized? lazy) (std.native.Base/type lazy)]))
     :expect {:display "true"}}
    {:id :native/base-namespace-and-protocol-semantics
     :program (let [initial (std.native.Base/current-namespace) target (std.native.Base/namespace (quote hnc.base-current)) protocol (std.protocol.ideref.IDeref/deref (std.native.Base/resolve (quote std.protocol.ilookup.ILookup))) result (do (std.native.Base/select-namespace target) (= [(quote hnc.base-current) (quote hnc.base-current) true false true] [(std.native.Runtime/ns-name (std.native.Base/current-namespace)) (std.native.Runtime/ns-name (std.native.Base/select-namespace target)) (std.native.Base/special-symbol? (quote if)) (std.native.Base/special-symbol? (quote answer)) (std.native.Base/satisfies? protocol {:answer 42})])) _ (std.native.Base/select-namespace initial)] result)

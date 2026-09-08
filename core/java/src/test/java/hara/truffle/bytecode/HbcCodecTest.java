@@ -888,6 +888,15 @@ public class HbcCodecTest {
         "native/type",
         HbcConformanceCorpus.normalizedErrorCategory(
             new RuntimeException("abs expects a numeric value")));
+    assertEquals(
+        "division by zero",
+        HbcConformanceCorpus.normalizedErrorCategory(
+            new RuntimeException() {
+              @Override
+              public String toString() {
+                return "division by zero";
+              }
+            }));
   }
 
   private static boolean requiresMountedFoundationPackage(HbcProgram program) {
