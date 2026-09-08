@@ -173,8 +173,11 @@ public final class HbcConformanceCorpus {
   public static String normalizedErrorCategory(Throwable failure) {
     for (Throwable current = failure; current != null; current = current.getCause()) {
       String message = current.getMessage();
-      if (message == null) continue;
-      if (message.toLowerCase().contains("divide by zero")) return "division by zero";
+      if (message == null) message = String.valueOf(current);
+      String normalized = message.toLowerCase();
+      if (normalized.contains("divide by zero") || normalized.contains("division by zero")) {
+        return "division by zero";
+      }
       if (message.contains("expects") && message.contains("numbers")) return "expects numbers";
       int protocolArity = message.indexOf("protocol/arity:");
       if (protocolArity >= 0) return "protocol/arity";
