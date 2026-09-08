@@ -1275,7 +1275,7 @@ fn collection_count(value: &Value) -> Result<Value, String> {
         Value::ByteBuffer(v) => v.borrow().len(),
         Value::Array(v) => v.borrow().len(),
         Value::Object(v) => v.borrow().len(),
-        Value::Struct(v) => v.ty.fields.len(),
+        Value::Struct(v) => v.values.len(),
         Value::Mutable(v) => v.ty.fields.len(),
         Value::Pointer(v) => v.fields().len(),
         Value::MutableCollection(collection) => {
@@ -1414,6 +1414,7 @@ fn collection_get(value: &Value, key: &Value, default: Value) -> Result<Value, S
                 .map(|(_, value)| value.clone())
                 .unwrap_or(default))
         }
+        Value::Struct(value) if value.ty.open => Ok(value.values.get(key).cloned().unwrap_or(default)),
         Value::Struct(value) => Ok(named_field_name(key)
             .and_then(|name| value.get(name))
             .cloned()
@@ -1569,6 +1570,13 @@ fn collection_assoc(value: &Value, key: &Value, replacement: Value) -> Result<Va
             Ok(Value::Object(Rc::new(RefCell::new(output))))
         }
         Value::Struct(value) => {
+            if value.ty.open {
+                return Ok(Value::Struct(Rc::new(StructValue {
+                    ty: value.ty.clone(),
+                    values: value.values.assoc_value(key.clone(), replacement),
+                    metadata: value.metadata.clone(),
+                })));
+            }
             let name = named_field_name(key).ok_or_else(|| {
                 "assoc struct field must be an unqualified string, keyword, or symbol".to_string()
             })?;
@@ -1609,7 +1617,13 @@ fn collection_dissoc(value: &Value, keys: &[Value]) -> Result<Value, String> {
                 .filter_map(named_field_name)
                 .any(|name| value.ty.fields.iter().any(|candidate| candidate == name));
             if !declared {
-                return Ok(Value::Struct(value.clone()));
+                let mut record = (**value).clone();
+                if value.ty.open {
+                    for key in keys {
+                        record.values = record.values.dissoc_value(key);
+                    }
+                }
+                return Ok(Value::Struct(Rc::new(record)));
             }
             let mut values = value.values.with_meta(value.metadata.clone());
             for key in keys {
@@ -1676,4 +1690,86 @@ fn unique_values(values: Vec<Value>) -> Vec<Value> {
         }
     }
     unique
+}
+
+#[cfg(test)]
+mod open_record_tests {
+    use super::*;
+
+    #[test]
+    fn open_record_constructor_preserves_metadata_and_round_trips_entries() {
+        let namespaces = NamespaceRegistry::new("test");
+        let protocols = ProtocolRegistry::new();
+        with_namespace_registry(&namespaces, || with_protocols(&protocols, || {
+            let metadata = metadata_from_form(&Form::Map(vec![(Form::Keyword("open".into()), Form::Bool(true))])).unwrap();
+            let mut environment = HashMap::new();
+            publish_named_value("defstruct", "Snapshot", vec![], &mut environment, Some(metadata)).unwrap();
+            let Value::Var(constructor) = environment.get("map->Snapshot").unwrap() else { panic!("expected constructor Var") };
+            let constructor = constructor.deref_value();
+            let source = Value::Map(PMap::from_iter([(Value::Keyword("js".into()), Value::Number(7))]));
+            let metadata = metadata_from_form(&Form::Map(vec![(Form::Keyword("origin".into()), Form::Keyword("fixture".into()))])).unwrap();
+            let source = attach_optional_metadata(source, Some(metadata.clone())).unwrap();
+            let value = call_value(constructor.clone(), vec![source]).unwrap();
+            let Value::Struct(record) = &value else { panic!("expected record") };
+            assert!(record.ty.open);
+            assert_eq!(record.metadata, Some(metadata));
+            assert_eq!(record.ordered_entries(), vec![(Value::Keyword("js".into()), Value::Number(7))]);
+            assert_eq!(call_value(constructor.clone(), vec![value.clone()]).unwrap(), value);
+            let portable = Value::Map(record.values.iter().map(|(key, value)| (key.clone(), value.clone())).collect());
+            // HTA does not retain ordinary collection metadata: carry it explicitly.
+            let envelope = Value::Vector(vec![portable, protocol_meta(&[value.clone()]).unwrap()].into());
+            let Value::Vector(decoded) = crate::hta::decode(&crate::hta::encode(&envelope).unwrap()).unwrap() else { panic!("expected envelope") };
+            let restored_map = protocol_with_meta(&[decoded[0].clone(), decoded[1].clone()]).unwrap();
+            let restored = call_value(constructor, vec![restored_map]).unwrap();
+            assert_eq!(restored, value);
+            assert_eq!(value_metadata(&restored), value_metadata(&value));
+            let protocol = "std.protocol.ideps.IDeps";
+            protocols.declare_guest(protocol, "dep-get");
+            let Value::Function(implementation) = native_function("test/dep-get", 2, |args| {
+                collection_get(&args[0], &args[1], Value::Nil)
+            }) else { panic!("expected function") };
+            protocols.register_guest(protocol, "test/Snapshot", "dep-get", implementation);
+            assert_eq!(protocols.invoke(protocol, "dep-get", &[value.clone(), Value::Keyword("js".into())]).unwrap(), Value::Number(7));
+            let removed = collection_dissoc(&value, &[Value::Keyword("js".into())]).unwrap();
+            assert_eq!(protocols.invoke(protocol, "dep-get", &[removed, Value::Keyword("js".into())]).unwrap(), Value::Nil);
+            assert!(crate::hta::encode(&value).unwrap_err().contains("open records"));
+        }));
+    }
+
+    fn record(open: bool, fields: Vec<String>) -> Value {
+        let mut ty = StructType::detached("test/Snapshot".into(), fields);
+        ty.open = open;
+        let values = vec![Value::Nil; ty.fields.len()];
+        Value::Struct(Rc::new(StructValue::from_values(Rc::new(ty), values, None).unwrap()))
+    }
+
+    #[test]
+    fn open_record_map_operations_preserve_dynamic_keys_and_type() {
+        let original = record(true, vec![]);
+        let js = Value::Keyword("js".into());
+        let namespaced = Value::Keyword("custom/field".into());
+        let value = collection_assoc(&original, &js, Value::Number(7)).unwrap();
+        let value = collection_assoc(&value, &namespaced, Value::Bool(false)).unwrap();
+        assert_eq!(collection_get(&value, &js, Value::Nil).unwrap(), Value::Number(7));
+        assert_eq!(collection_get(&value, &namespaced, Value::Nil).unwrap(), Value::Bool(false));
+        assert_eq!(protocol_find(&[value.clone(), namespaced.clone()]).unwrap(), pair_value(namespaced, Value::Bool(false)));
+        assert_eq!(collection_count(&value).unwrap(), Value::Number(2));
+        assert_eq!(collection_count(&original).unwrap(), Value::Number(0));
+        let removed = collection_dissoc(&value, &[js.clone()]).unwrap();
+        assert!(matches!(removed, Value::Struct(_)));
+        assert_eq!(collection_get(&removed, &js, Value::Number(9)).unwrap(), Value::Number(9));
+        assert_eq!(collection_dissoc(&removed, &[js]).unwrap(), removed);
+        assert_eq!(collection_count(&collection_empty_value(value.clone()).unwrap()).unwrap(), Value::Number(0));
+    }
+
+    #[test]
+    fn closed_record_rejects_unknown_fields_and_declared_removal_returns_map() {
+        let closed = record(false, vec!["lang".into()]);
+        assert!(collection_assoc(&closed, &Value::Keyword("extra".into()), Value::Nil).is_err());
+        let open = record(true, vec!["lang".into()]);
+        let open = collection_assoc(&open, &Value::Keyword("js".into()), Value::Number(7)).unwrap();
+        let removed = collection_dissoc(&open, &[Value::Keyword("lang".into())]).unwrap();
+        assert!(matches!(removed, Value::OrderedMap(_)));
+        assert_eq!(collection_get(&removed, &Value::Keyword("js".into()), Value::Nil).unwrap(), Value::Number(7));
+    }
 }

@@ -12,6 +12,7 @@ public class Delay<V> implements IDeref<V>, IRealize<V>, IDisplay {
   volatile Throwable _ex;
   volatile Supplier<V> _fn;
   volatile V _val;
+  boolean _running;
 
   public Delay(Supplier<V> fn) {
     _fn = fn;
@@ -25,12 +26,15 @@ public class Delay<V> implements IDeref<V>, IRealize<V>, IDisplay {
       synchronized (this) {
         // double check
         if (_fn != null) {
+          if (_running) throw new IllegalStateException("delay realization is recursive");
+          _running = true;
           try {
             _val = _fn.get();
           } catch (Throwable t) {
             _ex = t;
           }
           _fn = null;
+          _running = false;
         }
       }
     }

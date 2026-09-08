@@ -530,6 +530,9 @@ fn protocol_find(arguments: &[Value]) -> Result<Value, String> {
                 })
                 .unwrap_or(Value::Nil))
         }
+        Value::Struct(value) if value.ty.open => Ok(value.values.get(key)
+            .map(|item| pair_value(key.clone(), item.clone()))
+            .unwrap_or(Value::Nil)),
         Value::Struct(value) => Ok(named_field_name(key)
             .and_then(|name| value.get(name).cloned().map(|item| (name, item)))
             .map(|(name, item)| pair_value(named_field_key(name), item))
@@ -651,6 +654,7 @@ fn protocol_iter(arguments: &[Value]) -> Result<Value, String> {
 
 fn protocol_deref(arguments: &[Value]) -> Result<Value, String> {
     match arguments {
+        [Value::Delay(delay)] => delay.deref_value(),
         [Value::Atom(atom)] => Ok(atom.deref_value()),
         [Value::Var(var)] => Ok(var.deref_value()),
         [Value::Promise(promise)] => promise_value_result(promise),
@@ -710,6 +714,20 @@ fn protocol_deref_timeout(arguments: &[Value]) -> Result<Value, String> {
             "IDerefTimeout/deref-timeout expects a dereferenceable value, milliseconds, and timeout value"
                 .into(),
         ),
+    }
+}
+
+fn protocol_realized(arguments: &[Value]) -> Result<Value, String> {
+    match arguments {
+        [Value::Delay(delay)] => Ok(Value::Bool(delay.is_realized())),
+        _ => Err("IRealize/realized? has no implementation for this value".into()),
+    }
+}
+
+fn protocol_realize(arguments: &[Value]) -> Result<Value, String> {
+    match arguments {
+        [Value::Delay(delay)] => delay.deref_value(),
+        _ => Err("IRealize/realize has no implementation for this value".into()),
     }
 }
 
@@ -1329,6 +1347,12 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
             )))),
             _ => Err("Base/map-entry expects a key and value".into()),
         },
+        "delay" => match values {
+            [Value::Function(function)] => {
+                Ok(Value::Delay(RuntimeDelay::new(function.clone())))
+            }
+            _ => Err("Base/delay expects one function".into()),
+        },
         "atom" => match values {
             [value] => Ok(Value::Atom(Box::new(RuntimeAtom::new(value.clone(), true)))),
             _ => Err("Base/atom expects one value".into()),
@@ -1399,7 +1423,9 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
             _ => Err("Base/namespace expects one namespace symbol".into()),
         },
         "current-namespace" => match values {
-            [] => Ok(Value::Namespace(Rc::new(namespace_registry()?.current()))),
+            [] => Ok(Value::Namespace(Rc::new(
+                namespace_registry()?.find_or_create(evaluation_namespace()?),
+            ))),
             _ => Err("Base/current-namespace expects no arguments".into()),
         },
         "select-namespace" => match values {
@@ -2576,6 +2602,7 @@ impl Value {
         matches!(
             value,
             Self::Atom(_)
+                | Self::Delay(_)
                 | Self::Promise(_)
                 | Self::Var(_)
                 | Self::Result(_)
@@ -2740,6 +2767,7 @@ fn native_protocol_supports(protocol: &str, value: &Value) -> bool {
         "IFind" => Value::supports_native_ifind(value),
         "ILookup" => Value::supports_native_ilookup(value),
         "IDeref" => Value::supports_native_ideref(value),
+        "IRealize" => matches!(value, Value::Delay(_)),
         "IDerefTimeout" => Value::supports_native_idereftimeout(value),
         "IReset" => Value::supports_native_ireset(value),
         "ICas" => Value::supports_native_icas(value),

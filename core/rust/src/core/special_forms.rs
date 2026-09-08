@@ -173,7 +173,10 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
             }
             match operator {
                 Form::Symbol(n) if n == "fn" => {
-                    if fs.len() < 3 {
+                    if fs.len() < 2
+                        || (fs.len() == 2
+                            && !matches!(form_without_metadata(&fs[1]), Form::List(_)))
+                    {
                         return Err("fn expects parameters and a body".into());
                     }
                     if !matches!(form_without_metadata(&fs[1]), Form::Vector(_)) {

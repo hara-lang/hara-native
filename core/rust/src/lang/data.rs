@@ -4,6 +4,8 @@ pub mod adapters;
 pub mod atom;
 #[path = "data/cons.rs"]
 pub mod cons;
+#[path = "data/delay.rs"]
+pub mod delay;
 #[path = "data/deque.rs"]
 pub mod deque;
 #[path = "data/keyword.rs"]

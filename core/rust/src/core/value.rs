@@ -155,6 +155,7 @@ pub enum Value {
     Object(Rc<RefCell<Vec<(String, Value)>>>),
     Promise(Promise),
     Atom(Box<RuntimeAtom>),
+    Delay(RuntimeDelay),
     Recur(Vec<Value>),
     Map(PMap<Value, Value>),
     OrderedMap(Box<POrderedMap<Value, Value>>),
@@ -375,15 +376,15 @@ pub(crate) fn transform_persistent_value(
                 .into_iter()
                 .collect(),
         ))),
-        Value::Struct(value) => Ok(Value::Struct(Rc::new(StructValue::from_values(
-            value.ty.clone(),
-            value
-                .ordered_values()
-                .into_iter()
-                .map(|value| nested(value, transform))
-                .collect::<Result<Vec<_>, _>>()?,
-            value.metadata.clone(),
-        )?))),
+        Value::Struct(value) => {
+            let values = value.values.iter()
+                .map(|(key, value)| pair(key, value, transform))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter().collect();
+            Ok(Value::Struct(Rc::new(StructValue {
+                ty: value.ty.clone(), values, metadata: value.metadata.clone(),
+            })))
+        }
         Value::ExceptionInfo(value) => Ok(Value::ExceptionInfo(Rc::new(ExceptionInfo {
             message: value.message.clone(),
             data: Box::new(nested(&value.data, transform)?),
@@ -407,7 +408,7 @@ pub(crate) fn transform_persistent_value(
                 )?))),
             }
         }
-        Value::ByteBuffer(_) | Value::Promise(_) | Value::MutableCollection(_) | Value::Seq(_)
+        Value::ByteBuffer(_) | Value::Promise(_) | Value::Delay(_) | Value::MutableCollection(_) | Value::Seq(_)
         | Value::Iterator(_) | Value::Extension(_) | Value::StructType(_) | Value::MutableType(_)
         | Value::Mutable(_) | Value::Protocol(_) | Value::NativeType(_) | Value::Schema(_)
         | Value::Coroutine(_) | Value::Stream(_) => Err(format!(
@@ -565,6 +566,9 @@ impl StructValue {
     }
 
     pub(crate) fn ordered_entries(&self) -> Vec<(Value, Value)> {
+        if self.ty.open {
+            return self.values.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+        }
         self.ty
             .fields
             .iter()
@@ -804,6 +808,37 @@ impl RuntimeStream {
             closed: Rc::new(Cell::new(false)),
         }
     }
+}
+
+/// Preserve the thrown value as well as the string error transport. Catching
+/// consumes ACTIVE_THROWN_VALUE, so every cached failure must restore it.
+#[derive(Clone, Debug)]
+pub struct RuntimeDelay {
+    state: crate::lang::data::delay::Delay<(Result<Value, String>, Option<Value>)>,
+}
+
+impl RuntimeDelay {
+    fn new(function: Rc<Function>) -> Self {
+        Self {
+            state: crate::lang::data::delay::Delay::new(move || {
+                Ok(with_thrown_value_capture(|| call_function(&function, Vec::new())))
+            }),
+        }
+    }
+
+    fn deref_value(&self) -> Result<Value, String> {
+        let (result, thrown) = self.state.deref_value()?;
+        if let (Err(error), Some(value)) = (&result, thrown) {
+            ACTIVE_THROWN_VALUE.with(|active| {
+                *active.borrow_mut() = Some((error.clone(), value));
+            });
+        }
+        result
+    }
+
+    fn is_realized(&self) -> bool { self.state.is_realized() }
+    fn same_identity(&self, other: &Self) -> bool { self.state.same_identity(&other.state) }
+    fn identity_address(&self) -> usize { self.state.identity_address() }
 }
 
 #[derive(Clone)]
@@ -3177,7 +3212,7 @@ pub(crate) fn session_transferable(value: &Value) -> bool {
         Value::MapEntry(entry) => {
             session_transferable(entry.key()) && session_transferable(entry.value())
         }
-        Value::Struct(value) => value.ordered_values().into_iter().all(session_transferable),
+        Value::Struct(value) => value.values.iter().all(|(key, value)| session_transferable(key) && session_transferable(value)),
         Value::Pointer(value) => value
             .fields()
             .iter()
@@ -3191,6 +3226,7 @@ pub(crate) fn session_transferable(value: &Value) -> bool {
         | Value::Object(_)
         | Value::Promise(_)
         | Value::Atom(_)
+        | Value::Delay(_)
         | Value::Recur(_)
         | Value::Function(_)
         | Value::Seq(_)
@@ -3409,6 +3445,7 @@ impl PartialEq for Value {
             (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(a, b),
             (Value::Promise(a), Value::Promise(b)) => a.same_identity(b),
             (Value::Atom(a), Value::Atom(b)) => a.same_identity(b),
+            (Value::Delay(a), Value::Delay(b)) => a.same_identity(b),
             (Value::Recur(a), Value::Recur(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => a == b,
             (Value::Set(a), Value::Set(b)) => a == b,
@@ -3502,6 +3539,7 @@ impl Ord for Value {
                 Value::Object(_) => 18,
                 Value::Promise(_) => 19,
                 Value::Atom(_) => 26,
+                Value::Delay(_) => 39,
                 Value::Recur(_) => 20,
                 Value::Function(_) => 21,
                 Value::Iterator(_) => 22,
@@ -3641,6 +3679,7 @@ impl crate::lang::hash::JavaHash for Value {
             Self::MutableCollection(v) => opaque(32, |s| Rc::as_ptr(v).hash(s)),
             Self::Promise(v) => opaque(8, |s| v.identity_address().hash(s)),
             Self::Atom(v) => opaque(28, |s| v.identity_address().hash(s)),
+            Self::Delay(v) => opaque(40, |s| v.identity_address().hash(s)),
             Self::Function(v) => opaque(14, |s| Rc::as_ptr(v).hash(s)),
             Self::Iterator(v) => opaque(16, |s| Rc::as_ptr(v).hash(s)),
             Self::Var(v) => opaque(17, |s| v.identity_address().hash(s)),
@@ -3653,6 +3692,10 @@ impl crate::lang::hash::JavaHash for Value {
             Self::StructType(v) => opaque(26, |s| Rc::as_ptr(v).hash(s)),
             Self::Struct(v) => opaque(27, |s| {
                 Rc::as_ptr(&v.ty).hash(s);
+                if v.ty.open {
+                    v.values.hash().hash(s);
+                    return;
+                }
                 for value in v.ordered_values() {
                     value.hash(s);
                 }
@@ -3740,6 +3783,11 @@ impl Value {
             ),
             Self::Promise(_) => "<promise>".into(),
             Self::Atom(value) => format!("#atom <{}>", value.deref_value().display()),
+            Self::Delay(value) => if value.is_realized() {
+                "#delay.realized<>".into()
+            } else {
+                "#delay.pending<>".into()
+            },
             Self::Recur(values) => format!(
                 "<recur {}>",
                 values
@@ -3870,11 +3918,9 @@ impl Value {
                 "#{}{{{}}}",
                 value.ty.name,
                 value
-                    .ty
-                    .fields
-                    .iter()
-                    .filter_map(|field| value.get(field).map(|value| (field, value)))
-                    .map(|(field, value)| format!(":{field} {}", value.display()))
+                    .ordered_entries()
+                    .into_iter()
+                    .map(|(key, value)| format!("{} {}", key.display(), value.display()))
                     .collect::<Vec<_>>()
                     .join(" ")
             ),

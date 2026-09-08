@@ -30,13 +30,16 @@ impl Compiler {
         }
         // A capture-free function literal that is called immediately never
         // needs to become a heap closure. Its body is already a prototype,
-        // so replace the just-emitted Closure with a direct VM call.
+        // so replace the just-emitted Closure with a direct VM call only
+        // when the caller is also capture-free. CallStatic inherits the
+        // caller's capture slots. Captures are inventoried before compiling
+        // the body, including references in arguments and later expressions.
         let argc = (children.len() - 1) as u8;
         let direct = match self.ctx().code.last() {
             Some(Instruction::Closure {
                 prototype,
                 captures: 0,
-            }) => {
+            }) if self.ctx().captures.is_empty() => {
                 let proto = &self.functions[usize::from(*prototype)];
                 let accepts = (!proto.variadic && proto.arity == u16::from(argc))
                     || (proto.variadic && u16::from(argc) >= proto.arity);
@@ -67,7 +70,10 @@ impl Compiler {
         children: &[Child<'_>],
         span: &Span,
     ) -> Result<(), CompileError> {
-        if children.len() < 3 {
+        if children.len() < 2
+            || (children.len() == 2
+                && !matches!(crate::core::form_without_metadata(children[1].form), Form::List(_)))
+        {
             return Err(CompileError::new(
                 CompileErrorKind::Arity,
                 "fn expects parameters and a body",

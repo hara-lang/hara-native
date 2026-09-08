@@ -424,6 +424,9 @@ fn encode_bare(value: &Value, output: &mut Vec<u8>, depth: usize) -> Result<(), 
             encode_sequence(VECTOR, values.iter(), output, depth)?;
         }
         Value::Struct(value) => {
+            if value.ty.open {
+                return Err("hta/value-unsupported: open records require explicit map conversion".into());
+            }
             output.push(STRUCT);
             encode_bare(&Value::String(value.ty.name.clone()), output, depth + 1)?;
             let fields = value

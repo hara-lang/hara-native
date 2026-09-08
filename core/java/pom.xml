@@ -181,6 +181,7 @@
 						<testInclude>hara/truffle/HalcArtifactTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbxBundleCodecTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeLangTest.java</testInclude>
+						<testInclude>hara/truffle/HaraDelayTest.java</testInclude>
 						<testInclude>hara/truffle/HaraMutableCollectionTest.java</testInclude>
 						<testInclude>hara/truffle/HtaValueCodecTest.java</testInclude>
 						<testInclude>hara/truffle/HaraNativeCapabilityProfileConformanceTest.java</testInclude>
@@ -272,6 +273,7 @@
 						<include>hara/truffle/HalcArtifactTest.java</include>
 						<include>hara/truffle/bytecode/HbxBundleCodecTest.java</include>
 						<include>hara/truffle/HaraNativeLangTest.java</include>
+						<include>hara/truffle/HaraDelayTest.java</include>
 						<include>hara/truffle/HaraMutableCollectionTest.java</include>
 						<include>hara/truffle/HtaValueCodecTest.java</include>
 						<include>hara/truffle/HaraNativeCapabilityProfileConformanceTest.java</include>

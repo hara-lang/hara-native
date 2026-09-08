@@ -171,6 +171,7 @@ pub(crate) fn named_value_schema_form(
 pub struct StructType {
     pub name: String,
     pub fields: Vec<String>,
+    pub open: bool,
     pub declaration: Option<Rc<NamedDeclaration>>,
 }
 
@@ -179,6 +180,7 @@ impl StructType {
         Self {
             name,
             fields,
+            open: false,
             declaration: None,
         }
     }

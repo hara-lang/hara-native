@@ -1,6 +1,169 @@
 use hara_native::Runtime;
 
 #[test]
+fn host_delay_protocols_defer_and_memoize_native_functions() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        assert_eq!(runtime.eval_native(
+            "(let [calls (Base/atom 0)
+                   lazy (Base/delay (fn []
+                          (IReset/reset calls (+ 1 (IDeref/deref calls)))
+                          false))
+                   before [(IDeref/deref calls) (IRealize/realized? lazy)]]
+               [before (IDeref/deref lazy) (IRealize/realize lazy)
+                (IDeref/deref calls) (IRealize/realized? lazy)
+                (Base/type lazy)])"
+        ).unwrap(), "[[0 false] false false 1 true :std.native.Delay]", "{backend}");
+        assert_eq!(runtime.eval_native(
+            "(let [calls (Base/atom 0)
+                   lazy (Base/delay (fn []
+                          (IReset/reset calls (+ 1 (IDeref/deref calls)))
+                          (throw (Exception/new \"delay boom\" {:reason :delayed}))))
+                   first (try (IDeref/deref lazy) (catch e e))
+                   second (try (IRealize/realize lazy) (catch e e))]
+               [(= first second) (IDeref/deref calls) (IRealize/realized? lazy)])"
+        ).unwrap(), "[true 1 true]", "{backend}");
+        assert!(runtime.eval_native("(Base/delay 1)").unwrap_err().contains("expects one function"));
+    }
+}
+
+#[test]
+fn host_delay_is_lazy_and_caches_success_including_nil_and_false() {
+    use hara_native::lang::data::delay::Delay;
+    use std::{cell::Cell, rc::Rc};
+    for value in [None, Some(false), Some(true)] {
+        let calls = Rc::new(Cell::new(0));
+        let observed = calls.clone();
+        let delay = Delay::new(move || {
+            observed.set(observed.get() + 1);
+            Ok(value)
+        });
+        assert_eq!(calls.get(), 0);
+        assert!(!delay.is_realized());
+        let alias = delay.clone();
+        assert!(delay.same_identity(&alias));
+        assert_eq!(delay.identity_address(), alias.identity_address());
+        assert_eq!(delay.deref_value(), Ok(value));
+        assert_eq!(alias.deref_value(), Ok(value));
+        assert!(alias.is_realized());
+        assert_eq!(calls.get(), 1);
+    }
+}
+
+#[test]
+fn host_delay_caches_failure_and_releases_thunk_captures() {
+    use hara_native::lang::data::delay::Delay;
+    use std::{cell::Cell, rc::Rc};
+    let calls = Rc::new(Cell::new(0));
+    let observed = calls.clone();
+    let delay = Delay::<()>::new(move || {
+        observed.set(observed.get() + 1);
+        Err("original failure".into())
+    });
+    assert_eq!(Rc::strong_count(&calls), 2);
+    assert_eq!(delay.deref_value(), Err("original failure".into()));
+    assert!(delay.is_realized());
+    assert_eq!(delay.deref_value(), Err("original failure".into()));
+    assert_eq!(calls.get(), 1);
+    assert_eq!(Rc::strong_count(&calls), 1);
+}
+
+#[test]
+fn host_delay_drop_releases_unrealized_thunk_without_running_it() {
+    use hara_native::lang::data::delay::Delay;
+    use std::{cell::Cell, rc::Rc};
+    let calls = Rc::new(Cell::new(0));
+    let observed = calls.clone();
+    let delay = Delay::new(move || {
+        observed.set(observed.get() + 1);
+        Ok(42)
+    });
+    let alias = delay.clone();
+    drop(delay);
+    assert_eq!(Rc::strong_count(&calls), 2);
+    drop(alias);
+    assert_eq!(Rc::strong_count(&calls), 1);
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn host_delay_reentrant_realization_fails_without_borrow_panic() {
+    use hara_native::lang::data::delay::Delay;
+    use std::{cell::RefCell, rc::Rc};
+    let slot: Rc<RefCell<Option<Delay<()>>>> = Rc::new(RefCell::new(None));
+    let captured = slot.clone();
+    let delay = Delay::new(move || captured.borrow().as_ref().unwrap().deref_value());
+    *slot.borrow_mut() = Some(delay.clone());
+    assert_eq!(delay.deref_value(), Err("delay realization is recursive".into()));
+    assert!(delay.is_realized());
+    assert_eq!(delay.deref_value(), Err("delay realization is recursive".into()));
+    slot.borrow_mut().take();
+    assert_eq!(Rc::strong_count(&slot), 1);
+}
+
+#[test]
+fn evaluator_accepts_single_clause_functions_but_requires_a_body() {
+    let mut runtime = Runtime::core();
+    assert_eq!(runtime.eval_native("((fn ([value] value)) 7)").unwrap(), "7");
+    for source in ["(fn)", "(fn [])", "(fn ())", "(fn ([]))"] {
+        assert!(runtime.eval_native(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn direct_native_caller_evaluation_preserves_lexical_function_bindings() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.register_resource(
+        "example.context-owner",
+        "(ns example.context-owner)
+         (defn helper [value] (+ value 100))
+         (defn lexical [value] (helper value))
+         (defn current [] (Base/current-namespace))
+         (defn evaluate [form] (Runtime/eval form))",
+    );
+    assert_eq!(
+        runtime.eval_native(
+            "(ns example.context-caller (:require [example.context-owner :as owner]))
+             (defn helper [value] (+ value 9))
+             [(owner/lexical 3)
+              (= (owner/current) (Base/current-namespace))
+              (owner/evaluate '(helper 3))]"
+        ).unwrap(),
+        "[103 true 12]"
+    );
+    assert_eq!(
+        runtime.eval_native(
+            "(let [template (example.context-owner/evaluate '(fn [value] (helper value)))]
+               (template 4))"
+        ).unwrap(),
+        "13"
+    );
+    assert!(runtime.eval_native(
+        "(example.context-owner/evaluate '(throw (ex :context/failure {})))"
+    ).is_err());
+    assert_eq!(runtime.eval_native("(helper 5)").unwrap(), "14");
+    assert_eq!(runtime.eval_native(
+        "(let [template (example.context-owner/evaluate '(fn ([value] (helper value))))]
+           (template 2))"
+    ).unwrap(), "11");
+    assert!(runtime.eval_native("(Runtime/eval '(fn []))").is_err());
+    assert_eq!(runtime.eval_native(
+        "(let [template (example.context-owner/evaluate
+                          '(fn ([value] (helper value))
+                               ([value other] (+ value other))
+                               ([value other & remaining] remaining)))]
+           [(template 1) (template 2 3) (template 2 3 4 5)])"
+    ).unwrap(), "[10 5 (4 5)]");
+    assert_eq!(runtime.eval_native(
+        "[(example.context-owner/evaluate
+            '(Runtime/eval-in 'example.context-owner '[(Runtime/eval '(helper 1))]))
+          (example.context-owner/evaluate '(helper 1))]"
+    ).unwrap(), "[101 10]");
+}
+
+#[test]
 fn macro_arguments_preserve_unqualified_division() {
     let registry = hara_native::core::minimal_namespace_registry();
     hara_native::core::install_foundation_intrinsics(&registry);

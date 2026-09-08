@@ -110,6 +110,20 @@ fn assoc_accepts_a_bytecode_closure_as_the_replacement() {
     );
 }
 
+#[test]
+fn quoted_constants_preserve_distinct_nested_symbol_metadata() {
+    assert_eq!(
+        eval("(std.native.Base/vector \
+          (std.protocol.iobjtype.IObjType/meta \
+            (std.protocol.ilookup.ILookup/lookup '[^{:tag :int} x] 0)) \
+          (std.protocol.iobjtype.IObjType/meta \
+            (std.protocol.ilookup.ILookup/lookup '[^{:- :double} x] 0)) \
+          (std.protocol.iobjtype.IObjType/meta \
+            (std.protocol.ilookup.ILookup/lookup '[x] 0)))"),
+        "[{:tag :int} {:- :double} nil]"
+    );
+}
+
 /// Runtime errors append `(instruction NNNN)` to the display; compare the
 /// stable message-and-position prefix.
 fn assert_eval_error(source: &str, expected_prefix: &str) {
@@ -707,6 +721,20 @@ fn closures_capture_lexical_environment() {
         eval("(loop [i 0 acc 0] (if (< i 5) (recur (+ i 1) ((fn [x] (+ x i)) acc)) acc))"),
         "10"
     );
+}
+
+#[test]
+fn immediate_variadic_calls_do_not_inherit_caller_captures() {
+    assert_eq!(
+        eval("(let [make (fn [captured] (fn [] ((fn [& args] 1) captured)))] ((make 7)))"),
+        "1"
+    );
+    // Captures used after the immediate call still belong only to the caller.
+    assert_eq!(
+        eval("(let [make (fn [captured] (fn [] ((fn [& args] 1)) captured))] ((make 7)))"),
+        "7"
+    );
+    assert_eq!(eval("((fn [& args] 42) 7)"), "42");
 }
 
 #[test]
@@ -1412,6 +1440,48 @@ fn cancelling_async_result_propagates_to_the_pending_host_promise() {
         result.state(),
         PromiseState::Rejected(error) if error.is_cancelled()
     ));
+}
+
+#[test]
+fn waiting_async_result_drives_successive_host_waiters() {
+    let registry = NamespaceRegistry::new("user");
+    let waits = Rc::new(Cell::new(0));
+    for (name, value) in [("first", 7), ("second", 9)] {
+        let source = Promise::new();
+        let weak = source.downgrade();
+        let observed = waits.clone();
+        source.set_waiter(Rc::new(move || {
+            observed.set(observed.get() + 1);
+            if let Some(source) = weak.upgrade() {
+                source.resolve(Value::Number(value));
+            }
+        }));
+        registry
+            .find_or_create("user")
+            .intern(name, Value::Promise(source));
+    }
+    let program = compile_source_with(
+        "(do (defn ^:async answer [] (+ (std.native.Coroutine/await first) (std.native.Coroutine/await second))) (answer))",
+        &registry,
+    ).unwrap();
+    let Value::Promise(result) = crate::core::with_namespace_registry(&registry, || {
+        execute_program_with_globals(Rc::new(program), &registry)
+    })
+    .unwrap() else {
+        panic!("async call must return a promise")
+    };
+    assert_eq!(result.state(), PromiseState::Pending);
+    assert_eq!(waits.get(), 0, "polling must not invoke blocking waiters");
+    assert_eq!(
+        crate::core::with_namespace_registry(&registry, || result.wait_state()),
+        PromiseState::Fulfilled(Value::Number(16))
+    );
+    assert_eq!(waits.get(), 2);
+    assert_eq!(
+        crate::core::with_namespace_registry(&registry, || result.wait_state()),
+        PromiseState::Fulfilled(Value::Number(16))
+    );
+    assert_eq!(waits.get(), 2, "settled results must not replay host waits");
 }
 
 #[test]
