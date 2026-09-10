@@ -218,7 +218,20 @@ impl Machine {
                         format!("intrinsic target constant {target} is invalid"),
                     ));
                 };
-                let Some(value) = crate::core::direct_function_value(name) else {
+                // Intrinsics used as values share the Foundation Var's callable,
+                // just as interpreter lookup does. Allocating a new wrapper on
+                // every read breaks identity-based tags and collection keys.
+                // Registry-free VM execution still uses the primitive fallback.
+                let value = crate::core::namespace_registry()
+                    .ok()
+                    .and_then(|registry| {
+                        registry.resolve(&crate::lang::data::Symbol::parse(&format!(
+                            "std.foundation/{name}"
+                        )))
+                    })
+                    .map(|var| var.deref_value())
+                    .or_else(|| crate::core::direct_function_value(name));
+                let Some(value) = value else {
                     return Dispatch::Failed(self.error(
                         function,
                         format!("missing direct intrinsic callable: {name}"),

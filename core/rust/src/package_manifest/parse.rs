@@ -679,6 +679,7 @@ fn descriptor_key(value: &Form) -> Option<String> {
 
 fn canonical_form(value: &Form) -> Form {
     match value {
+        Form::RuntimeLiteral(value) => Form::RuntimeLiteral(value.clone()),
         Form::Nil => Form::Nil,
         Form::Bool(value) => Form::Bool(*value),
         Form::Number(value) => Form::Number(*value),

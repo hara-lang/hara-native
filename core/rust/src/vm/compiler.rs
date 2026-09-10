@@ -246,7 +246,7 @@ fn compile_spanned_forms_with_config(
     compile_spanned_forms_with_config_options(forms, registry, config, prepare_namespaces, false)
 }
 
-fn compile_spanned_forms_with_config_options(
+pub(crate) fn compile_spanned_forms_with_config_options(
     forms: &[SpannedForm],
     registry: &crate::kernel::NamespaceRegistry<crate::core::Value>,
     mut config: crate::kernel::GeneratedNamespaceConfig,
@@ -527,6 +527,9 @@ struct Compiler {
     /// visible to global references compiled after their defining form
     /// (issue #223 two-phase visibility).
     globals: Vec<String>,
+    /// Ordinary definitions already encountered in this compilation shadow
+    /// macros even before their DefGlobal instructions have executed.
+    macro_shadows: HashSet<String>,
     /// Foundation child libraries explicitly removed by the source namespace config.
     /// This is checked before the process-wide global alias registry so an
     /// excluded `str/` (or equivalent) cannot be resurrected by lookup.
@@ -622,6 +625,7 @@ impl Compiler {
                 fallthrough: true,
             }],
             globals: Vec::new(),
+            macro_shadows: HashSet::new(),
             excluded_foundation_libraries,
             allow_unbound_globals,
             inline_globals: HashMap::new(),
@@ -862,7 +866,18 @@ impl Compiler {
                 Some(Form::Symbol(name))
                     if name == "quote" || name == "syntax-quote" || name == "comment"
             );
-            if !protected {
+            let shadowed = match values.first() {
+                Some(Form::Symbol(name)) => {
+                    let local = match name.split_once('/') {
+                        Some((owner, local)) if owner == self.namespace || owner == "-" => Some(local),
+                        Some(_) => None,
+                        None => Some(name.as_str()),
+                    };
+                    local.is_some_and(|local| self.macro_shadows.contains(local))
+                }
+                _ => false,
+            };
+            if !protected && !shadowed {
                 let expanded = crate::core::vm_macroexpand(form).map_err(|message| {
                     CompileError::new(CompileErrorKind::UnsupportedForm, message, Some(span.start))
                 })?;
@@ -873,6 +888,12 @@ impl Compiler {
             }
         }
         match form {
+            Form::RuntimeLiteral(_) => {
+                let value = crate::core::form_to_value(form).map_err(|message| {
+                    CompileError::new(CompileErrorKind::UnsupportedForm, message, Some(span.start))
+                })?;
+                self.unique_constant(value, span)
+            }
             Form::Nil => {
                 self.emit(Instruction::Nil, Some(span.start));
                 Ok(())
@@ -1646,7 +1667,7 @@ fn constant_form(form: &Form) -> bool {
         Form::Map(entries) => entries
             .iter()
             .all(|(key, value)| constant_form(key) && constant_form(value)),
-        Form::Symbol(_) | Form::List(_) => false,
+        Form::RuntimeLiteral(_) | Form::Symbol(_) | Form::List(_) => false,
     }
 }
 

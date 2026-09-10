@@ -658,6 +658,7 @@ fn collect<'a, K, V>(node: &'a Node<K, V>, out: &mut Vec<(&'a K, &'a V)>) {
 
 #[derive(Debug, Clone)]
 pub struct Standard<K, V> {
+    identity: Rc<()>,
     metadata: Option<Rc<crate::lang::data::Metadata>>,
     root: Rc<Node<K, V>>,
     size: usize,
@@ -665,6 +666,7 @@ pub struct Standard<K, V> {
 impl<K, V> Default for Standard<K, V> {
     fn default() -> Self {
         Self {
+            identity: Rc::new(()),
             metadata: None,
             root: Node::empty(),
             size: 0,
@@ -691,6 +693,7 @@ impl<K: Clone + Eq + Hash, V: Clone> Standard<K, V> {
         let mut root = self.root.clone();
         let added = assoc_node(&mut root, None, 0, key_hash(&key), key, value);
         Self {
+            identity: Rc::new(()),
             metadata: self.metadata.clone(),
             root,
             size: self.size + usize::from(added),
@@ -700,6 +703,7 @@ impl<K: Clone + Eq + Hash, V: Clone> Standard<K, V> {
     /// persistent aliases immutable while allowing uniquely owned paths to be
     /// updated without first cloning every node on the path.
     pub fn assoc_value_owned(mut self, key: K, value: V) -> Self {
+        self.identity = Rc::new(());
         let added = assoc_node(&mut self.root, Some(0), 0, key_hash(&key), key, value);
         self.size += usize::from(added);
         self
@@ -712,6 +716,7 @@ impl<K: Clone + Eq + Hash, V: Clone> Standard<K, V> {
         let mut root = self.root.clone();
         without_present(&mut root, None, 0, hash, key);
         Self {
+            identity: Rc::new(()),
             metadata: self.metadata.clone(),
             root,
             size: self.size - 1,
@@ -727,6 +732,11 @@ impl<K: Clone + Eq + Hash, V: Clone> Standard<K, V> {
     }
     pub fn shares_root_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.root, &other.root)
+    }
+
+    /// Runtime reference copies retain identity; reconstructed maps do not.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
     }
 }
 impl<K: Clone + Eq + Hash, V: Clone> FromIterator<(K, V)> for Standard<K, V> {
@@ -805,6 +815,7 @@ impl<K: Clone + Eq + Hash, V: Clone> IMetadata for Standard<K, V> {
     }
     fn with_meta(&self, metadata: Option<Self::Metadata>) -> Self {
         Self {
+            identity: Rc::new(()),
             metadata,
             ..self.clone()
         }
@@ -952,6 +963,29 @@ mod tests {
     use crate::lang::protocol::{IEmpty, IMetadata, IToMutable, IToPersistent};
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
+
+    #[test]
+    fn identity_tracks_objects_not_shared_roots_and_releases_with_last_alias() {
+        let original = Standard::<i32, i32>::new().assoc_value(1, 2);
+        let alias = original.clone();
+        let lifetime = std::rc::Rc::downgrade(&original.identity);
+        assert!(original.same_identity(&alias));
+        assert!(!original.same_identity(&Standard::new().assoc_value(1, 2)));
+        let metadata_copy = original.with_meta(None);
+        assert!(original.shares_root_with(&metadata_copy));
+        assert!(!original.same_identity(&metadata_copy));
+        let updated = alias.clone().assoc_value_owned(1, 3);
+        assert!(!original.same_identity(&updated));
+        assert_eq!(original.get(&1), Some(&2));
+        assert_eq!(updated.get(&1), Some(&3));
+        assert!(!original.same_identity(&original.dissoc_value(&1)));
+        let empty = Standard::<i32, i32>::new();
+        assert!(!empty.same_identity(&Standard::new()));
+        drop(original);
+        assert!(lifetime.upgrade().is_some());
+        drop(alias);
+        assert!(lifetime.upgrade().is_none());
+    }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     struct Collision(i32);

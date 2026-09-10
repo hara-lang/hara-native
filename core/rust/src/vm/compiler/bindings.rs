@@ -33,6 +33,7 @@ impl Compiler {
         let (name, metadata) = binding_symbol(children[1].form, "def name")
             .map_err(|message| unsupported(message, children[1].span.start))?;
         self.require_owned_global(&name, children[1].span)?;
+        let macro_value = metadata.as_ref().is_some_and(|value| value.flag("macro"));
         let metadata = self.var_metadata(metadata);
         let initializer = &children[2];
         self.compile_form(
@@ -45,6 +46,9 @@ impl Compiler {
             return Ok(());
         }
         self.declare_program_global(&name);
+        if !macro_value {
+            self.macro_shadows.insert(name.clone());
+        }
         let name_index = self.name_constant(&name, children[1].span)?;
         self.emit(
             Instruction::DefGlobal {

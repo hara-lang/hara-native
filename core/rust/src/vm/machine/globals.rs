@@ -74,10 +74,9 @@ impl Machine {
         };
         let var = crate::core::vm_resolve_global(name)?;
         let value = var.deref_value();
-        let slot = Machine::callable_key(&value)
-            .and_then(|key| self.vm_globals.get(&key).cloned())
-            .unwrap_or_else(|| value.into());
-        self.stack.push(slot);
+        // A value read must preserve the Var's callable identity. Recover the
+        // optimized VM closure only at invocation, not while building data.
+        self.stack.push(value.into());
         Ok(())
     }
 

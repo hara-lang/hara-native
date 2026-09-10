@@ -42,6 +42,7 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
         ));
     }
     match form {
+        Form::RuntimeLiteral(_) => literal_value(form),
         Form::Number(v) => Ok(Value::Number(*v)),
         Form::String(v) => Ok(Value::String(v.clone())),
         Form::Keyword(v) => Ok(Value::Keyword(v.clone().into())),
@@ -84,13 +85,21 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
             literal_value(value)?,
         )))),
         Form::Metadata(metadata, value) => {
+            let mut evaluate = || {
+                let expanded = macroexpand_once(form, env)?;
+                if expanded != *form {
+                    eval(&expanded, env)
+                } else {
+                    eval(value, env)
+                }
+            };
             if let Some((line, column)) = exception_location_from_metadata(metadata) {
                 with_exception_site(
                     exception_site_at(line, column).expect("exception site always exists"),
-                    || eval(value, env),
+                    evaluate,
                 )
             } else {
-                eval(value, env)
+                evaluate()
             }
         }
         Form::List(fs)
@@ -954,7 +963,7 @@ pub fn eval(form: &Form, env: &mut HashMap<String, Value>) -> Result<Value, Stri
                 }
                 _ => {
                     if let Form::Symbol(name) = &fs[0] {
-                        if let Some(expanded) = macroexpand_call(name, fs, env)? {
+                        if let Some(expanded) = macroexpand_call(name, fs, form, env)? {
                             return eval(&expanded, env);
                         }
                     }

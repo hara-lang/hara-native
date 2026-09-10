@@ -55,7 +55,7 @@ production-key guidance live in [PUBLISHING.md](../../PUBLISHING.md).
 
 ```text
 make test-jvm
-java -jar core/java/target/hara-native-jvm-0.1.27.jar eval "(+ 20 22)"
+java -jar core/java/target/hara-native-jvm-0.1.28.jar eval "(+ 20 22)"
 ```
 
 The Maven suite is explicitly scoped to the native CLI serial runner, HARP
@@ -86,7 +86,7 @@ cases for each portable protocol method. Do not replace these generated cases
 with a hard-coded total or an aggregate "catalog passes" assertion.
 
 `specs/native-protocol-v1.edn` also owns the grouped
-`:coverage :native/portable` list: the 145 deterministic methods promoted from
+`:coverage :native/portable` list: the 147 deterministic methods promoted from
 the prior registry fixture. Generation verifies each name is a live portable
 declaration and appears as a direct call in a native program; a test proves
 that removing one call fails generation. The remaining portable native methods

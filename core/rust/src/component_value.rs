@@ -217,6 +217,9 @@ impl GraphBuilder {
 
     fn append_metadata_value(&mut self, value: &MetadataValue) -> Result<u32, String> {
         match value {
+            MetadataValue::Runtime(_) => {
+                Err("extension/value-unsupported: process-local metadata".into())
+            }
             MetadataValue::Nil => self.push(GraphNode::Nil),
             MetadataValue::Boolean(value) => self.push(GraphNode::Boolean(*value)),
             MetadataValue::Number(value) => self.push(GraphNode::Integer(*value)),

@@ -494,6 +494,7 @@ fn read_metadata(reader: &mut Reader<'_>) -> Result<Rc<Metadata>, String> {
 fn write_metadata_value(out: &mut Writer, value: &MetadataValue) -> Result<(), String> {
     use MetadataValue::*;
     match value {
+        Runtime(_) => return Err("cannot serialize process-local metadata".into()),
         Nil => out.byte(0),
         Boolean(v) => {
             out.byte(1);

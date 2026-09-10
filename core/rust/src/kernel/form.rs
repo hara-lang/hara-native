@@ -1,5 +1,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Form {
+    /// Owned process-local quoted data. Never produced by the reader or encoded.
+    RuntimeLiteral(crate::lang::data::metadata::RuntimeMetadata),
     Nil,
     Bool(bool),
     Number(i64),
@@ -65,6 +67,7 @@ fn display_forms(values: &[Form], start: &str, end: &str) -> String {
 impl std::fmt::Display for Form {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let output = match self {
+            Self::RuntimeLiteral(_) => "#<runtime-literal>".into(),
             Self::Nil => "nil".into(),
             Self::Bool(value) => value.to_string(),
             Self::Number(value) => value.to_string(),
