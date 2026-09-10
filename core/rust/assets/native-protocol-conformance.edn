@@ -3,9 +3,9 @@
 
 {:format :hara-native/native-protocol-conformance-expanded
  :version 1
- :source-sha256 "f753e45c588a84c826f05869f860969c186c01906dbcc998f0e17ded151803f0"
- :binary-sha256 "af0694025aa3af7cedd3f8ec0cd41c6e8bb716019e08a5101dbe4613e1f55338"
- :case-count 417
+ :source-sha256 "eacf128a0e96e2a3731b4c5c623c9dd84e1149267a0e4f7402a23912a2703cac"
+ :binary-sha256 "6fa22db5db227b5e364477669d379908f3c213c8b0d66b61dc03779491162f74"
+ :case-count 418
  :suites
  [{:id :native
   :setup nil
@@ -129,6 +129,9 @@
     :expect {:display "true"}}
    {:id :native/runtime-namespace-and-evaluation-semantics
     :program (let [target (std.native.Runtime/ns-create (std.native.Base/symbol "hnc.runtime-functional")) _ (std.native.Base/def target (std.native.Base/symbol "answer") 42 nil) first (std.native.Runtime/gensym "hnc") second (std.native.Runtime/gensym "hnc")] (std.native.Iter/iter-every? (fn [value] value) (std.native.Iter/iter-take 18 (std.native.Iter/iter-map (fn [pair] (= (std.protocol.inth.INth/nth pair 0) (std.protocol.inth.INth/nth pair 1))) (std.native.Iter/iter-zip [(quote hnc.runtime-functional) (quote hnc.runtime-functional/direct) :std.native.Namespace :std.native.OrderedMap :std.native.OrderedMap :std.native.Symbol :std.native.OrderedMap :std.native.OrderedMap :std.native.Vector :std.native.OrderedMap :std.native.OrderedMap nil 42 3 42 false (quote hnc.runtime-functional/copy) (quote hnc.runtime-functional)] [(std.native.Runtime/ns-name target) (std.native.Runtime/var-sym (std.native.Base/def target (std.native.Base/symbol "direct") 1 nil)) (std.native.Base/type (std.native.Runtime/ns-find (std.native.Base/symbol "hnc.runtime-functional"))) (std.native.Base/type (std.native.Runtime/ns-publics target)) (std.native.Base/type (std.native.Runtime/ns-aliases target)) (std.native.Base/type (std.native.Runtime/current)) (std.native.Base/type (std.native.Runtime/snapshot)) (std.native.Base/type (std.native.Runtime/vars target)) (std.native.Base/type (std.native.Runtime/namespaces)) (std.native.Base/type (std.native.Runtime/namespace target)) (std.native.Base/type (std.native.Runtime/module "classpath:hnc/runtime-functional.hal")) (std.native.Runtime/alias-state (std.native.Base/symbol "missing")) (std.native.Runtime/eval (quote 42)) (std.native.Runtime/eval-in target [(quote 3)]) (std.native.Runtime/macroexpand-1 (quote 42)) (= first second) (std.native.Runtime/var-sym (std.native.Runtime/intern-var target (std.native.Base/symbol "copy") (std.native.Base/def target (std.native.Base/symbol "source") 7 nil))) (std.native.Runtime/ns-name (std.native.Runtime/ns-create (std.native.Base/symbol "hnc.runtime-functional")))])))))
+    :expect {:display "true"}}
+   {:id :native/runtime-intern-and-identity
+    :program (let [target (std.native.Runtime/ns-create (std.native.Base/symbol "hnc.runtime-intern")) value {:answer 42} published (std.native.Runtime/intern target (std.native.Base/symbol "answer") value) same (std.native.Base/identical? value (std.protocol.ideref.IDeref/deref published)) _ (std.native.Runtime/intern target (std.native.Base/symbol "answer") nil)] (= [true true] [same (= nil (std.protocol.ideref.IDeref/deref published))]))
     :expect {:display "true"}}
    {:id :native/printer-capture-and-layout
     :program (= "a1\nb" (std.native.Printer/capture (fn [] (std.native.Printer/p "a") (std.native.Printer/println 1) (std.native.Printer/p "b"))))

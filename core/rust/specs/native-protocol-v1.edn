@@ -37,7 +37,7 @@
    {:type "std.native.Runtime"
     :methods ["load-string" "macroexpand-1" "gensym" "ns-publics" "ns-aliases" "ns-find"
               "ns-create" "ns-name" "var-sym" "current" "snapshot" "vars" "namespaces"
-              "namespace" "module" "alias-state" "intern-var" "eval-in" "eval"]}
+              "namespace" "module" "alias-state" "intern" "intern-var" "eval-in" "eval"]}
    {:type "std.native.Printer"
     :methods ["p" "println" "capture"]}
    {:type "std.native.Document"
@@ -69,7 +69,7 @@
     :methods ["new" "message" "class"]}
    {:type "std.native.Base"
     :methods ["list" "vector" "vec" "set" "hash-map" "hash-set" "map-entry" "bytes" "atom" "delay"
-              "pointer" "symbol" "keyword" "uuid" "reduced" "unreduced" "hash"
+              "pointer" "symbol" "keyword" "uuid" "identical?" "reduced" "unreduced" "hash"
               "apply" "resolve" "namespace" "current-namespace" "select-namespace" "def"
               "struct" "mutable" "protocol" "with-declaration" "extend" "multimethod" "method"
               "field" "number?" "long?" "satisfies?"
@@ -716,6 +716,19 @@
                         (std.native.Base/def target (std.native.Base/symbol "source") 7 nil)))
                     (std.native.Runtime/ns-name
                       (std.native.Runtime/ns-create (std.native.Base/symbol "hnc.runtime-functional")))])))))
+     :expect {:display "true"}}
+    {:id :native/runtime-intern-and-identity
+     :program (let [target (std.native.Runtime/ns-create
+                             (std.native.Base/symbol "hnc.runtime-intern"))
+                    value {:answer 42}
+                    published (std.native.Runtime/intern
+                                target (std.native.Base/symbol "answer") value)
+                    same (std.native.Base/identical?
+                           value (std.protocol.ideref.IDeref/deref published))
+                    _ (std.native.Runtime/intern
+                        target (std.native.Base/symbol "answer") nil)]
+                (= [true true]
+                   [same (= nil (std.protocol.ideref.IDeref/deref published))]))
      :expect {:display "true"}}
     {:id :native/printer-capture-and-layout
      :program (= "a1\nb"
