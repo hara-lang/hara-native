@@ -679,6 +679,7 @@ fn unknown_type() -> SchemaType {
 
 fn infer_expression(form: &Form, environment: &mut HashMap<String, SchemaType>) -> SchemaType {
     match super::super::core::form_without_metadata(form) {
+        Form::RuntimeLiteral(_) => unknown_type(),
         Form::Nil => SchemaType::Primitive("nil".into()),
         Form::Bool(_) => SchemaType::Primitive("bool".into()),
         Form::Number(_) => SchemaType::Primitive("long".into()),

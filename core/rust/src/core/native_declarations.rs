@@ -158,7 +158,7 @@ pub(crate) mod declarations {
         methods = [
             "load-string", "macroexpand-1", "gensym", "ns-publics", "ns-aliases", "ns-find", "ns-create", "ns-name", "var-sym",
             "current", "snapshot", "vars", "namespaces", "namespace", "module", "alias-state",
-            "intern-var", "eval-in", "eval"
+            "intern", "intern-var", "eval-in", "eval"
         ],
         provider = native_runtime_provider
     )]
@@ -240,7 +240,7 @@ pub(crate) mod declarations {
         name = "Base",
         methods = [
             "list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "atom", "delay", "bytes", "pointer", "symbol",
-            "keyword", "uuid", "reduced", "unreduced", "hash", "apply", "resolve",
+            "keyword", "uuid", "identical?", "reduced", "unreduced", "hash", "apply", "resolve",
             "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "with-declaration", "extend", "multimethod", "method", "field",
             "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"
         ],

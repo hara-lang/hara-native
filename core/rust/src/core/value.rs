@@ -2123,6 +2123,31 @@ fn register_macro(namespace: &str, name: &str, function: Rc<Function>) -> Result
 }
 
 fn resolve_macro_in(namespace: &str, name: &str) -> Option<Rc<Function>> {
+    // A mapped Var is authoritative: interning can replace its callback or
+    // disable macro metadata without replacing the namespace's cached entry.
+    // This also keeps ordinary referrals in sync with their source Var.
+    if let Some(variable) = namespace_registry()
+        .ok()
+        .and_then(|registry| registry.find(namespace))
+        .and_then(|namespace| namespace.resolve(&Symbol::parse(name)))
+    {
+        let declared_macro = variable.hara_metadata().and_then(|metadata| {
+            match metadata.get_keyword("macro") {
+                Some(MetadataValue::Boolean(value)) => Some(*value),
+                _ => None,
+            }
+        });
+        if declared_macro == Some(false) {
+            return None;
+        }
+        return match variable.deref_value() {
+            Value::Function(function) if function.is_macro || declared_macro == Some(true) => {
+                Some(function)
+            }
+            _ => None,
+        };
+    }
+    // Macro-only imports can have a registry entry without a value referral.
     ACTIVE_MACROS.with(|active| {
         active.borrow().as_ref().and_then(|macros| {
             macros
@@ -2148,10 +2173,15 @@ pub(crate) fn resolve_macro(name: &str) -> Option<Rc<Function>> {
         });
         return resolve_macro_in(resolved.as_deref().unwrap_or(namespace), local);
     }
-    let current = namespace_registry()
-        .map(|registry| registry.current().name().as_str().to_owned())
-        .ok()?;
-    resolve_macro_in(&current, name).or_else(|| resolve_macro_in("std.foundation", name))
+    let current = namespace_registry().ok()?.current();
+    let local = resolve_macro_in(current.name().as_str(), name);
+    // A local function, value, or ordinary referral shadows a prelude macro.
+    // None means "not a macro" here, not necessarily "name is absent".
+    if current.resolve(&Symbol::parse(name)).is_some() {
+        local
+    } else {
+        local.or_else(|| resolve_macro_in("std.foundation", name))
+    }
 }
 
 fn gensym(prefix: &str) -> String {
@@ -2167,8 +2197,9 @@ pub(crate) fn form_to_value(form: &Form) -> Result<Value, String> {
     literal_value(form)
 }
 
-fn metadata_value_to_form(value: &MetadataValue) -> Form {
-    match value {
+fn metadata_value_to_form(value: &MetadataValue) -> Result<Form, String> {
+    Ok(match value {
+        MetadataValue::Runtime(_) => return Err("cannot use process-local metadata as code".into()),
         MetadataValue::Nil => Form::Nil,
         MetadataValue::Boolean(value) => Form::Bool(*value),
         MetadataValue::Number(value) => Form::Number(*value),
@@ -2177,27 +2208,44 @@ fn metadata_value_to_form(value: &MetadataValue) -> Form {
         MetadataValue::Character(value) => Form::Character(*value),
         MetadataValue::Regex(value) => Form::Regex(value.clone()),
         MetadataValue::Tagged(tag, value) => {
-            Form::Tagged(tag.clone(), Box::new(metadata_value_to_form(value)))
+            Form::Tagged(tag.clone(), Box::new(metadata_value_to_form(value)?))
         }
         MetadataValue::String(value) => Form::String(value.clone()),
         MetadataValue::Keyword(value) => Form::Keyword(value.as_str().into()),
         MetadataValue::Symbol(value) => Form::Symbol(value.as_str().into()),
         MetadataValue::Vector(values) => {
-            Form::Vector(values.iter().map(metadata_value_to_form).collect())
+            Form::Vector(values.iter().map(metadata_value_to_form).collect::<Result<_, _>>()?)
         }
         MetadataValue::List(values) => {
-            Form::List(values.iter().map(metadata_value_to_form).collect())
+            Form::List(values.iter().map(metadata_value_to_form).collect::<Result<_, _>>()?)
         }
         MetadataValue::Set(values) => {
-            Form::Set(values.iter().map(metadata_value_to_form).collect())
+            Form::Set(values.iter().map(metadata_value_to_form).collect::<Result<_, _>>()?)
         }
         MetadataValue::Map(values) => Form::Map(
             values
                 .iter()
-                .map(|(key, value)| (metadata_value_to_form(key), metadata_value_to_form(value)))
-                .collect(),
+                .map(|(key, value)| Ok((metadata_value_to_form(key)?, metadata_value_to_form(value)?)))
+                .collect::<Result<_, String>>()?,
         ),
+    })
+}
+
+fn sequence_value_to_form<'a>(values: impl Iterator<Item = &'a Value>) -> Result<Form, String> {
+    let values = values.collect::<Vec<_>>();
+    if let [Value::Symbol(symbol), data] = values.as_slice() {
+        if symbol.as_str() == "quote" {
+            // Quoted runtime data is not executable source. Keep its ownership
+            // and identity when the portable Form representation cannot carry it.
+            let literal = value_to_form(data).unwrap_or_else(|_| {
+                Form::RuntimeLiteral(crate::lang::data::metadata::RuntimeMetadata::new(
+                    (*data).clone(),
+                ))
+            });
+            return Ok(Form::List(vec![Form::Symbol("quote".into()), literal]));
+        }
     }
+    Ok(Form::List(values.into_iter().map(value_to_form).collect::<Result<_, _>>()?))
 }
 
 pub(crate) fn value_to_form(value: &Value) -> Result<Form, String> {
@@ -2220,12 +2268,7 @@ pub(crate) fn value_to_form(value: &Value) -> Result<Form, String> {
             "ptr".into(),
             Box::new(value_to_form(&Value::Map(value.descriptor()))?),
         )),
-        Value::List(values) => Ok(Form::List(
-            values
-                .iter()
-                .map(|v| value_to_form(v))
-                .collect::<Result<_, _>>()?,
-        )),
+        Value::List(values) => sequence_value_to_form(values.iter()),
         Value::Queue(values) => Ok(Form::List(
             values
                 .iter()
@@ -2238,12 +2281,10 @@ pub(crate) fn value_to_form(value: &Value) -> Result<Form, String> {
                 .map(|v| value_to_form(v))
                 .collect::<Result<_, _>>()?,
         )),
-        Value::Cons(values) => Ok(Form::List(
-            values
-                .iter()
-                .map(|v| value_to_form(&v))
-                .collect::<Result<_, _>>()?,
-        )),
+        Value::Cons(values) => {
+            let values = values.iter().collect::<Vec<_>>();
+            sequence_value_to_form(values.iter())
+        }
         Value::Vector(values) => Ok(Form::Vector(
             values
                 .iter()
@@ -2289,7 +2330,7 @@ pub(crate) fn value_to_form(value: &Value) -> Result<Form, String> {
         Some(metadata) => Form::Metadata(
             Box::new(metadata_value_to_form(&MetadataValue::Map(
                 metadata.entries().to_vec(),
-            ))),
+            ))?),
             Box::new(form),
         ),
         None => form,
@@ -2343,6 +2384,7 @@ fn macro_environment(env: &HashMap<String, Value>) -> Result<Value, String> {
 fn macroexpand_call(
     name: &str,
     invocation: &[Form],
+    full_invocation: &Form,
     env: &mut HashMap<String, Value>,
 ) -> Result<Option<Form>, String> {
     let function = match resolve_macro(name) {
@@ -2350,7 +2392,7 @@ fn macroexpand_call(
         None => return Ok(None),
     };
     let mut arguments = Vec::with_capacity(invocation.len() + 1);
-    arguments.push(form_to_value(&Form::List(invocation.to_vec()))?);
+    arguments.push(form_to_value(full_invocation)?);
     arguments.push(macro_environment(env)?);
     for form in &invocation[1..] {
         arguments.push(form_to_value(form)?);
@@ -2358,7 +2400,7 @@ fn macroexpand_call(
     let expansion = call_function(&function, arguments)?;
     let expansion = value_to_form(&expansion)?;
     #[cfg(feature = "evaluation-journal")]
-    evaluation_journal_macro(name, &Form::List(invocation.to_vec()), &expansion);
+    evaluation_journal_macro(name, full_invocation, &expansion);
     Ok(Some(expansion))
 }
 
@@ -2387,10 +2429,10 @@ fn macro_clause_with_implicit_params(clause: &Form) -> Result<Form, String> {
 }
 
 fn macroexpand_once(form: &Form, env: &mut HashMap<String, Value>) -> Result<Form, String> {
-    match form {
+    match form_without_metadata(form) {
         Form::List(values) if !values.is_empty() => {
             if let Form::Symbol(name) = &values[0] {
-                if let Some(expanded) = macroexpand_call(name, values, env)? {
+                if let Some(expanded) = macroexpand_call(name, values, form, env)? {
                     return Ok(expanded);
                 }
             }

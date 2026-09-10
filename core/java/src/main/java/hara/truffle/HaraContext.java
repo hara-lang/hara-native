@@ -683,6 +683,7 @@ public final class HaraContext {
     runtime.define("namespace", new UnaryBuiltin("std.native.Runtime/namespace", this::environmentNamespace));
     runtime.define("module", new UnaryBuiltin("std.native.Runtime/module", this::environmentModule));
     runtime.define("alias-state", new VariadicBuiltin("std.native.Runtime/alias-state", this::namespaceAliasState));
+    runtime.define("intern", new VariadicBuiltin("std.native.Runtime/intern", this::internValue));
     runtime.define("intern-var", new VariadicBuiltin("std.native.Runtime/intern-var", this::internVar));
     runtime.define("eval-in", new VariadicBuiltin("std.native.Runtime/eval-in", this::evalInNamespace));
     runtime.define("eval", new UnaryBuiltin("std.native.Runtime/eval", this::evalForm));
@@ -3500,6 +3501,7 @@ public final class HaraContext {
             value -> protocolCall("INamespaced", "namespace", new Object[] {value})));
     target.define("in-ns", new UnaryBuiltin("in-ns", this::inNamespace));
     target.define("ns-aliases", new UnaryBuiltin("ns-aliases", this::namespaceAliases));
+    target.define("intern", new VariadicBuiltin("intern", this::internValue));
     target.define("intern-var", new VariadicBuiltin("intern-var", this::internVar));
     target.define("ns-state", new UnaryBuiltin("ns-state", this::namespaceState));
     target.define("ns-loaded?", new UnaryBuiltin("ns-loaded?", this::namespaceLoaded));
@@ -3972,6 +3974,16 @@ public final class HaraContext {
         "uuid?",
         new UnaryBuiltin("uuid?", value -> HaraBox.unwrap(value) instanceof java.util.UUID));
     target.define("uuid", new VariadicBuiltin("Base/uuid", this::uuidValue));
+    target.define("identical?", new VariadicBuiltin("Base/identical?", values -> {
+      if (values.length != 2) throw new HaraException("Base/identical? expects two objects");
+      Object left = HaraBox.unwrap(values[0]);
+      Object right = HaraBox.unwrap(values[1]);
+      if (!(left instanceof hara.lang.data.Map<?, ?> || left instanceof HaraStruct)
+          || !(right instanceof hara.lang.data.Map<?, ?> || right instanceof HaraStruct)) {
+        throw new HaraException("Base/identical? expects map or record objects");
+      }
+      return left == right;
+    }));
     target.define(
         "regexp?",
         new UnaryBuiltin(
@@ -8083,6 +8095,22 @@ public final class HaraContext {
     return Symbol.create(name);
   }
 
+  private Object internValue(Object[] values) {
+    if (values.length != 3) {
+      throw new HaraException("intern expects namespace, symbol, and value");
+    }
+    String namespaceName = namespaceIdentifier(values[0], "intern");
+    Object rawSymbol = HaraBox.unwrap(values[1]);
+    if (!(rawSymbol instanceof Symbol symbol) || symbol.getNamespace() != null) {
+      throw new HaraException("intern expects an unqualified target symbol");
+    }
+    var destination = namespace(namespaceName);
+    HaraVar existing = destination.vars.get(symbol.getName());
+    IMetadata metadata = symbol.meta() != null ? symbol.meta()
+        : existing != null && namespaceName.equals(existing.namespaceName()) ? existing.meta() : null;
+    return destination.define(symbol.getName(), values[2], metadata, HaraVar.Origin.SOURCE);
+  }
+
   private Object internVar(Object[] values) {
     if (values.length != 3 && values.length != 4) {
       throw new HaraException("intern-var expects namespace, symbol, var, and optional metadata");
@@ -8175,12 +8203,14 @@ public final class HaraContext {
       throw new HaraException("eval-in-ns requires an existing namespace: " + target);
     }
     Object forms = HaraBox.unwrap(values[1]);
-    if (!(forms instanceof ILinearType<?>)) {
-      throw new HaraException("eval-in-ns expects a vector or list of forms");
+    boolean callable = isNativeFunctionValue(forms);
+    if (!callable && !(forms instanceof ILinearType<?>)) {
+      throw new HaraException("eval-in-ns expects a vector or list of forms or a zero-argument function");
     }
     HaraNamespace previous = currentNamespace;
     try {
       currentNamespace = namespaces.get(target);
+      if (callable) return invokeCallable(forms, new Object[0]);
       Object result = null;
       for (Object form : (ILinearType<?>) forms) {
         result = evaluationRuntime.evalForm(form, "<with-ns>");

@@ -18,7 +18,9 @@ final class Evaluator {
 
   Object evalSource(String sourceText, String name) {
     try {
-      Source source = Source.newBuilder(HaraLanguage.ID, sourceText, name).build();
+      // Dynamic evaluation resolves names in the current namespace. A cached
+      // parse of identical text may contain bindings from a different scope.
+      Source source = Source.newBuilder(HaraLanguage.ID, sourceText, name).cached(false).build();
       return executor.execute(source);
     } catch (RuntimeException error) {
       if (error instanceof HaraException) {

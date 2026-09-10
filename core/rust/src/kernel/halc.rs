@@ -385,6 +385,7 @@ fn write_metadata(output: &mut Vec<u8>, metadata: Option<&Form>) {
 #[cfg(any(test, feature = "halc-encoder"))]
 fn write_value_with_metadata(output: &mut Vec<u8>, form: &Form, metadata: Option<&Form>) {
     match form {
+        Form::RuntimeLiteral(_) => unreachable!("process-local literal passed encoder validation"),
         Form::Nil => output.push(NIL),
         Form::Bool(false) => output.push(FALSE),
         Form::Bool(true) => output.push(TRUE),
@@ -486,6 +487,7 @@ pub fn encode_halc_module(
 #[cfg(any(test, feature = "halc-encoder"))]
 fn validate_finite_form(form: &Form) -> Result<(), String> {
     match form {
+        Form::RuntimeLiteral(_) => Err("cannot serialize process-local literal".into()),
         Form::Float(value) if !value.is_finite() => Err("non-finite number".into()),
         Form::Tagged(_, value) => validate_finite_form(value),
         Form::Metadata(metadata, value) => {
@@ -859,6 +861,20 @@ fn collect_local_schema_references(form: &Form, namespace: &str, output: &mut Ve
 mod tests {
     use super::*;
     use crate::kernel::parse;
+
+    #[test]
+    fn process_local_quoted_literals_cannot_be_serialized() {
+        let callback = crate::core::native_function("held", 0, |_| Ok(crate::core::Value::Number(42)));
+        let quoted = Form::List(vec![
+            Form::Symbol("quote".into()),
+            Form::RuntimeLiteral(crate::lang::data::metadata::RuntimeMetadata::new(callback)),
+        ]);
+        assert_eq!(encode_halc_module("quote.owner", "quote/owner.hal", "", vec![quoted])
+            .unwrap_err(), "cannot serialize process-local literal");
+        let forms = vec![parse("'(1 2)").unwrap()];
+        let bytes = encode_halc_module("quote.owner", "quote/owner.hal", "'(1 2)", forms.clone()).unwrap();
+        assert_eq!(decode_halc(&bytes).unwrap().forms, forms);
+    }
 
     fn artifact_payload(forms: Vec<Form>) -> Vec<u8> {
         encode_halc_module("demo.ns", "demo.hal", "", forms).unwrap()

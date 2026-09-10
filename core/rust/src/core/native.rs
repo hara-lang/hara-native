@@ -3363,7 +3363,7 @@ fn native_runtime_values(
             if !values.is_empty() {
                 return Err("std.native.Runtime/current expects no arguments".into());
             }
-            Ok(Value::Symbol(registry.current().name().clone()))
+            Ok(Value::Symbol(Symbol::from(evaluation_namespace()?)))
         }
         "snapshot" => {
             if !values.is_empty() {
@@ -3522,8 +3522,14 @@ fn native_runtime_values(
                 return Err("std.native.Runtime/macroexpand-1 expects one form".into());
             }
             let form = value_to_form(&values[0])?;
-            let mut environment = current_namespace_environment()?;
-            form_to_value(&macroexpand_once(&form, &mut environment)?)
+            let target = evaluation_namespace()?;
+            let namespace = registry
+                .find(&target)
+                .ok_or_else(|| format!("No such namespace: {target}"))?;
+            with_base_namespace(&Value::Namespace(Rc::new(namespace)), operation, || {
+                let mut environment = current_namespace_environment()?;
+                form_to_value(&macroexpand_once(&form, &mut environment)?)
+            })
         }
         "gensym" => {
             let prefix = match values.as_slice() {
@@ -3549,6 +3555,13 @@ fn native_runtime_values(
                     "std.native.Runtime/eval-in requires an existing namespace: {target}"
                 ));
             }
+            // Keep the callable's captured environment and lexical namespace.
+            // Only dynamic namespace observations and evaluation use the target.
+            if matches!(&values[1], Value::Function(_)) {
+                return with_evaluation_namespace(target, || {
+                    call_value(values[1].clone(), Vec::new())
+                });
+            }
             let forms = iterator_values(values[1].clone())?
                 .into_iter()
                 .map(|value| value_to_form(&value))
@@ -3559,33 +3572,36 @@ fn native_runtime_values(
                 ACTIVE_EVALUATION_NAMESPACE.with(|active| active.replace(Some(target.clone()))),
             );
             #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
-            let result = if direct_native_execution() {
-                let source = if forms.is_empty() {
-                    "nil".to_owned()
+            let result = (|| {
+                if direct_native_execution() {
+                    let form = if forms.is_empty() {
+                        Form::Nil
+                    } else {
+                        Form::List(
+                            std::iter::once(Form::Symbol("do".into()))
+                                .chain(forms.iter().cloned())
+                                .collect(),
+                        )
+                    };
+                    eval_direct_native_forms(&[
+                        crate::vm::compiler::synthetic_spanned_form(form),
+                    ])
                 } else {
-                    Form::List(
-                        std::iter::once(Form::Symbol("do".into()))
-                            .chain(forms.iter().cloned())
-                            .collect(),
-                    )
-                    .to_string()
-                };
-                eval_direct_native_source(&source)
-            } else {
-                let mut result = Value::Nil;
-                for form in &forms {
-                    result = eval(form, env)?;
+                    let mut result = Value::Nil;
+                    for form in &forms {
+                        result = eval(form, env)?;
+                    }
+                    Ok(result)
                 }
-                Ok(result)
-            };
+            })();
             #[cfg(not(all(feature = "direct-native", not(target_arch = "wasm32"))))]
-            let result = {
+            let result = (|| {
                 let mut result = Value::Nil;
                 for form in &forms {
                     result = eval(form, env)?;
                 }
                 Ok(result)
-            };
+            })();
             select_namespace_environment(&registry, env, &previous);
             result
         }
@@ -3652,6 +3668,34 @@ fn native_runtime_values(
                 (Value::Keyword("target".into()), Value::Symbol(target)),
                 (Value::Keyword("state".into()), Value::Keyword(state.into())),
             ])))
+        }
+        "intern" => {
+            if values.len() != 3 {
+                return Err("std.native.Runtime/intern expects namespace, symbol, and value".into());
+            }
+            let target = namespace_identifier(values[0].clone(), operation)?;
+            let Value::Symbol(name) = &values[1] else {
+                return Err("std.native.Runtime/intern expects an unqualified target symbol".into());
+            };
+            if name.get_namespace().is_some() {
+                return Err("std.native.Runtime/intern expects an unqualified target symbol".into());
+            }
+            let destination = registry.find_or_create(&target);
+            // A referred binding belongs to its source namespace. Shadow it
+            // locally instead of resetting the source Var through the referral.
+            let variable = if destination.resolve(name).is_some_and(|existing| {
+                existing.symbol().get_namespace() != Some(target.as_str())
+            }) {
+                let variable = crate::kernel::Var::new(format!("{target}/{}", name.as_str()), values[2].clone());
+                destination.map_var(name.clone(), variable.clone());
+                variable
+            } else {
+                destination.intern(name.as_str(), values[2].clone())
+            };
+            if let Some(metadata) = name.meta() {
+                variable.set_hara_metadata(Some(metadata.clone()));
+            }
+            Ok(Value::Var(variable))
         }
         "intern-var" => {
             if values.len() == 2 {
@@ -3779,8 +3823,13 @@ fn native_runtime_values(
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 fn eval_direct_native_source(source: &str) -> Result<Value, String> {
-    let context = DirectNativeContext::capture();
     let forms = crate::kernel::read_forms(source).map_err(|error| error.to_string())?;
+    eval_direct_native_forms(&forms)
+}
+
+#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+fn eval_direct_native_forms(forms: &[crate::kernel::SpannedForm]) -> Result<Value, String> {
+    let context = DirectNativeContext::capture();
     let has_namespace_form = forms.iter().any(|form| {
         matches!(
             form_without_metadata(&form.form),
@@ -3789,7 +3838,7 @@ fn eval_direct_native_source(source: &str) -> Result<Value, String> {
         )
     });
     let config = if has_namespace_form {
-        crate::vm::source_namespace_config(&forms).map_err(|error| error.to_string())?
+        crate::vm::source_namespace_config(forms).map_err(|error| error.to_string())?
     } else {
         crate::kernel::GeneratedNamespaceConfig::defaults()
     };
@@ -3797,10 +3846,12 @@ fn eval_direct_native_source(source: &str) -> Result<Value, String> {
     let program = context
         .with(|| {
             without_direct_native_execution(|| {
-                crate::vm::compile_source_with_config_allow_unbound_globals(
-                    source,
+                crate::vm::compiler::compile_spanned_forms_with_config_options(
+                    forms,
                     &namespaces,
                     config,
+                    true,
+                    true,
                 )
             })
         })
@@ -3828,7 +3879,10 @@ fn eval_direct_native_source(source: &str) -> Result<Value, String> {
 fn eval_value(value: Value, env: &mut HashMap<String, Value>) -> Result<Value, String> {
     #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
     if direct_native_execution() {
-        return eval_direct_native_source(&value_to_form(&value)?.to_string());
+        // Printing a Form intentionally omits metadata. Keep the structural
+        // representation so evaluated definitions retain dynamic/async flags.
+        let form = crate::vm::compiler::synthetic_spanned_form(value_to_form(&value)?);
+        return eval_direct_native_forms(&[form]);
     }
     eval(&value_to_form(&value)?, env)
 }

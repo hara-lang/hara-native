@@ -68,12 +68,19 @@ pub(crate) fn value_to_metadata(value: &Value) -> Result<MetadataValue, String> 
                     .collect::<Result<_, String>>()?,
             ))
         }
+        Value::Struct(_) | Value::Function(_) => Ok(MetadataValue::Runtime(
+            crate::lang::data::metadata::RuntimeMetadata::new(value.clone()),
+        )),
         _ => Err("value cannot be stored in runtime-neutral metadata".into()),
     }
 }
 
 fn metadata_to_value(value: &MetadataValue) -> Result<Value, String> {
     match value {
+        MetadataValue::Runtime(value) => value
+            .get::<Value>()
+            .cloned()
+            .ok_or_else(|| "metadata belongs to another runtime".into()),
         MetadataValue::Nil => Ok(Value::Nil),
         MetadataValue::Boolean(value) => Ok(Value::Bool(*value)),
         MetadataValue::Number(value) => Ok(Value::Number(*value)),
@@ -1081,7 +1088,7 @@ fn declared_schema_contract(var: &KernelVar<Value>) -> Result<Option<Value>, Str
     let Some(raw) = metadata.get_keyword("schema") else {
         return Ok(None);
     };
-    let form = metadata_value_to_form(raw);
+    let form = metadata_value_to_form(raw)?;
     if let Form::List(reference) = &form {
         if let [Form::Symbol(operator), Form::Symbol(target)] = reference.as_slice() {
             if operator == "var" {
@@ -1381,6 +1388,13 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
             _ => Err("Base/keyword expects a name or namespace and name".into()),
         },
         "uuid" => uuid_value(values),
+        "identical?" => match values {
+            [Value::Map(a), Value::Map(b)] => Ok(Value::Bool(a.same_identity(b))),
+            [Value::Struct(a), Value::Struct(b)] => Ok(Value::Bool(Rc::ptr_eq(a, b))),
+            [Value::Map(_), Value::Struct(_)] | [Value::Struct(_), Value::Map(_)] => Ok(Value::Bool(false)),
+            [_, _] => Err("Base/identical? expects map or record objects".into()),
+            _ => Err("Base/identical? expects two objects".into()),
+        },
         "reduced" => match values {
             [value] => Ok(reduced_value(value.clone())),
             _ => Err("Base/reduced expects one value".into()),

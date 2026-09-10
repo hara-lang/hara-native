@@ -2,8 +2,36 @@ use super::{Keyword, Symbol};
 use num_bigint::BigInt;
 use std::rc::Rc;
 
+/// Process-local metadata payload. Owned by the metadata, never a global handle.
+/// Portable encoders must reject this variant instead of discarding it.
+#[derive(Clone)]
+pub struct RuntimeMetadata(Rc<dyn std::any::Any>);
+
+impl RuntimeMetadata {
+    pub fn new<T: 'static>(value: T) -> Self {
+        Self(Rc::new(value))
+    }
+
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+}
+
+impl std::fmt::Debug for RuntimeMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RuntimeMetadata(..)")
+    }
+}
+
+impl PartialEq for RuntimeMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetadataValue {
+    Runtime(RuntimeMetadata),
     Nil,
     Boolean(bool),
     Number(i64),

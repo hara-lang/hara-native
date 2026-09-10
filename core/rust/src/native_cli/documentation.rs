@@ -22,6 +22,7 @@ pub struct Documentation {
 
 fn value(metadata: &MetadataValue) -> DocumentationValue {
     match metadata {
+        MetadataValue::Runtime(_) => DocumentationValue::String("<process-local metadata>".into()),
         MetadataValue::Nil => DocumentationValue::Nil,
         MetadataValue::Boolean(value) => DocumentationValue::Boolean(*value),
         MetadataValue::Number(value) => DocumentationValue::Integer(*value),

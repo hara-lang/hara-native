@@ -1,5 +1,6 @@
 fn metadata_value(form: &Form) -> Result<MetadataValue, String> {
     match form {
+        Form::RuntimeLiteral(value) => Ok(MetadataValue::Runtime(value.clone())),
         Form::Nil => Ok(MetadataValue::Nil),
         Form::Bool(value) => Ok(MetadataValue::Boolean(*value)),
         Form::Number(value) => Ok(MetadataValue::Number(*value)),
@@ -360,6 +361,10 @@ pub(crate) fn vm_to_vector(value: Value) -> Result<Value, String> {
 
 fn literal_value(form: &Form) -> Result<Value, String> {
     match form {
+        Form::RuntimeLiteral(value) => value
+            .get::<Value>()
+            .cloned()
+            .ok_or_else(|| "invalid process-local literal payload".into()),
         Form::Nil => Ok(Value::Nil),
         Form::Bool(value) => Ok(Value::Bool(*value)),
         Form::Character(value) => Ok(Value::Character(*value)),
@@ -602,7 +607,8 @@ fn collect_capture_names(form: &Form, names: &mut std::collections::HashSet<Stri
             collect_capture_names(value, names);
         }
         Form::Tagged(_, value) => collect_capture_names(value, names),
-        Form::Nil
+        Form::RuntimeLiteral(_)
+        | Form::Nil
         | Form::Bool(_)
         | Form::Number(_)
         | Form::Float(_)

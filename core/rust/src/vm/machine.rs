@@ -348,6 +348,12 @@ impl Machine {
         callee: VmSlot,
         mut args: Vec<VmSlot>,
     ) -> Result<(), String> {
+        let callee = match &callee {
+            VmSlot::Value(value) => Self::callable_key(value)
+                .and_then(|key| self.vm_globals.get(&key).cloned())
+                .unwrap_or(callee),
+            _ => callee,
+        };
         match callee {
             VmSlot::InlineClosure { prototype, .. } => {
                 self.check_arity(program, prototype, args.len())?;

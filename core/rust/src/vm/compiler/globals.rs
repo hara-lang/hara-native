@@ -73,6 +73,7 @@ impl Compiler {
         }
         let metadata = self.var_metadata(metadata);
         self.declare_program_global(&name);
+        self.macro_shadows.remove(&name);
         if matches!(
             crate::core::form_without_metadata(rest_children[0].form),
             Form::Vector(_)
@@ -476,6 +477,9 @@ impl Compiler {
             ));
         }
         let async_function = metadata.as_ref().is_some_and(|value| value.flag("async"));
+        if !metadata.as_ref().is_some_and(|value| value.flag("macro")) {
+            self.macro_shadows.insert(name.clone());
+        }
         if let Some(crate::lang::data::MetadataValue::Symbol(target)) = metadata
             .as_ref()
             .and_then(|value| value.get_keyword("inline-target"))
