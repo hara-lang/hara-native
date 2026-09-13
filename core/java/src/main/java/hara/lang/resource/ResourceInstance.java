@@ -28,6 +28,12 @@ public final class ResourceInstance implements IComponent {
   @Override public IMetadata getStatus() {
     return value instanceof IComponent ? ((IComponent) value).getStatus() : null;
   }
+  @Override public Object info(Object level) {
+    return value instanceof IComponent ? ((IComponent) value).info(level) : getStatus();
+  }
+  @Override public Object health() {
+    return value instanceof IComponent ? ((IComponent) value).health() : isStarted();
+  }
   @Override public boolean isStarted() {
     return !(value instanceof IComponent) || ((IComponent) value).isStarted();
   }

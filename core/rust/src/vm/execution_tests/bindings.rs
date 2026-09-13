@@ -28,3 +28,22 @@ fn destructuring_executes_in_let_and_loop_bindings() {
         "7"
     );
 }
+
+#[test]
+fn destructured_rest_is_reusable_and_preserves_nil() {
+    assert_eq!(
+        eval("(let [[head & tail] [0 false nil 3]]
+                 [(std.native.Base/vec tail) (std.native.Base/vec tail)])"),
+        "[[false nil 3] [false nil 3]]"
+    );
+    assert_eq!(
+        eval("((fn [start & [count item & [:as tail] :as all]]
+                  [(std.native.Base/vec tail) (std.native.Base/vec tail)
+                   (std.native.Base/vec all)]) 0 1 false nil 3)"),
+        "[[nil 3] [nil 3] [1 false nil 3]]"
+    );
+    assert_eq!(
+        eval("(let [[head & tail] [0]] [(std.native.Base/vec tail) (std.native.Base/vec tail)])"),
+        "[[] []]"
+    );
+}

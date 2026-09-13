@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 /// An immutable, context-qualified reference descriptor.
 ///
-/// Pointers deliberately contain no runtime, resolver, target, or dereferenced
-/// value. Resolution is owned by the active evaluator context.
+/// Descriptor fields may contain an explicit runtime or resolver. Their
+/// precedence and invocation are owned by the active evaluator context.
 #[derive(Debug, Clone)]
 pub struct Pointer {
     context: Keyword,

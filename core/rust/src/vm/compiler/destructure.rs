@@ -373,8 +373,11 @@ fn bind_vector(
                 bind(
                     rest,
                     call(
-                        "std.native.Iter/iter-drop",
-                        vec![Form::Number(index), source.clone()],
+                        "std.native.Base/vec",
+                        vec![call(
+                            "std.native.Iter/iter-drop",
+                            vec![Form::Number(index), source.clone()],
+                        )],
                     ),
                     output,
                     next,

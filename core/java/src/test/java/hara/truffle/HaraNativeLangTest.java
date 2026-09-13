@@ -18,6 +18,154 @@ import org.junit.Test;
 /** Verifies the reversible, process-local host-value substrate for std.lang. */
 public class HaraNativeLangTest {
   @Test
+  public void destructuredRestIsReusableAndPreservesNil() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      assertEquals("[[false nil 3] [false nil 3]]", context.eval(HaraLanguage.ID,
+          "(let [[head & tail] [0 false nil 3]] [(Base/vec tail) (Base/vec tail)])").toString());
+      assertEquals("[[nil 3] [nil 3] [1 false nil 3]]", context.eval(HaraLanguage.ID,
+          "((fn [start & [count item & [:as tail] :as all]] "
+          + "[(Base/vec tail) (Base/vec tail) (Base/vec all)]) 0 1 false nil 3)").toString());
+      assertEquals("[[] []]", context.eval(HaraLanguage.ID,
+          "(let [[head & tail] [0]] [(Base/vec tail) (Base/vec tail)])").toString());
+    }
+  }
+
+  @Test
+  public void methodSupportInspectsDispatchWithoutInvokingPartialComponents() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      context.eval(HaraLanguage.ID,
+          "(ns method-support-test) "
+          + "(def Partial (Base/struct (Base/current-namespace) 'Partial (Base/vector) nil)) "
+          + "(Base/extend (Base/current-namespace) Partial IComponent "
+          + " {'stop (fn [value] (throw (Exception/new \"stop-failed\" {:reason :stop-failed})))})");
+      assertEquals("[false true false false false false true]",
+          context.eval(HaraLanguage.ID,
+              "[(Base/satisfies? IComponent (Partial)) "
+              + "(Base/supports-method? IComponent 'stop (Partial)) "
+              + "(Base/supports-method? IComponent 'start (Partial)) "
+              + "(Base/supports-method? IComponent 'unknown (Partial)) "
+              + "(Base/supports-method? IComponent 'stop :passive) "
+              + "(Base/supports-method? IComponent 'stop nil) "
+              + "(Base/supports-method? ICount 'count [1 2])]" ).toString());
+      PolyglotException error = assertThrows(PolyglotException.class,
+          () -> context.eval(HaraLanguage.ID, "(IComponent/stop (Partial))"));
+      assertTrue(error.getMessage(), error.getMessage().contains("stop-failed"));
+      for (String form : new String[] {
+          "(Base/supports-method? IComponent)",
+          "(Base/supports-method? :invalid 'stop nil)",
+          "(Base/supports-method? IComponent :stop nil)",
+          "(Base/supports-method? IComponent 'other/stop nil)"}) {
+        assertThrows(PolyglotException.class, () -> context.eval(HaraLanguage.ID, form));
+      }
+    }
+  }
+
+  @Test
+  public void clipboardTextRoundTripUsesAnIsolatedClipboard() {
+    java.awt.datatransfer.Clipboard clipboard = new java.awt.datatransfer.Clipboard("test-only");
+    for (String text : new String[] {"first", "λ\n日本語\n", ""}) {
+      assertEquals(text, HaraClipboard.copy(clipboard, text));
+      assertEquals(text, HaraClipboard.paste(clipboard));
+    }
+    clipboard.setContents(new java.awt.datatransfer.Transferable() {
+      public java.awt.datatransfer.DataFlavor[] getTransferDataFlavors() {
+        return new java.awt.datatransfer.DataFlavor[0];
+      }
+      public boolean isDataFlavorSupported(java.awt.datatransfer.DataFlavor flavor) { return false; }
+      public Object getTransferData(java.awt.datatransfer.DataFlavor flavor)
+          throws java.awt.datatransfer.UnsupportedFlavorException {
+        throw new java.awt.datatransfer.UnsupportedFlavorException(flavor);
+      }
+    }, null);
+    assertThrows(HaraException.class, () -> HaraClipboard.paste(clipboard));
+  }
+
+  @Test
+  public void clipboardRequiresPermissionBeforeHostAccess() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      for (String form : new String[] {"(OS/clipboard-copy \"test\")", "(OS/clipboard-paste)"}) {
+        PolyglotException error = assertThrows(PolyglotException.class,
+            () -> context.eval(HaraLanguage.ID, form));
+        assertTrue(error.getMessage(), error.getMessage().contains("requires capability :native-runtime"));
+      }
+    }
+  }
+
+  @Test
+  public void componentQueriesPreserveLevelsAndStructuredHealth() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      context.eval(HaraLanguage.ID,
+          "(def QueryComponent (Base/struct (Base/current-namespace) 'QueryComponent (Base/vector 'health) nil)) "
+              + "(Base/extend (Base/current-namespace) QueryComponent IComponent "
+              + " {'info (fn [rt level] [level (:health rt)]) 'health (fn [rt] (:health rt))})");
+      assertEquals("[[:detail {:status :ok}] {:status :ok} false nil]",
+          context.eval(HaraLanguage.ID,
+              "[(IComponent/info (QueryComponent {:status :ok}) :detail) "
+                  + " (IComponent/health (QueryComponent {:status :ok})) "
+                  + " (IComponent/health (QueryComponent false)) "
+                  + " (IComponent/health (QueryComponent nil))]").toString());
+      assertThrows(PolyglotException.class, () -> context.eval(HaraLanguage.ID,
+          "(IComponent/info (QueryComponent true))"));
+      assertThrows(PolyglotException.class, () -> context.eval(HaraLanguage.ID,
+          "(IComponent/health (QueryComponent true) :extra)"));
+    }
+  }
+
+  @Test
+  public void pointerRuntimeResolutionPreservesOriginalPrecedence() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      context.eval(HaraLanguage.ID,
+          "(ns std.lib.context.pointer) (def ^{:dynamic true} *runtime* nil)");
+      assertEquals("[:bound :direct :resolved false nil]",
+          context.eval(HaraLanguage.ID,
+              "(ns pointer-resolution-test) "
+                  + "(let [p (pointer {:context :unused :context/rt :direct "
+                  + ":context/fn (fn [_] (throw (ex :unexpected {})))})] "
+                  + "[(binding [std.lib.context.pointer/*runtime* :bound] "
+                  + "  (IApplicable/apply-default p)) "
+                  + " (IApplicable/apply-default p) "
+                  + " (IApplicable/apply-default "
+                  + "  (pointer {:context :unused :context/rt false "
+                  + "   :context/fn (fn [p] (:answer p)) :answer :resolved})) "
+                  + " (try (binding [std.lib.context.pointer/*runtime* :temporary] "
+                  + "  (throw (ex :expected {}))) (catch e false)) "
+                  + " std.lib.context.pointer/*runtime*])").toString());
+      context.eval(HaraLanguage.ID,
+          "(ns std.lib.context.space) (defn space:rt-current [context] context)");
+      assertEquals("[:fallback :fallback :fallback 0 :caught]",
+          context.eval(HaraLanguage.ID,
+              "(ns pointer-resolution-test) "
+                  + "[(IApplicable/apply-default (pointer {:context :fallback})) "
+                  + " (IApplicable/apply-default (pointer {:context :fallback :context/rt nil "
+                  + "  :context/fn (fn [_] nil)})) "
+                  + " (binding [std.lib.context.pointer/*runtime* false] "
+                  + "  (IApplicable/apply-default (pointer {:context :fallback "
+                  + "   :context/fn (fn [_] false)}))) "
+                  + " (IApplicable/apply-default (pointer {:context :fallback :context/rt 0})) "
+                  + " (try (IApplicable/apply-default (pointer {:context :fallback "
+                  + "  :context/fn (fn [_] (throw (ex :expected {})))})) (catch e :caught))]")
+              .toString());
+      context.eval(HaraLanguage.ID,
+          "(def Target (Base/struct (Base/current-namespace) 'Target ['label] nil)) "
+              + "(Base/extend (Base/current-namespace) Target IContextEval "
+              + " {'deref-ptr (fn [rt p] [(:label rt) (:token p)]) "
+              + "  'invoke-ptr (fn [rt p args] [(:label rt) args]) "
+              + "  'transform-in-ptr (fn [rt p args] args) "
+              + "  'transform-out-ptr (fn [rt p value] value)}) "
+              + "(ns std.lib.context.space) "
+              + "(defn space:rt-current [_] (pointer-resolution-test/Target :space)) "
+              + "(ns pointer-resolution-test)");
+      assertEquals("[[:direct [7]] [:space :token] [:bound [8]] [:space :token]]",
+          context.eval(HaraLanguage.ID,
+              "(let [p (pointer {:context :unused :token :token :context/rt (Target :direct)})] "
+                  + "[(p 7) (IDeref/deref p) "
+                  + " (binding [std.lib.context.pointer/*runtime* (Target :bound)] (p 8)) "
+                  + " (binding [std.lib.context.pointer/*runtime* (Target :bound)] (IDeref/deref p))])")
+              .toString());
+    }
+  }
+
+  @Test
   public void runtimeInternBindsLiveValues() {
     try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
       context.eval(HaraLanguage.ID, "(ns intern.contract) (def ^{:doc \"baseline\"} slot nil) (def source 19)");

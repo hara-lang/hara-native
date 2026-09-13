@@ -102,7 +102,7 @@ pub(crate) mod declarations {
         name = "OS",
         availability = "capability-gated",
         capability = "native-runtime",
-        methods = ["platform", "arch", "cwd", "env", "getenv", "time-ms", "time-ns"],
+        methods = ["platform", "arch", "cwd", "env", "getenv", "time-ms", "time-ns", "clipboard-copy", "clipboard-paste"],
         provider = native_os_provider
     )]
     struct OS;
@@ -242,7 +242,7 @@ pub(crate) mod declarations {
             "list", "vector", "vec", "set", "hash-map", "hash-set", "map-entry", "atom", "delay", "bytes", "pointer", "symbol",
             "keyword", "uuid", "identical?", "reduced", "unreduced", "hash", "apply", "resolve",
             "namespace", "current-namespace", "select-namespace", "def", "struct", "mutable", "protocol", "with-declaration", "extend", "multimethod", "method", "field",
-            "number?", "long?", "satisfies?", "special-symbol?", "type", "instance?"
+            "number?", "long?", "satisfies?", "supports-method?", "special-symbol?", "type", "instance?"
         ],
         whole_wasm_methods = [("number?", 1)],
         provider = native_base_provider

@@ -370,6 +370,37 @@ impl ProtocolRegistry {
         }
     }
 
+    /// Tests the same receiver dispatch paths as invoke, without executing a method.
+    pub fn supports_method(&self, protocol: &GuestProtocol, method: &str, value: &Value) -> bool {
+        if !protocol.methods.contains_key(method) {
+            return false;
+        }
+        if let Value::Extension(receiver) = value {
+            if self.extension_methods.borrow().contains_key(&(
+                receiver.provider.clone(), receiver.type_name.clone(),
+                protocol.name.clone(), method.to_owned(),
+            )) {
+                return true;
+            }
+        }
+        let named_type = match value {
+            Value::Struct(receiver) => Some(&receiver.ty.name),
+            Value::Mutable(receiver) => Some(&receiver.ty.name),
+            _ => None,
+        };
+        if let Some(type_name) = named_type {
+            if self.guest_methods.borrow().contains_key(&(
+                protocol.name.clone(), type_name.clone(), method.to_owned(),
+            )) {
+                return true;
+            }
+        }
+        self.methods.borrow()
+            .get(&(protocol.name.clone(), method.to_owned()))
+            .is_some_and(|implementations| implementations.iter().rev()
+                .any(|implementation| (implementation.supports)(value)))
+    }
+
     pub fn contains(&self, protocol: &str, method: &str) -> bool {
         let methods = self.methods.borrow();
         methods

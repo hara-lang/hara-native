@@ -329,6 +329,12 @@ impl WorkHost {
 
 impl IComponent for WorkHost {
     type Metadata = WorkHostStatus;
+    type QueryLevel = Value;
+    type Health = bool;
+
+    fn health(&self) -> Self::Health {
+        self.started()
+    }
 
     fn props(&self) -> Self::Metadata {
         self.status()

@@ -222,6 +222,12 @@ impl crate::lang::protocol::IContext<&str> for Session {
 
 impl crate::lang::protocol::IComponent for Session {
     type Metadata = SessionMetadata;
+    type QueryLevel = core::Value;
+    type Health = bool;
+
+    fn health(&self) -> Self::Health {
+        self.started()
+    }
 
     fn props(&self) -> Self::Metadata {
         SessionStatus {

@@ -80,6 +80,7 @@ pub enum PromiseState {
 #[derive(Default)]
 struct PromiseHooks {
     poller: Option<Rc<dyn Fn()>>,
+    cooperative_polling: bool,
     waiter: Option<Rc<dyn Fn()>>,
     cancel: Option<Rc<dyn Fn()>>,
 }
@@ -90,6 +91,7 @@ struct PromiseInner {
     deferred: Option<(Instant, Rc<dyn Fn() -> Result<Value, String>>)>,
     hooks: PromiseHooks,
     adopted_from: Option<Weak<RefCell<PromiseInner>>>,
+    progress_registered: bool,
 }
 
 type ContinuationJob = (Rc<dyn Fn(PromiseState)>, PromiseState);
@@ -97,6 +99,38 @@ type ContinuationJob = (Rc<dyn Fn(PromiseState)>, PromiseState);
 thread_local! {
     static CONTINUATION_QUEUE: RefCell<VecDeque<ContinuationJob>> = RefCell::new(VecDeque::new());
     static DRAINING_CONTINUATIONS: Cell<bool> = const { Cell::new(false) };
+    static SUBSCRIBED_PROMISES: RefCell<Vec<WeakPromise>> = const { RefCell::new(Vec::new()) };
+    static PROGRESSING_PROMISES: Cell<bool> = const { Cell::new(false) };
+}
+
+// Cooperative progress belongs at wait points, not in state inspection. Snapshot
+// outside the registry borrow: callbacks may subscribe, settle, or wait again.
+fn progress_subscribed_promises() {
+    if PROGRESSING_PROMISES.with(|active| active.replace(true)) {
+        return;
+    }
+    struct ProgressGuard;
+    impl Drop for ProgressGuard {
+        fn drop(&mut self) {
+            PROGRESSING_PROMISES.with(|active| active.set(false));
+        }
+    }
+    let _guard = ProgressGuard;
+    let promises = SUBSCRIBED_PROMISES.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        registry.retain(|weak| {
+            weak.upgrade().is_some_and(|promise| {
+                matches!(promise.inner.borrow().state, PromiseState::Pending)
+            })
+        });
+        registry
+            .iter()
+            .filter_map(WeakPromise::upgrade)
+            .collect::<Vec<_>>()
+    });
+    for promise in promises {
+        promise.state();
+    }
 }
 
 fn enqueue_continuation(continuation: Rc<dyn Fn(PromiseState)>, state: PromiseState) {
@@ -156,6 +190,7 @@ impl Promise {
                 deferred: None,
                 hooks: PromiseHooks::default(),
                 adopted_from: None,
+                progress_registered: false,
             })),
         }
     }
@@ -187,7 +222,18 @@ impl Promise {
     }
 
     pub fn set_poller(&self, poller: Rc<dyn Fn()>) {
-        self.inner.borrow_mut().hooks.poller = Some(poller);
+        let mut inner = self.inner.borrow_mut();
+        inner.hooks.poller = Some(poller);
+        inner.hooks.cooperative_polling = false;
+    }
+
+    // Only providers whose poller can independently complete their work may
+    // replace a blocking wait with cooperative polling. Wrapper pollers may
+    // depend on their waiter to drive an upstream host operation.
+    pub(crate) fn set_cooperative_poller(&self, poller: Rc<dyn Fn()>) {
+        let mut inner = self.inner.borrow_mut();
+        inner.hooks.poller = Some(poller);
+        inner.hooks.cooperative_polling = true;
     }
 
     pub fn set_waiter(&self, waiter: Rc<dyn Fn()>) {
@@ -199,38 +245,38 @@ impl Promise {
     }
 
     pub fn wait_state(&self) -> PromiseState {
-        let waiter = self.inner.borrow().hooks.waiter.clone();
-        if let Some(waiter) = waiter {
-            waiter();
-        } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(deadline) = self
-                .inner
-                .borrow()
-                .deferred
-                .as_ref()
-                .map(|(deadline, _)| *deadline)
-            {
-                if let Some(delay) = deadline.checked_duration_since(Instant::now()) {
-                    std::thread::sleep(delay);
-                }
-            }
-        }
         loop {
+            progress_subscribed_promises();
             let state = self.state();
             if !matches!(state, PromiseState::Pending) {
                 return state;
             }
-            let delay = {
+            let (waiter, pollable, delay) = {
                 let inner = self.inner.borrow();
-                inner
-                    .deferred
-                    .as_ref()
-                    .map(|(at, _)| at.saturating_duration_since(Instant::now()))
+                (
+                    inner.hooks.waiter.clone(),
+                    inner.hooks.cooperative_polling && inner.hooks.poller.is_some(),
+                    inner
+                        .deferred
+                        .as_ref()
+                        .map(|(at, _)| at.saturating_duration_since(Instant::now())),
+                )
             };
-            let Some(delay) = delay else {
+            // Ordinary providers and wrappers still own their blocking wait.
+            // Cooperative providers must not starve other subscribers.
+            if !pollable {
+                if let Some(waiter) = waiter {
+                    waiter();
+                    progress_subscribed_promises();
+                    return self.state();
+                }
+            }
+            if delay.is_none() && !(pollable && waiter.is_some()) {
                 return state;
-            };
+            }
+            let delay = delay
+                .unwrap_or(Duration::from_millis(1))
+                .min(Duration::from_millis(1));
             if !delay.is_zero() {
                 std::thread::sleep(delay);
             } else {
@@ -240,6 +286,7 @@ impl Promise {
     }
 
     pub fn wait_state_timeout(&self, timeout: Duration) -> PromiseState {
+        progress_subscribed_promises();
         #[cfg(target_arch = "wasm32")]
         {
             let _ = timeout;
@@ -249,6 +296,7 @@ impl Promise {
         {
             let deadline = Instant::now() + timeout;
             loop {
+                progress_subscribed_promises();
                 let state = self.state();
                 if !matches!(state, PromiseState::Pending) || Instant::now() >= deadline {
                     return state;
@@ -325,7 +373,16 @@ impl Promise {
     pub fn on_settle(&self, continuation: Rc<dyn Fn(PromiseState)>) {
         let state = self.state();
         if matches!(state, PromiseState::Pending) {
-            self.inner.borrow_mut().continuations.push(continuation);
+            let register = {
+                let mut inner = self.inner.borrow_mut();
+                inner.continuations.push(continuation);
+                let register = !inner.progress_registered;
+                inner.progress_registered = true;
+                register
+            };
+            if register {
+                SUBSCRIBED_PROMISES.with(|registry| registry.borrow_mut().push(self.downgrade()));
+            }
         } else {
             enqueue_continuation(continuation, state);
         }
@@ -441,6 +498,137 @@ impl PromiseProvider for LocalPromiseProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrelated_waits_advance_subscribed_promises() {
+        let calls = Rc::new(Cell::new(0));
+        let source =
+            LocalPromiseProvider.delay(Duration::from_millis(1), Rc::new(|| Ok(Value::Number(42))));
+        let observed = calls.clone();
+        source.on_settle(Rc::new(move |state| {
+            assert_eq!(state, PromiseState::Fulfilled(Value::Number(42)));
+            observed.set(observed.get() + 1);
+        }));
+        let waiting =
+            LocalPromiseProvider.delay(Duration::from_millis(10), Rc::new(|| Ok(Value::Nil)));
+        assert_eq!(waiting.wait_state(), PromiseState::Fulfilled(Value::Nil));
+        assert_eq!(calls.get(), 1);
+        waiting.wait_state();
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn timed_waits_advance_subscribers_without_settling_the_waited_promise() {
+        let calls = Rc::new(Cell::new(0));
+        let source = LocalPromiseProvider
+            .delay(Duration::from_millis(1), Rc::new(|| Ok(Value::Bool(false))));
+        let observed = calls.clone();
+        source.on_settle(Rc::new(move |state| {
+            assert_eq!(state, PromiseState::Fulfilled(Value::Bool(false)));
+            observed.set(observed.get() + 1);
+        }));
+        let waiting = Promise::new();
+        assert_eq!(
+            waiting.wait_state_timeout(Duration::from_millis(10)),
+            PromiseState::Pending
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(waiting.state(), PromiseState::Pending);
+    }
+
+    #[test]
+    fn cooperative_waiters_do_not_starve_other_subscribers() {
+        let ready = Rc::new(Cell::new(false));
+        let source =
+            LocalPromiseProvider.delay(Duration::from_millis(1), Rc::new(|| Ok(Value::Nil)));
+        let observed = ready.clone();
+        source.on_settle(Rc::new(move |_| observed.set(true)));
+        let waiting = Promise::new();
+        let weak = waiting.downgrade();
+        waiting.set_cooperative_poller(Rc::new(move || {
+            if ready.get() {
+                weak.upgrade().unwrap().resolve(Value::Number(42));
+            }
+        }));
+        waiting.set_waiter(Rc::new(|| {
+            panic!("blocking waiter must not starve subscribers")
+        }));
+        assert_eq!(
+            waiting.wait_state(),
+            PromiseState::Fulfilled(Value::Number(42))
+        );
+    }
+
+    #[test]
+    fn ordinary_pollers_preserve_essential_waiters() {
+        let promise = Promise::new();
+        let calls = Rc::new(Cell::new(0));
+        promise.set_poller(Rc::new(|| {}));
+        let weak = promise.downgrade();
+        let observed = calls.clone();
+        promise.set_waiter(Rc::new(move || {
+            observed.set(observed.get() + 1);
+            weak.upgrade().unwrap().resolve(Value::Number(16));
+        }));
+        assert_eq!(promise.state(), PromiseState::Pending);
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            promise.wait_state(),
+            PromiseState::Fulfilled(Value::Number(16))
+        );
+        assert_eq!(
+            promise.wait_state(),
+            PromiseState::Fulfilled(Value::Number(16))
+        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn progress_registry_does_not_retain_dropped_or_cancelled_promises() {
+        let dropped = Promise::new();
+        dropped.on_settle(Rc::new(|_| panic!("dropped promise must not run")));
+        let weak = dropped.downgrade();
+        drop(dropped);
+        assert!(weak.upgrade().is_none());
+        let cancelled = LocalPromiseProvider.delay(
+            Duration::from_millis(1),
+            Rc::new(|| panic!("cancelled task ran")),
+        );
+        let calls = Rc::new(Cell::new(0));
+        let observed = calls.clone();
+        cancelled.on_settle(Rc::new(move |state| {
+            assert!(matches!(state, PromiseState::Rejected(_)));
+            observed.set(observed.get() + 1);
+        }));
+        cancelled.cancel();
+        Promise::new().wait_state_timeout(Duration::from_millis(3));
+        assert_eq!(calls.get(), 1);
+        SUBSCRIBED_PROMISES.with(|registry| assert!(registry.borrow().is_empty()));
+    }
+
+    #[test]
+    fn progress_callbacks_can_subscribe_and_reenter_waits() {
+        let next = Promise::new();
+        let source =
+            LocalPromiseProvider.delay(Duration::from_millis(1), Rc::new(|| Ok(Value::Nil)));
+        let calls = Rc::new(Cell::new(0));
+        let observed = calls.clone();
+        let subscribed = next.clone();
+        source.on_settle(Rc::new(move |_| {
+            let observed = observed.clone();
+            subscribed.on_settle(Rc::new(move |state| {
+                assert_eq!(state, PromiseState::Fulfilled(Value::Number(7)));
+                observed.set(observed.get() + 1);
+            }));
+            assert_eq!(
+                Promise::new().wait_state_timeout(Duration::ZERO),
+                PromiseState::Pending
+            );
+            subscribed.resolve(Value::Number(7));
+        }));
+        Promise::new().wait_state_timeout(Duration::from_millis(5));
+        assert_eq!(calls.get(), 1);
+    }
 
     #[test]
     fn cancellation_is_a_structured_rejection() {

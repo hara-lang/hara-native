@@ -51,6 +51,8 @@ pub mod native_link;
 pub mod native_module;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_process;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_clipboard;
 mod numeric;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod package;

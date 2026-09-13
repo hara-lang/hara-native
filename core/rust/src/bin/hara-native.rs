@@ -1402,7 +1402,16 @@ fn run_project_tests(
 ) -> Result<ProjectTestReport, String> {
     let project = project::discover(project_path)?;
     let files = selected_test_files(&project, requested)?;
-    let catalog = project::source_catalog(&project)?;
+    // Test fixtures are importable only in the test runner. Later catalog roots
+    // win, so keep production sources ahead of any same-named test helper.
+    let mut test_project = project.clone();
+    test_project.source_paths = project
+        .test_paths
+        .iter()
+        .chain(project.source_paths.iter())
+        .cloned()
+        .collect();
+    let catalog = project::source_catalog(&test_project)?;
     let source_foundation = catalog.path("std.foundation").is_some();
     let runner_eval_mode = catalog.path("code.test.context").is_some();
     #[cfg(feature = "direct-native")]
@@ -3029,6 +3038,71 @@ mod tests {
         assert_eq!(selected.counts.passed, 2);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_test_runner_requires_test_helpers_without_exposing_or_shadowing_sources() {
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "hara-native-test-imports-{}-{nonce}",
+            std::process::id()
+        )));
+        let root = &fixture.0;
+        fs::create_dir_all(root.join("src/fixture")).unwrap();
+        fs::create_dir_all(root.join("test/fixture")).unwrap();
+        fs::write(
+            root.join("project.edn"),
+            "{:hara/type :project :hara/version \"1.0.0\" :project/id fixture/test-imports :project/version \"1.0.0\" :project/source-paths [\"src\"] :project/test-paths [\"test\"] :project/extension-paths [] :project/capabilities #{}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/fixture/math.hal"),
+            "(ns fixture.math)\n(defn advance [value] (+ value 1))\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/math.hal"),
+            "(ns fixture.math)\n(defn advance [value] (- value 100))\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/support.hal"),
+            "(ns fixture.support (:require [fixture.math :as math]))\n(defn answer [] (math/advance 41))\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/fixture/consumer_test.hal"),
+            "(ns fixture.consumer-test (:require [fixture.support :as support]))\n(Test/check [{:desc \"test helper uses production source\" :test (fn [] (support/answer)) :expected 42}])\n",
+        )
+        .unwrap();
+        let project = hara_native::project::discover(root).unwrap();
+        assert!(hara_native::project::source_catalog(&project)
+            .unwrap()
+            .path("fixture.support")
+            .is_none());
+        for _ in 0..2 {
+            let report = run_project_tests(
+                root,
+                &[std::path::PathBuf::from("test/fixture/consumer_test.hal")],
+            )
+            .unwrap();
+            assert_eq!(report.files.len(), 1);
+            assert_eq!(report.counts.passed, 1);
+            assert_eq!(report.counts.failing(), 0);
+        }
+        assert!(hara_native::project::source_catalog(&project)
+            .unwrap()
+            .path("fixture.support")
+            .is_none());
     }
 
     #[test]

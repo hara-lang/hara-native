@@ -1,5 +1,198 @@
 use hara_native::Runtime;
 
+#[cfg(unix)]
+#[test]
+fn process_completion_callbacks_progress_while_waiting_on_an_unrelated_timer() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.install_native_process_provider();
+        runtime.set_execution_backend(backend).unwrap();
+        assert_eq!(runtime.eval_native(r#"
+            (let [calls (Base/atom [])
+                  child (Process/spawn ["sh" "-c" "sleep 0.05; exit 7"])
+                  completion (IPromise/then (Process/wait child)
+                               (fn [exit] (IReset/reset calls [exit])))]
+              (try
+                (Result/synchronize (Promise/delay 250 (fn [] nil)))
+                (IDeref/deref calls)
+                (finally
+                  (Process/kill child)
+                  (Result/synchronize (Process/wait child)))))
+        "#).unwrap(), "[7]", "{backend}");
+    }
+}
+
+#[test]
+fn method_support_inspects_dispatch_without_invoking_partial_components() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(ns method-support-test)
+             (def Partial (Base/struct (Base/current-namespace) 'Partial (Base/vector) nil))
+             (Base/extend (Base/current-namespace) Partial IComponent
+               {'stop (fn [value] (throw (Exception/new \"stop-failed\" {:reason :stop-failed})))})"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "[(Base/satisfies? IComponent (Partial))
+              (Base/supports-method? IComponent 'stop (Partial))
+              (Base/supports-method? IComponent 'start (Partial))
+              (Base/supports-method? IComponent 'unknown (Partial))
+              (Base/supports-method? IComponent 'stop :passive)
+              (Base/supports-method? IComponent 'stop nil)
+              (Base/supports-method? ICount 'count [1 2])]"
+        ).unwrap(), "[false true false false false false true]", "{backend}");
+        let error = runtime.eval_native("(IComponent/stop (Partial))").unwrap_err();
+        assert!(error.contains("stop-failed"), "{backend}: {error}");
+        for form in ["(Base/supports-method? IComponent)",
+                     "(Base/supports-method? :invalid 'stop nil)",
+                     "(Base/supports-method? IComponent :stop nil)",
+                     "(Base/supports-method? IComponent 'other/stop nil)"] {
+            assert!(runtime.eval_native(form).is_err(), "{backend}: {form}");
+        }
+    }
+}
+
+#[test]
+fn requiring_a_defonce_does_not_predeclare_away_its_initializer() {
+    struct CacheRoot(std::path::PathBuf);
+    impl Drop for CacheRoot {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let root = CacheRoot(std::env::temp_dir().join(format!("hara-withrt-cache-{}-{}",
+        std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())));
+    std::fs::create_dir(&root.0).unwrap();
+    for backend in ["interpreter", "direct-native"] {
+      for _round in 0..2 {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.configure_direct_native_source_cache(&root.0, [91; 32]);
+        runtime.register_resource("example.once-macros",
+            "(ns example.once-macros)
+             (defmacro defonce [name expression]
+               (Base/list 'if (Base/list 'Base/resolve (Base/list 'quote 'example.once/value))
+                 nil (Base/list 'Runtime/eval (Base/list 'quote (Base/list 'def name expression)))))");
+        runtime.register_resource("example.once",
+            "(ns example.once (:require [example.once-macros :refer [defonce]]))
+             (defonce ^:dynamic value 42)");
+        assert_eq!(runtime.eval_native(
+            "(ns example.once-client (:require [example.once :as owner]))
+             [owner/value (binding [example.once/value :bound] owner/value) owner/value]"
+        ).unwrap(), "[42 :bound 42]", "{backend}");
+        assert_eq!(runtime.eval_native(
+            "(ns example.once)
+             (defonce value (throw (ex :unexpected-reinitialization {})))
+             value"
+        ).unwrap(), "42", "{backend}");
+      }
+    }
+}
+
+// Keep the isolated host-transport regression in the active native suite.
+#[cfg(unix)]
+#[path = "../src/native_clipboard.rs"]
+mod clipboard_transport;
+
+#[test]
+fn clipboard_methods_validate_arguments_without_host_access() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        for (form, expected) in [
+            ("(OS/clipboard-copy)", "clipboard-copy expects one string"),
+            ("(OS/clipboard-copy 7)", "clipboard-copy expects one string"),
+            ("(OS/clipboard-paste :extra)", "clipboard-paste expects no arguments"),
+        ] {
+            let error = runtime.eval_native(form).unwrap_err();
+            assert!(error.contains(expected), "{backend}: {error}");
+        }
+        // Runtime::core has no process provider. Neither expression may reach
+        // the system clipboard in this test.
+        for form in ["(OS/clipboard-copy \"test\")", "(OS/clipboard-paste)"] {
+            let error = runtime.eval_native(form).unwrap_err();
+            assert!(error.contains("requires capability :native-runtime"), "{backend}: {error}");
+        }
+    }
+}
+
+#[test]
+fn component_queries_preserve_levels_and_structured_health() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(def QueryComponent (Base/struct (Base/current-namespace) 'QueryComponent (Base/vector 'health) nil))
+             (Base/extend (Base/current-namespace) QueryComponent IComponent
+               {'info (fn [rt level] [level (:health rt)]) 'health (fn [rt] (:health rt))})"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "[(IComponent/info (QueryComponent {:status :ok}) :detail)
+              (IComponent/health (QueryComponent {:status :ok}))
+              (IComponent/health (QueryComponent false))
+              (IComponent/health (QueryComponent nil))]"
+        ).unwrap(), "[[:detail {:status :ok}] {:status :ok} false nil]", "{backend}");
+        assert!(runtime.eval_native("(IComponent/info (QueryComponent true))").is_err());
+        assert!(runtime.eval_native("(IComponent/health (QueryComponent true) :extra)").is_err());
+    }
+}
+
+#[test]
+fn pointer_runtime_resolution_preserves_original_precedence() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(ns std.lib.context.pointer) (def ^{:dynamic true} *runtime* nil)"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "(ns pointer-resolution-test)
+             (let [p (Base/pointer {:context :unused :context/rt :direct
+                              :context/fn (fn [_] (throw (ex :unexpected {})))})]
+               [(binding [std.lib.context.pointer/*runtime* :bound]
+                  (IApplicable/apply-default p))
+                (IApplicable/apply-default p)
+                (IApplicable/apply-default
+                  (Base/pointer {:context :unused :context/rt false
+                            :context/fn (fn [p] (:answer p)) :answer :resolved}))
+                (try (binding [std.lib.context.pointer/*runtime* :temporary]
+                       (throw (ex :expected {}))) (catch e false))
+                std.lib.context.pointer/*runtime*])"
+        ).unwrap(), "[:bound :direct :resolved false nil]", "{backend}");
+        runtime.eval_native(
+            "(ns std.lib.context.space) (defn space:rt-current [context] context)"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "(ns pointer-resolution-test)
+             [(IApplicable/apply-default (Base/pointer {:context :fallback}))
+              (IApplicable/apply-default (Base/pointer {:context :fallback :context/rt nil
+                                                       :context/fn (fn [_] nil)}))
+              (binding [std.lib.context.pointer/*runtime* false]
+                (IApplicable/apply-default (Base/pointer {:context :fallback
+                                                         :context/fn (fn [_] false)})))
+              (IApplicable/apply-default (Base/pointer {:context :fallback :context/rt 0}))
+              (try (IApplicable/apply-default (Base/pointer {:context :fallback
+                        :context/fn (fn [_] (throw (ex :expected {})))})) (catch e :caught))]"
+        ).unwrap(), "[:fallback :fallback :fallback 0 :caught]", "{backend}");
+        runtime.eval_native(
+            "(def Target (Base/struct (Base/current-namespace) 'Target (Base/vector 'label) nil))
+             (Base/extend (Base/current-namespace) Target IContextEval
+               {'deref-ptr (fn [rt p] [(:label rt) (:token p)])
+                'invoke-ptr (fn [rt p args] [(:label rt) args])
+                'transform-in-ptr (fn [rt p args] args)
+                'transform-out-ptr (fn [rt p value] value)})
+             (ns std.lib.context.space)
+             (defn space:rt-current [_] (pointer-resolution-test/Target :space))
+             (ns pointer-resolution-test)"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "(let [p (Base/pointer {:context :unused :token :token :context/rt (Target :direct)})]
+               [(p 7) (IDeref/deref p)
+                (binding [std.lib.context.pointer/*runtime* (Target :bound)] (p 8))
+                (binding [std.lib.context.pointer/*runtime* (Target :bound)] (IDeref/deref p))])"
+        ).unwrap(), "[[:direct [7]] [:space :token] [:bound [8]] [:space :token]]", "{backend}");
+    }
+}
+
 #[test]
 fn evaluated_quotes_retain_live_callbacks_and_records() {
     for backend in ["interpreter", "direct-native"] {
@@ -683,6 +876,61 @@ fn direct_native_socket_methods_use_the_declared_native_names() {
             .unwrap(),
         "[true true true]"
     );
+}
+
+#[test]
+fn socket_event_promise_continuations_can_reenter_the_provider() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.install_native_socket_provider();
+        runtime.set_execution_backend(backend).unwrap();
+        assert_eq!(
+            runtime.eval_native(r#"
+                (let [server (Socket/listen "127.0.0.1" 0 {} (fn [_] nil))
+                      events (Socket/events server {})
+                      ready (IPromise/then (Socket/next events)
+                              (fn [event]
+                                [(:connection event)
+                                 (Socket/events (:connection event) {})]))
+                      client (Socket/connect "127.0.0.1"
+                               (:port (Socket/endpoint server)) {}
+                               (fn [error connection] nil))]
+                  (try
+                    (let [result (IDerefTimeout/deref-timeout ready 2000 nil)]
+                      (try
+                        [(< 0 (ILookup/lookup result 0))
+                         (< 0 (ILookup/lookup result 1))]
+                        (finally (Socket/close (ILookup/lookup result 0)))))
+                    (finally
+                      (Socket/close client)
+                      (Socket/close server))))
+            "#).unwrap(),
+            "[true true]",
+            "{backend}"
+        );
+    }
+}
+
+#[test]
+fn socket_close_accepts_a_connection_already_closed_by_its_peer() {
+    let mut runtime = Runtime::core();
+    runtime.install_native_socket_provider();
+    runtime.set_execution_backend("direct-native").unwrap();
+    assert_eq!(runtime.eval_native(r#"
+        (let [server (Socket/listen "127.0.0.1" 0 {} (fn [_] nil))
+              events (Socket/events server {})
+              client (Socket/connect "127.0.0.1" (:port (Socket/endpoint server))
+                       {} (fn [_ _] nil))
+              opened (IDerefTimeout/deref-timeout (Socket/next events) 2000 nil)
+              connection (:connection opened)]
+          (try
+            (Socket/close client)
+            (let [closed (IDerefTimeout/deref-timeout (Socket/next events) 2000 nil)]
+              (Socket/close connection)
+              [(:type opened) (:type closed) (= connection (:connection closed))])
+            (finally (Socket/close server))))
+    "#).unwrap(), "[:open :close true]");
+    assert!(runtime.eval_native("(Socket/close 999999)").is_err());
 }
 
 #[test]

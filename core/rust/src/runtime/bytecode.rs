@@ -96,7 +96,8 @@ impl SourceBytecodeCache {
         use sha2::{Digest, Sha256};
 
         let mut digest = Sha256::new();
-        digest.update(b"hara-direct-native-source-v1\0");
+        // v2 excludes lossy constant round trips, including quoted metadata.
+        digest.update(b"hara-direct-native-source-v2\0");
         digest.update(env!("CARGO_PKG_VERSION").as_bytes());
         digest.update([0]);
         digest.update(namespace.as_bytes());
@@ -171,6 +172,24 @@ impl SourceBytecodeCache {
         let Ok(bytes) = crate::vm::encode_program(program) else {
             return;
         };
+        // HTA intentionally serializes data without process-local metadata.
+        // Source constants are executable syntax too: losing metadata on a
+        // quoted def can silently turn a dynamic Var into an ordinary Var.
+        // Keep such programs live and recompile next time instead of caching
+        // a different program. Unsupported syntax comparisons also fail closed.
+        let Ok(decoded) = crate::vm::decode_program(&bytes) else {
+            return;
+        };
+        if program.constants.len() != decoded.constants.len()
+            || !program.constants.iter().zip(&decoded.constants).all(|(before, after)| {
+                match (core::value_to_form(before), core::value_to_form(after)) {
+                    (Ok(before), Ok(after)) => before == after,
+                    _ => false,
+                }
+            })
+        {
+            return;
+        }
         if std::fs::create_dir_all(&directory).is_err() {
             return;
         }
@@ -916,6 +935,19 @@ mod source_cache_tests {
         assert_eq!(loaded.namespace_form, "(ns example.cache)");
         assert!(cache.load(namespace, "(+ 1 3)").is_none());
         assert!(cache.load("example.other", source).is_none());
+    }
+
+    #[test]
+    fn source_cache_rejects_lossy_quoted_metadata() {
+        let root = temp_root();
+        let namespace = "example.quoted-metadata";
+        let source = "'(def ^:dynamic value nil)";
+        let mut program = crate::vm::compile_source(source).unwrap();
+        program.namespace = Some(namespace.to_owned());
+        let cache = SourceBytecodeCache::new(&root.0, [9; 32]);
+        cache.store(namespace, source, "(ns example.quoted-metadata)", &program);
+        assert!(cache.load(namespace, source).is_none(),
+                "quoted definition metadata must not be discarded by a cache hit");
     }
 
     #[test]

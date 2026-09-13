@@ -17,6 +17,28 @@ fn os_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
         value => value,
     };
     match operation {
+        "clipboard-copy" | "clipboard-paste" => {
+            let text = if operation == "clipboard-copy" {
+                match values.as_slice() {
+                    [Value::String(text)] => Some(text.as_str()),
+                    _ => return Err("OS/clipboard-copy expects one string".into()),
+                }
+            } else {
+                if !values.is_empty() {
+                    return Err("OS/clipboard-paste expects no arguments".into());
+                }
+                None
+            };
+            require_native_capability("OS", operation, "native-runtime")?;
+            ACTIVE_PROCESS_ALLOWED.with(|allowed| {
+                if allowed.get() { Ok(()) }
+                else { Err(native_capability_denied("OS", operation, "native-runtime")) }
+            })?;
+            #[cfg(target_arch = "wasm32")]
+            return Err(format!("OS/{operation} is unsupported on wasm"));
+            #[cfg(not(target_arch = "wasm32"))]
+            return crate::native_clipboard::access(text).map(Value::String);
+        }
         "time-ms" => {
             if !values.is_empty() {
                 return Err("os/time-ms expects no arguments".into());

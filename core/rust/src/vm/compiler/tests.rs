@@ -317,7 +317,7 @@ fn destructuring_generated_calls_ignore_shadowing() {
                     [(even* 4) (odd* 3)])]"
             )
             .unwrap(),
-        "[[1 <iterator>] 42 [true true]]"
+        "[[1 [2 3]] 42 [true true]]"
     );
 }
 

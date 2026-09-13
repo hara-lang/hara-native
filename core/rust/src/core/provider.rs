@@ -329,6 +329,27 @@ impl NativeSocketProvider {
         self.pump();
     }
 
+    fn retire_streams(&self, handle: SocketHandle) {
+        let pending = {
+            let mut state = self.state.borrow_mut();
+            let streams: Vec<_> = state
+                .streams
+                .iter()
+                .filter_map(|(id, stream)| (stream.handle == handle).then_some(*id))
+                .collect();
+            streams
+                .into_iter()
+                .filter_map(|id| state.streams.remove(&id).and_then(|stream| stream.pending))
+                .collect::<Vec<_>>()
+        };
+        for promise in pending {
+            promise.resolve(Value::Map(PMap::from_iter([(
+                Value::Keyword("type".into()),
+                Value::Keyword("close".into()),
+            )])));
+        }
+    }
+
     fn dispatch(&self, raw: RawSocketEvent) {
         let event = match raw {
             RawSocketEvent::Open {
@@ -336,6 +357,10 @@ impl NativeSocketProvider {
                 connection,
                 stream,
             } => {
+                if !self.state.borrow().servers.contains_key(&server) {
+                    let _ = stream.lock().map(|stream| stream.shutdown(Shutdown::Both));
+                    return;
+                }
                 let mut state = self.state.borrow_mut();
                 state.connections.insert(connection, stream);
                 state.connection_servers.insert(connection, server);
@@ -392,9 +417,10 @@ impl NativeSocketProvider {
             } => (*server, *connection, bytes.len()),
         };
         let value = socket_server_event_value(event);
-        let overflow = {
+        let (overflow, deliveries) = {
             let mut state = self.state.borrow_mut();
             let mut overflow = false;
+            let mut deliveries = Vec::new();
             for stream in state
                 .streams
                 .values_mut()
@@ -408,29 +434,37 @@ impl NativeSocketProvider {
                 {
                     stream.closed = true;
                     if let Some(promise) = stream.pending.take() {
-                        promise.resolve(Value::Map(PMap::from_iter([
-                            (
-                                Value::Keyword("type".into()),
-                                Value::Keyword("error".into()),
-                            ),
-                            (
-                                Value::Keyword("error".into()),
-                                Value::String("buffer-overflow".into()),
-                            ),
-                        ])));
+                        deliveries.push((
+                            promise,
+                            Value::Map(PMap::from_iter([
+                                (
+                                    Value::Keyword("type".into()),
+                                    Value::Keyword("error".into()),
+                                ),
+                                (
+                                    Value::Keyword("error".into()),
+                                    Value::String("buffer-overflow".into()),
+                                ),
+                            ])),
+                        ));
                     }
                     overflow = true;
                     continue;
                 }
                 if let Some(promise) = stream.pending.take() {
-                    promise.resolve(value.clone());
+                    deliveries.push((promise, value.clone()));
                 } else {
                     stream.queued_bytes += bytes;
                     stream.queue.push_back(value.clone());
                 }
             }
-            overflow
+            (overflow, deliveries)
         };
+        // Resolving runs guest continuations synchronously. Release the provider
+        // borrow first so a continuation can subscribe, send, or close a socket.
+        for (promise, value) in deliveries {
+            promise.resolve(value);
+        }
         if overflow {
             let _ = self.close(connection);
         }
@@ -494,23 +528,42 @@ impl SocketProvider for NativeSocketProvider {
         if let Some(server) = server {
             server.alive.store(false, Ordering::Relaxed);
             self.state.borrow_mut().server_callbacks.remove(&socket);
+            let connections: Vec<_> = self
+                .state
+                .borrow()
+                .connection_servers
+                .iter()
+                .filter_map(|(connection, server)| (*server == socket).then_some(*connection))
+                .collect();
+            for connection in connections {
+                self.close(connection)?;
+            }
+            self.retire_streams(socket);
+            self.pump();
             return Ok(());
         }
         let (stream, server, sender) = {
             let mut state = self.state.borrow_mut();
             (
                 state.connections.remove(&socket),
-                state.connection_servers.remove(&socket).unwrap_or(0),
+                state.connection_servers.remove(&socket),
                 state.sender.clone(),
             )
         };
         if let Some(stream) = stream {
             let _ = stream.lock().map(|stream| stream.shutdown(Shutdown::Both));
+            self.retire_streams(socket);
             let _ = sender.send(RawSocketEvent::Closed {
-                server,
+                server: server.unwrap_or(0),
                 connection: socket,
             });
             self.pump();
+            return Ok(());
+        }
+        // A peer EOF removes the transport before its owner performs cleanup.
+        // The retained association distinguishes it from an unknown handle.
+        if server.is_some() {
+            self.retire_streams(socket);
             return Ok(());
         }
         Err(SocketError::Invalid("unknown socket".into()))
@@ -775,7 +828,12 @@ pub struct LoopbackSocketProvider {
     streams: Rc<RefCell<HashMap<SocketHandle, LoopbackSocketStream>>>,
 }
 
-struct LoopbackSocketStream { socket: SocketHandle, queue: VecDeque<Value>, pending: Option<Promise>, closed: bool }
+struct LoopbackSocketStream {
+    socket: SocketHandle,
+    queue: VecDeque<Value>,
+    pending: Option<Promise>,
+    closed: bool,
+}
 
 impl Default for LoopbackSocketProvider {
     fn default() -> Self {
@@ -812,9 +870,22 @@ impl SocketProvider for LoopbackSocketProvider {
             .cloned()
             .ok_or_else(|| SocketError::Invalid("unknown socket".into()))?;
         callback(SocketEvent::Data(socket, bytes.to_vec()));
-        let event = socket_server_event_value(SocketServerEvent::Data { server: 0, connection: socket, bytes: bytes.to_vec() });
-        for stream in self.streams.borrow_mut().values_mut().filter(|s| s.socket == socket) {
-            if let Some(promise) = stream.pending.take() { promise.resolve(event.clone()); } else { stream.queue.push_back(event.clone()); }
+        let event = socket_server_event_value(SocketServerEvent::Data {
+            server: 0,
+            connection: socket,
+            bytes: bytes.to_vec(),
+        });
+        for stream in self
+            .streams
+            .borrow_mut()
+            .values_mut()
+            .filter(|s| s.socket == socket)
+        {
+            if let Some(promise) = stream.pending.take() {
+                promise.resolve(event.clone());
+            } else {
+                stream.queue.push_back(event.clone());
+            }
         }
         Ok(bytes.len())
     }
@@ -826,29 +897,64 @@ impl SocketProvider for LoopbackSocketProvider {
             .remove(&socket)
             .ok_or_else(|| SocketError::Invalid("unknown socket".into()))?;
         callback(SocketEvent::Closed(socket));
-        let event = socket_server_event_value(SocketServerEvent::Closed { server: 0, connection: socket });
-        for stream in self.streams.borrow_mut().values_mut().filter(|s| s.socket == socket) {
+        let event = socket_server_event_value(SocketServerEvent::Closed {
+            server: 0,
+            connection: socket,
+        });
+        for stream in self
+            .streams
+            .borrow_mut()
+            .values_mut()
+            .filter(|s| s.socket == socket)
+        {
             stream.closed = true;
-            if let Some(promise) = stream.pending.take() { promise.resolve(event.clone()); } else { stream.queue.push_back(event.clone()); }
+            if let Some(promise) = stream.pending.take() {
+                promise.resolve(event.clone());
+            } else {
+                stream.queue.push_back(event.clone());
+            }
         }
         Ok(())
     }
 
     fn events(&self, socket: SocketHandle) -> Result<SocketHandle, SocketError> {
-        if !self.callbacks.borrow().contains_key(&socket) { return Err(SocketError::Invalid("unknown socket".into())); }
-        let handle = self.next_handle.get(); self.next_handle.set(handle + 1);
-        self.streams.borrow_mut().insert(handle, LoopbackSocketStream { socket, queue: VecDeque::new(), pending: None, closed: false });
+        if !self.callbacks.borrow().contains_key(&socket) {
+            return Err(SocketError::Invalid("unknown socket".into()));
+        }
+        let handle = self.next_handle.get();
+        self.next_handle.set(handle + 1);
+        self.streams.borrow_mut().insert(
+            handle,
+            LoopbackSocketStream {
+                socket,
+                queue: VecDeque::new(),
+                pending: None,
+                closed: false,
+            },
+        );
         Ok(handle)
     }
 
     fn next(&self, handle: SocketHandle) -> Result<Promise, SocketError> {
         let promise = Promise::new();
         let mut streams = self.streams.borrow_mut();
-        let stream = streams.get_mut(&handle).ok_or_else(|| SocketError::Invalid("unknown socket stream".into()))?;
-        if let Some(event) = stream.queue.pop_front() { promise.resolve(event); }
-        else if stream.closed { promise.resolve(socket_server_event_value(SocketServerEvent::Closed { server: 0, connection: stream.socket })); }
-        else if stream.pending.is_some() { return Err(SocketError::Invalid("socket stream already has a pending next".into())); }
-        else { stream.pending = Some(promise.clone()); }
+        let stream = streams
+            .get_mut(&handle)
+            .ok_or_else(|| SocketError::Invalid("unknown socket stream".into()))?;
+        if let Some(event) = stream.queue.pop_front() {
+            promise.resolve(event);
+        } else if stream.closed {
+            promise.resolve(socket_server_event_value(SocketServerEvent::Closed {
+                server: 0,
+                connection: stream.socket,
+            }));
+        } else if stream.pending.is_some() {
+            return Err(SocketError::Invalid(
+                "socket stream already has a pending next".into(),
+            ));
+        } else {
+            stream.pending = Some(promise.clone());
+        }
         Ok(promise)
     }
 }
@@ -870,6 +976,91 @@ impl SocketProvider for UnsupportedSocketProvider {
     }
     fn close(&self, _socket: SocketHandle) -> Result<(), SocketError> {
         Err(SocketError::Unsupported)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod socket_lifecycle_tests {
+    use super::*;
+    use crate::task::promise::PromiseState;
+
+    #[test]
+    fn closing_listeners_releases_subscriptions_and_settles_pending_reads() {
+        let provider = NativeSocketProvider::default();
+        for _ in 0..20 {
+            let server = provider.listen("127.0.0.1", 0, Rc::new(|_| {})).unwrap();
+            let events = provider.events(server).unwrap();
+            let _unused_events = provider.events(server).unwrap();
+            let pending = provider.next(events).unwrap();
+            provider.close(server).unwrap();
+            assert!(provider.state.borrow().streams.is_empty());
+            assert!(provider.state.borrow().servers.is_empty());
+            assert!(provider.state.borrow().server_callbacks.is_empty());
+            let PromiseState::Fulfilled(Value::Map(event)) = pending.state() else {
+                panic!("closing a listener must settle its pending event read");
+            };
+            assert!(event.iter().any(
+                |(key, value)| matches!(key, Value::Keyword(key) if key.as_str() == "type")
+                    && matches!(value, Value::Keyword(value) if value.as_str() == "close")
+            ));
+        }
+    }
+
+    #[test]
+    fn closing_a_listener_releases_accepted_connections_and_their_readers() {
+        let provider = NativeSocketProvider::default();
+        let server = provider.listen("127.0.0.1", 0, Rc::new(|_| {})).unwrap();
+        let events = provider.events(server).unwrap();
+        let (host, port) = provider.endpoint(server).unwrap();
+        let mut client = TcpStream::connect((host.as_str(), port)).unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let opened = provider.next(events).unwrap();
+        let PromiseState::Fulfilled(Value::Map(event)) =
+            opened.wait_state_timeout(std::time::Duration::from_secs(2))
+        else {
+            panic!("expected an accepted connection");
+        };
+        let connection = event
+            .iter()
+            .find_map(|(key, value)| {
+                if matches!(key, Value::Keyword(key) if key.as_str() == "connection") {
+                    if let Value::Number(handle) = value {
+                        return Some(*handle as u64);
+                    }
+                }
+                None
+            })
+            .unwrap();
+        let received = provider.next(provider.events(connection).unwrap()).unwrap();
+        provider.close(server).unwrap();
+        assert!(provider.state.borrow().connections.is_empty());
+        assert!(provider.state.borrow().connection_servers.is_empty());
+        assert!(provider.state.borrow().streams.is_empty());
+        assert!(matches!(received.state(), PromiseState::Fulfilled(_)));
+        assert_eq!(client.read(&mut [0u8; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn an_accept_queued_before_shutdown_cannot_recreate_a_closed_listener() {
+        let provider = NativeSocketProvider::default();
+        let server = provider.listen("127.0.0.1", 0, Rc::new(|_| {})).unwrap();
+        provider.close(server).unwrap();
+        let transport = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut client = TcpStream::connect(transport.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let (accepted, _) = transport.accept().unwrap();
+        provider.dispatch(RawSocketEvent::Open {
+            server,
+            connection: provider.next_handle(),
+            stream: Arc::new(Mutex::new(accepted)),
+        });
+        assert!(provider.state.borrow().connections.is_empty());
+        assert!(provider.state.borrow().connection_servers.is_empty());
+        assert_eq!(client.read(&mut [0u8; 1]).unwrap(), 0);
     }
 }
 

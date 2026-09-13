@@ -250,7 +250,9 @@ fn top_level_definition_name(form: &Form) -> Option<&str> {
         Form::Symbol(head) => head.as_str(),
         _ => return None,
     };
-    if !matches!(head, "def" | "defonce" | "defn" | "defmacro") {
+    // defonce checks whether its Var exists. A synthetic declaration would
+    // make it skip the initializer and definition metadata on the first load.
+    if !matches!(head, "def" | "defn" | "defmacro") {
         return None;
     }
     match values.get(1)? {

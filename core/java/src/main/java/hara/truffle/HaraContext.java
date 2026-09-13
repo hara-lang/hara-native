@@ -724,6 +724,21 @@ public final class HaraContext {
         "apply",
         new VariadicBuiltin("std.native.Base/apply", this::applyFunction));
     base.define(
+        "supports-method?",
+        new VariadicBuiltin("std.native.Base/supports-method?", values -> {
+          requireMethodArity("Base/supports-method?", values, 3);
+          Object protocolValue = HaraBox.unwrap(values[0]);
+          if (protocolValue instanceof HaraVar variable) protocolValue = variable.deref();
+          if (!(protocolValue instanceof HaraProtocol protocol)) {
+            throw new HaraException("Base/supports-method? expects a protocol");
+          }
+          Object methodValue = HaraBox.unwrap(values[1]);
+          if (!(methodValue instanceof Symbol method) || method.getNamespace() != null) {
+            throw new HaraException("Base/supports-method? expects an unqualified symbol");
+          }
+          return protocol.implementation(HaraBox.unwrap(values[2]), method.getName()) != null;
+        }));
+    base.define(
         "resolve",
         new VariadicBuiltin("std.native.Base/resolve", this::nativeBaseResolve));
     base.define(
@@ -2831,6 +2846,13 @@ public final class HaraContext {
           "protocol/arity: " + protocol.name() + "/" + methodName + " expects a receiver");
     }
     Object receiver = HaraBox.unwrap(values[0]);
+    if (receiver instanceof hara.lang.data.Pointer) {
+      for (String name : new String[] {"IApplicable", "IDeref", "IDisplay"}) {
+        if (protocol.name().equals(builtinProtocolNamespace(name))) {
+          return protocolCall(name, methodName, values);
+        }
+      }
+    }
     if (isHostObject(receiver)) receiver = asHostObject(receiver);
     Object[] arguments = new Object[values.length - 1];
     System.arraycopy(values, 1, arguments, 0, arguments.length);
@@ -6192,6 +6214,16 @@ public final class HaraContext {
     os.define("getenv", new UnaryBuiltin("std.native.OS/getenv", this::osGetenv));
     os.define("time-ms", new VariadicBuiltin("std.native.OS/time-ms", this::osTimeMs));
     os.define("time-ns", new VariadicBuiltin("std.native.OS/time-ns", this::osTimeNs));
+    os.define("clipboard-copy", new UnaryBuiltin("std.native.OS/clipboard-copy", value -> {
+      String text = stringValue(value, "OS/clipboard-copy");
+      requireClipboardIO("clipboard-copy");
+      return HaraClipboard.copy(HaraClipboard.system(), text);
+    }));
+    os.define("clipboard-paste", new VariadicBuiltin("std.native.OS/clipboard-paste", values -> {
+      requireMethodArity("OS/clipboard-paste", values, 0);
+      requireClipboardIO("clipboard-paste");
+      return HaraClipboard.paste(HaraClipboard.system());
+    }));
     HaraNamespace process = namespace("std.native.Process");
     process.define("spawn", new VariadicBuiltin("std.native.Process/spawn", this::osSpawn));
     process.define("alive?", new UnaryBuiltin("std.native.Process/alive?", value -> requireProcess(value, "std.native.Process/alive?").process.isAlive()));
@@ -6220,6 +6252,12 @@ public final class HaraContext {
     if (!environment.isCreateProcessAllowed()) {
       throw HaraNativeCapabilityBoundary.denied(
           "Process", HaraNativeCapabilityBoundary.method(operation), "native-runtime");
+    }
+  }
+
+  private void requireClipboardIO(String method) {
+    if (!environment.isCreateProcessAllowed()) {
+      throw HaraNativeCapabilityBoundary.denied("OS", method, "native-runtime");
     }
   }
 
@@ -7791,6 +7829,21 @@ public final class HaraContext {
   }
 
   private Object pointerDefault(hara.lang.data.Pointer pointer) {
+    HaraNamespace owner = namespaces.get("std.lib.context.pointer");
+    HaraVar override = owner == null ? null : owner.lookup("*runtime*");
+    Object runtime = override == null ? null : HaraBox.unwrap(override.deref());
+    if (truthy(runtime)) return runtime;
+    runtime = HaraBox.unwrap(pointer.lookup(Keyword.create("context/rt")));
+    if (truthy(runtime)) return runtime;
+    Object resolver = HaraBox.unwrap(pointer.lookup(Keyword.create("context/fn")));
+    if (truthy(resolver)) {
+      runtime = HaraBox.unwrap(invokeCallable(resolver, new Object[] {pointer}));
+      if (truthy(runtime)) return runtime;
+    }
+    return pointerSpaceRuntime(pointer);
+  }
+
+  private Object pointerSpaceRuntime(hara.lang.data.Pointer pointer) {
     try {
       HaraNamespace space = requiredNamespace("std.lib.context.space");
       HaraVar resolver = space == null ? null : space.lookup("space:rt-current");
@@ -7804,7 +7857,7 @@ public final class HaraContext {
   }
 
   private Object pointerDeref(hara.lang.data.Pointer pointer) {
-    return pointerContextEval(pointer, pointerDefault(pointer), "deref-ptr", new Object[0]);
+    return pointerContextEval(pointer, pointerSpaceRuntime(pointer), "deref-ptr", new Object[0]);
   }
 
   private Object pointerContextCall(

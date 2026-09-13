@@ -12,6 +12,18 @@ public interface IComponent {
   @HaraMethod(value = "status", arity = 1)
   IMetadata getStatus();
 
+  /** Implementations may interpret level and return their own query value. */
+  @HaraMethod(value = "info", arity = 2)
+  default Object info(Object level) {
+    return getStatus();
+  }
+
+  /** A health result may be structured data, not only a boolean. */
+  @HaraMethod(value = "health", arity = 1)
+  default Object health() {
+    return isStarted();
+  }
+
   @HaraMethod(value = "started?", arity = 1)
   boolean isStarted();
 

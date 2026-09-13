@@ -162,6 +162,17 @@ fn finish(handle: u64, wait: bool) -> Result<Option<(i32, Vec<u8>, Vec<u8>)>, St
                     .map_err(|error| format!("os/process-wait failed: {error}"))?
             };
             if let Some(status) = status {
+                // A child may exit before its output readers reach EOF. A poll
+                // must never block joining those readers (including inherited
+                // pipes still held by descendants). try_wait caches the status.
+                if !wait
+                    && [process.stdout_thread.as_ref(), process.stderr_thread.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .any(|reader| !reader.is_finished())
+                {
+                    return Ok(None);
+                }
                 process.exit = Some(status.code().unwrap_or(-1));
                 process.stdout = Some(
                     process
@@ -239,7 +250,7 @@ pub(crate) fn promise(value: &Value, kind: &'static str) -> Result<Promise, Stri
     let handle = handle(value, &format!("os/process-{kind}"))?;
     let promise = Promise::new();
     let weak = promise.downgrade();
-    promise.set_poller(Rc::new(move || {
+    promise.set_cooperative_poller(Rc::new(move || {
         if let Some(promise) = weak.upgrade() {
             match result(handle, kind, false) {
                 Ok(Some(value)) => {
@@ -316,7 +327,7 @@ fn stream_result(handle: u64, kind: &'static str, wait: bool) -> Result<Option<V
 pub(crate) fn stream_promise(handle: u64, kind: &'static str) -> Promise {
     let promise = Promise::new();
     let weak = promise.downgrade();
-    promise.set_poller(Rc::new(move || {
+    promise.set_cooperative_poller(Rc::new(move || {
         if let Some(promise) = weak.upgrade() {
             match stream_result(handle, kind, false) {
                 Ok(Some(value)) => {
@@ -361,4 +372,34 @@ pub(crate) fn kill(value: &Value) -> Result<(), String> {
         }
         Ok(())
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polling_an_exited_child_does_not_join_an_unfinished_output_reader() {
+        let child = spawn(&["sh".into(), "-c".into(), "exit 7".into()], None, &[]).unwrap();
+        let handle = handle(&child, "test").unwrap();
+        let (release, blocked) = mpsc::channel();
+        PROCESSES.with(|state| {
+            let mut state = state.borrow_mut();
+            let record = state.records.get_mut(&handle).unwrap();
+            record.child.wait().unwrap();
+            record.stdout_thread.take().unwrap().join().unwrap();
+            record.stdout_thread = Some(std::thread::spawn(move || {
+                // Bound a broken implementation's join so this regression fails
+                // instead of hanging the test runner.
+                let _ = blocked.recv_timeout(std::time::Duration::from_secs(2));
+                b"captured".to_vec()
+            }));
+        });
+        let pending = finish(handle, false);
+        let _ = release.send(());
+        let completed = finish(handle, true);
+        PROCESSES.with(|state| state.borrow_mut().records.remove(&handle));
+        assert_eq!(pending.unwrap(), None);
+        assert_eq!(completed.unwrap(), Some((7, b"captured".to_vec(), vec![])));
+    }
 }

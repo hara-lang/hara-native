@@ -26,8 +26,12 @@ cargo run --manifest-path core/rust/Cargo.toml --bin hara-native -- test-json fi
 ```
 
 The project runner discovers only the `:project/test-paths` from `project.edn`,
-loads the project source catalog, and evaluates each selected Test file in a
-fresh runtime. A test file must finish with a `Test/run` summary or a
+adds those roots to its test-only import catalog, and evaluates each selected
+Test file in a fresh runtime. Tests can require shared fixture namespaces from
+the declared test roots. Production source roots take precedence over
+same-named test helpers; ordinary runtime catalogs do not expose test roots.
+Selecting one test file does not execute unrelated helper files as test suites.
+A test file must finish with a `Test/run` summary or a
 `Test/check` Result vector. The native registry uses `:desc` as the canonical
 fact identity, preserves supplied `:meta` such as `:refer` and `:id`, and
 retains `:name` only as a compatibility alias. `Test/run` never accepts an ad

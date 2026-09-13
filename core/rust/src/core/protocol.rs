@@ -349,6 +349,29 @@ fn protocol_pointer_context(arguments: &[Value]) -> Result<Value, String> {
 }
 
 fn pointer_default(pointer: &PPointer) -> Result<Value, String> {
+    if let Some(var) = namespace_registry()?.resolve(&Symbol::parse("std.lib.context.pointer/*runtime*")) {
+        let runtime = var.deref_value();
+        if runtime.truthy() {
+            return Ok(runtime);
+        }
+    }
+    if let Some(runtime) = pointer.get(&Value::Keyword(Keyword::from("context/rt"))) {
+        if runtime.truthy() {
+            return Ok(runtime.clone());
+        }
+    }
+    if let Some(resolver) = pointer.get(&Value::Keyword(Keyword::from("context/fn"))) {
+        if resolver.truthy() {
+            let runtime = call_value(resolver.clone(), vec![Value::Pointer(pointer.clone())])?;
+            if runtime.truthy() {
+                return Ok(runtime);
+            }
+        }
+    }
+    pointer_space_runtime(pointer)
+}
+
+fn pointer_space_runtime(pointer: &PPointer) -> Result<Value, String> {
     let resolver = vm_resolve_global("std.lib.context.space/space:rt-current")?.deref_value();
     call_value(resolver, vec![Value::Keyword(pointer.context().clone())])
         .map_err(|error| format!("pointer/runtime-unavailable: {error}"))
@@ -668,7 +691,7 @@ fn protocol_deref(arguments: &[Value]) -> Result<Value, String> {
         [Value::Result(result)] => result.deref_value(),
         [Value::Pointer(pointer)] => pointer_context_eval(
             pointer,
-            pointer_default(pointer)?,
+            pointer_space_runtime(pointer)?,
             "deref-ptr",
             &[],
         ),
@@ -1623,6 +1646,16 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
                 mutable_field_value(value, field)
             }
             _ => Err("Base/field expects a mutable value and field name".into()),
+        },
+        "supports-method?" => match values {
+            [protocol, method, value] => {
+                let protocol = base_protocol(protocol, "supports-method?")?;
+                let method = base_symbol(method, "supports-method?")?;
+                Ok(Value::Bool(active_protocol_registry()?.supports_method(
+                    &protocol, &method, value,
+                )))
+            }
+            _ => Err("Base/supports-method? expects a protocol, method symbol, and value".into()),
         },
         "satisfies?" => match values {
             [protocol, value] => {
