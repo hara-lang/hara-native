@@ -1,5 +1,106 @@
 use hara_native::Runtime;
 
+#[test]
+fn vars_are_ifn_receivers_and_follow_current_bindings() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(ns callable-var-test)
+             (def ^:dynamic target (fn [& args] args))
+             (def held (var target))
+             (def indirect (var held))"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "[(Base/satisfies? IFn held)
+              (Base/supports-method? IFn 'invoke held)
+              (held) (held 1 2 3)
+              (IFn/invoke held 4 5)
+              (Base/apply held [6 7])
+              (indirect 8)
+              (binding [target (fn [x] (+ x 10))] (held 2))
+              (held 9)]"
+        ).unwrap(), "[true true () (1 2 3) (4 5) (6 7) (8) 12 (9)]", "{backend}");
+        runtime.eval_native("(def target (fn [x] (+ x 100)))").unwrap();
+        assert_eq!(runtime.eval_native("[(held 2) (indirect 3)]").unwrap(),
+                   "[102 103]", "{backend}");
+        assert_eq!(runtime.eval_native(
+            "(held (do (def target (fn [x] (+ x 200))) 2))"
+        ).unwrap(), "202", "{backend}: resolve after argument evaluation");
+        let error = runtime.eval_native("(held)").unwrap_err();
+        assert!(error.contains("argument") || error.contains("arity"), "{backend}: {error}");
+        runtime.eval_native("(def target 42)").unwrap();
+        assert_eq!(runtime.eval_native("(Base/satisfies? IFn held)").unwrap(), "true");
+        assert!(runtime.eval_native("(held 1)").unwrap_err().contains("not callable"));
+    }
+}
+
+#[test]
+fn pointers_and_vars_of_pointers_share_ifn_dispatch() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(ns callable-pointer-test)
+             (def Target (Base/struct (Base/current-namespace) 'Target (Base/vector 'label) nil))
+             (Base/extend (Base/current-namespace) Target IContextEval
+               {'invoke-ptr (fn [rt ptr args] [(:label rt) (:token ptr) args])
+                'transform-in-ptr (fn [rt ptr args] args)
+                'transform-out-ptr (fn [rt ptr value] value)})
+             (def p (Base/pointer {:context :fixture :token :entry :context/rt (Target :runtime)}))
+             (def held (var p))"
+        ).unwrap();
+        assert_eq!(runtime.eval_native(
+            "[(Base/satisfies? IFn p) (Base/satisfies? IFn held)
+              (p 1) (IFn/invoke p 2 3) (Base/apply p [4])
+              (held 5) (IFn/invoke held 6) (Base/apply held [7 8])]"
+        ).unwrap(),
+          "[true true [:runtime :entry [1]] [:runtime :entry [2 3]] [:runtime :entry [4]] [:runtime :entry [5]] [:runtime :entry [6]] [:runtime :entry [7 8]]]",
+          "{backend}");
+    }
+}
+
+#[test]
+fn callable_var_cycles_fail_without_overflowing() {
+    for backend in ["interpreter", "direct-native"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(ns callable-cycle-test)
+             (def a nil) (def b (var a)) (def a (var b))"
+        ).unwrap();
+        for form in ["((var a))", "(IFn/invoke (var a))", "(Base/apply (var a) [])"] {
+            let error = runtime.eval_native(form).unwrap_err();
+            assert!(error.contains("cyclic Var"), "{backend}: {error}");
+        }
+        runtime.eval_native("(def a (fn [] 42))").unwrap();
+        assert_eq!(runtime.eval_native("((var b))").unwrap(), "42", "{backend}");
+    }
+}
+
+#[test]
+fn interpreter_callable_vars_preserve_suspended_continuations() {
+    // Direct-native nested yield also fails for a plain function call; it is
+    // tracked separately in docs/callable-vars.md, not asserted as Var parity.
+    for backend in ["interpreter"] {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(
+            "(ns callable-coroutine-test)
+             (def yield-once (fn [] (Coroutine/yield 7)))"
+        ).unwrap();
+        for call in ["(yield-once)", "((var yield-once))"] {
+            let source = format!(
+                "(let [c (Coroutine/create (fn [] [:after {call}]))]
+                   [(ICoroutine/resume c) (ICoroutine/resume c 41) (ICoroutine/status c)])"
+            );
+            let result = runtime.eval_native(&source)
+                .unwrap_or_else(|error| panic!("{backend}: {call}: {error}"));
+            assert_eq!(result, "[7 [:after 41] :dead]", "{backend}: {call}");
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn process_completion_callbacks_progress_while_waiting_on_an_unrelated_timer() {
@@ -931,6 +1032,44 @@ fn socket_close_accepts_a_connection_already_closed_by_its_peer() {
             (finally (Socket/close server))))
     "#).unwrap(), "[:open :close true]");
     assert!(runtime.eval_native("(Socket/close 999999)").is_err());
+}
+
+#[test]
+fn outbound_socket_receive_streams_deliver_peer_responses() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    for backend in ["interpreter", "direct-native"] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            connection
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0u8; 4];
+            connection.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"ping");
+            connection.write_all(b"pong").unwrap();
+        });
+        let mut runtime = Runtime::core();
+        runtime.install_native_socket_provider();
+        runtime.set_execution_backend(backend).unwrap();
+        let result = runtime.eval_native(&format!(
+            r#"
+            (let [client (Socket/connect "127.0.0.1" {port} {{}} (fn [_ _] nil))]
+              (try
+                (let [incoming (Socket/receive-stream client)]
+                  (Socket/send client (String/encode-utf8 "ping"))
+                  (String/decode-utf8
+                    (IDerefTimeout/deref-timeout (IStream/next incoming) 2000 nil)))
+                (finally (Socket/close client))))
+        "#
+        ));
+        peer.join().unwrap();
+        assert_eq!(result.unwrap(), "\"pong\"", "{backend}");
+    }
 }
 
 #[test]

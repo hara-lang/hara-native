@@ -376,7 +376,15 @@ impl NativeSocketProvider {
                 bytes,
             },
             RawSocketEvent::Closed { server, connection } => {
-                self.state.borrow_mut().connections.remove(&connection);
+                let callback = {
+                    let mut state = self.state.borrow_mut();
+                    state.connections.remove(&connection);
+                    state.sockets.remove(&connection);
+                    state.callbacks.remove(&connection)
+                };
+                if let Some(callback) = callback {
+                    callback(SocketEvent::Closed(connection));
+                }
                 SocketServerEvent::Closed { server, connection }
             }
             RawSocketEvent::Failed {
@@ -485,7 +493,42 @@ impl SocketProvider for NativeSocketProvider {
         let stream = TcpStream::connect((host, port))
             .map_err(|error| SocketError::Invalid(error.to_string()))?;
         let handle = self.next_handle();
+        let mut reader = stream
+            .try_clone()
+            .map_err(|error| SocketError::Invalid(error.to_string()))?;
+        let sender = self.state.borrow().sender.clone();
+        std::thread::Builder::new()
+            .name(format!("hara-socket-client-{handle}"))
+            .spawn(move || {
+                let mut buffer = [0u8; 8192];
+                loop {
+                    let event = match reader.read(&mut buffer) {
+                        Ok(0) => RawSocketEvent::Closed {
+                            server: 0,
+                            connection: handle,
+                        },
+                        Ok(count) => RawSocketEvent::Data {
+                            server: 0,
+                            connection: handle,
+                            bytes: buffer[..count].to_vec(),
+                        },
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => RawSocketEvent::Failed {
+                            server: 0,
+                            connection: handle,
+                            error: error.to_string(),
+                        },
+                    };
+                    let terminal = !matches!(event, RawSocketEvent::Data { .. });
+                    if sender.send(event).is_err() || terminal {
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| SocketError::Invalid(error.to_string()))?;
         self.state.borrow_mut().sockets.insert(handle, stream);
+        // Retain the association through peer EOF so owner cleanup remains valid.
+        self.state.borrow_mut().connection_servers.insert(handle, 0);
         self.state
             .borrow_mut()
             .callbacks
@@ -518,8 +561,13 @@ impl SocketProvider for NativeSocketProvider {
     }
 
     fn close(&self, socket: SocketHandle) -> Result<(), SocketError> {
-        if self.state.borrow_mut().sockets.remove(&socket).is_some() {
-            if let Some(callback) = self.state.borrow_mut().callbacks.remove(&socket) {
+        let outbound = { self.state.borrow_mut().sockets.remove(&socket) };
+        if let Some(outbound) = outbound {
+            // Dropping the writer alone leaves the reader clone holding TCP open.
+            let _ = outbound.shutdown(Shutdown::Both);
+            let callback = { self.state.borrow_mut().callbacks.remove(&socket) };
+            self.retire_streams(socket);
+            if let Some(callback) = callback {
                 callback(SocketEvent::Closed(socket));
             }
             return Ok(());
@@ -694,7 +742,10 @@ impl SocketProvider for NativeSocketProvider {
 
     fn events(&self, handle: SocketHandle) -> Result<SocketHandle, SocketError> {
         let mut state = self.state.borrow_mut();
-        if !state.servers.contains_key(&handle) && !state.connections.contains_key(&handle) {
+        if !state.servers.contains_key(&handle)
+            && !state.connections.contains_key(&handle)
+            && !state.sockets.contains_key(&handle)
+        {
             return Err(SocketError::Invalid("unknown socket handle".into()));
         }
         let stream = state.next_handle.fetch_add(1, Ordering::Relaxed);
@@ -983,6 +1034,73 @@ impl SocketProvider for UnsupportedSocketProvider {
 mod socket_lifecycle_tests {
     use super::*;
     use crate::task::promise::PromiseState;
+
+    #[test]
+    fn outbound_connections_receive_peer_bytes_and_eof() {
+        let provider = NativeSocketProvider::default();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = provider
+            .connect(
+                "127.0.0.1",
+                listener.local_addr().unwrap().port(),
+                Rc::new(|_| {}),
+            )
+            .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let events = provider.events(client).unwrap();
+        let received = provider.next(events).unwrap();
+        peer.write_all(b"label=reaped=true\n").unwrap();
+        let PromiseState::Fulfilled(Value::Map(event)) =
+            received.wait_state_timeout(std::time::Duration::from_secs(2))
+        else {
+            panic!("outbound connection did not receive peer bytes");
+        };
+        assert!(event.iter().any(
+            |(key, value)| matches!(key, Value::Keyword(key) if key.as_str() == "bytes")
+                && matches!(value, Value::Bytes(bytes) if bytes == b"label=reaped=true\n")
+        ));
+        let closed = provider.next(events).unwrap();
+        drop(peer);
+        let PromiseState::Fulfilled(Value::Map(event)) =
+            closed.wait_state_timeout(std::time::Duration::from_secs(2))
+        else {
+            panic!("peer EOF did not settle the outbound read");
+        };
+        assert!(event.iter().any(
+            |(key, value)| matches!(key, Value::Keyword(key) if key.as_str() == "type")
+                && matches!(value, Value::Keyword(kind) if kind.as_str() == "close")
+        ));
+        provider.close(client).unwrap();
+        assert!(provider.state.borrow().sockets.is_empty());
+        assert!(provider.state.borrow().streams.is_empty());
+        assert!(provider.state.borrow().callbacks.is_empty());
+    }
+
+    #[test]
+    fn closing_outbound_connections_settles_reads_and_shuts_down_reader_clone() {
+        let provider = NativeSocketProvider::default();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = provider
+            .connect(
+                "127.0.0.1",
+                listener.local_addr().unwrap().port(),
+                Rc::new(|_| {}),
+            )
+            .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let pending = provider.next(provider.events(client).unwrap()).unwrap();
+        provider.close(client).unwrap();
+        assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
+        assert!(matches!(
+            pending.state(),
+            PromiseState::Fulfilled(Value::Map(_))
+        ));
+        assert!(provider.state.borrow().sockets.is_empty());
+        assert!(provider.state.borrow().streams.is_empty());
+        assert!(provider.state.borrow().callbacks.is_empty());
+    }
 
     #[test]
     fn closing_listeners_releases_subscriptions_and_settles_pending_reads() {

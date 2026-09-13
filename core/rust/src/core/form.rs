@@ -983,10 +983,24 @@ fn binding_var(env: &mut HashMap<String, Value>, name: &str) -> Option<KernelVar
     }
 }
 
+/// Resolve Var indirection at invocation time, preserving dynamic bindings.
+/// Identity checks also make cyclic roots fail without overflowing the stack.
+pub(crate) fn resolve_callable(mut callable: Value) -> Result<Value, String> {
+    let mut visited = Vec::new();
+    while let Value::Var(variable) = callable {
+        if visited.iter().any(|seen| variable.same_identity(seen)) {
+            return Err(format!("cyclic Var invocation: {}", variable.symbol().as_str()));
+        }
+        callable = variable.deref_value();
+        visited.push(variable);
+    }
+    Ok(callable)
+}
+
 pub(crate) fn call_value(callable: Value, arguments: Vec<Value>) -> Result<Value, String> {
     let lookup =
         |target: &Value, key: &Value, fallback: Value| collection_get(target, key, fallback);
-    match callable {
+    match resolve_callable(callable)? {
         Value::Function(function) => call_function(&function, arguments),
         Value::Namespace(namespace) => namespace
             .resolve(&crate::lang::data::Symbol::parse("run"))
@@ -1054,6 +1068,7 @@ pub(crate) fn call_direct_native_value(
     callable: Value,
     arguments: Vec<Value>,
 ) -> Result<Value, String> {
+    let callable = resolve_callable(callable)?;
     match &callable {
         Value::Function(function) if is_direct_native_function(function) => {
             call_function(function, arguments)
@@ -1075,7 +1090,7 @@ pub(crate) fn call_direct_native_fiber(
     arguments: Vec<Value>,
     continuation: Cont,
 ) -> Result<Step, String> {
-    match callable {
+    match resolve_callable(callable)? {
         Value::Function(function) if is_direct_native_function(&function) => {
             if let Some(fiber_native) = &function.fiber_native {
                 return Ok(fiber_native(arguments, continuation));

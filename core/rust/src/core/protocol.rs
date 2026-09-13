@@ -1942,6 +1942,7 @@ impl Value {
         matches!(
             value,
             Self::Function(_)
+                | Self::Var(_)
                 | Self::Keyword(_)
                 | Self::Map(_)
                 | Self::OrderedMap(_)

@@ -1351,7 +1351,11 @@ fn application(v: Vec<Form>, env: Rc<RefCell<HashMap<String, Value>>>, k: Cont) 
                                 &arguments,
                                 &value_call_environment,
                             );
-                            k(crate::core::call_value(value, arguments))
+                            match crate::core::resolve_callable(value) {
+                                Ok(Value::Function(function)) => call(function, arguments, k),
+                                Ok(value) => k(crate::core::call_value(value, arguments)),
+                                Err(error) => k(Err(error)),
+                            }
                         }
                         Err(error) => k(Err(error)),
                     }),
