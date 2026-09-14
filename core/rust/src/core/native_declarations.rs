@@ -256,7 +256,7 @@ pub(crate) mod declarations {
         namespace = "std.native",
         name = "Iter",
         methods = [
-            "seq", "iter", "iter-finite?", "iter-materialize", "iter-next?", "iter-next", "iter-close",
+            "seq", "seq-deferred", "iter", "iter-finite?", "iter-materialize", "iter-next?", "iter-next", "iter-close",
             "iter-concat", "iter-map", "iter-filter", "iter-take-while", "iter-drop-while", "iter-mapcat",
             "iter-keep", "iter-interpose", "iter-interleave", "iter-every?", "iter-any?", "iter-take",
             "iter-drop", "iter-zip", "iter-cycle", "iter-partition-pair", "iter-partition-all", "iter-partition",

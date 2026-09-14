@@ -100,22 +100,20 @@ thread_local! {
     static CONTINUATION_QUEUE: RefCell<VecDeque<ContinuationJob>> = RefCell::new(VecDeque::new());
     static DRAINING_CONTINUATIONS: Cell<bool> = const { Cell::new(false) };
     static SUBSCRIBED_PROMISES: RefCell<Vec<WeakPromise>> = const { RefCell::new(Vec::new()) };
-    static PROGRESSING_PROMISES: Cell<bool> = const { Cell::new(false) };
+    static PROGRESSING_PROMISES: RefCell<Vec<WeakPromise>> = const { RefCell::new(Vec::new()) };
 }
 
 // Cooperative progress belongs at wait points, not in state inspection. Snapshot
 // outside the registry borrow: callbacks may subscribe, settle, or wait again.
 fn progress_subscribed_promises() {
-    if PROGRESSING_PROMISES.with(|active| active.replace(true)) {
-        return;
-    }
     struct ProgressGuard;
     impl Drop for ProgressGuard {
         fn drop(&mut self) {
-            PROGRESSING_PROMISES.with(|active| active.set(false));
+            PROGRESSING_PROMISES.with(|active| {
+                active.borrow_mut().pop();
+            });
         }
     }
-    let _guard = ProgressGuard;
     let promises = SUBSCRIBED_PROMISES.with(|registry| {
         let mut registry = registry.borrow_mut();
         registry.retain(|weak| {
@@ -129,6 +127,25 @@ fn progress_subscribed_promises() {
             .collect::<Vec<_>>()
     });
     for promise in promises {
+        // A nested wait must be able to advance peers. Guard only the active
+        // Promise's identity, not the entire progress loop. Weak entries avoid
+        // retaining work, and the scoped guard restores the stack on unwind.
+        let entered = PROGRESSING_PROMISES.with(|active| {
+            let mut active = active.borrow_mut();
+            if active.iter().any(|weak| {
+                weak.upgrade()
+                    .is_some_and(|current| current.same_identity(&promise))
+            }) {
+                false
+            } else {
+                active.push(promise.downgrade());
+                true
+            }
+        });
+        if !entered {
+            continue;
+        }
+        let _guard = ProgressGuard;
         promise.state();
     }
 }
@@ -373,18 +390,27 @@ impl Promise {
     pub fn on_settle(&self, continuation: Rc<dyn Fn(PromiseState)>) {
         let state = self.state();
         if matches!(state, PromiseState::Pending) {
-            let register = {
-                let mut inner = self.inner.borrow_mut();
-                inner.continuations.push(continuation);
-                let register = !inner.progress_registered;
-                inner.progress_registered = true;
-                register
-            };
-            if register {
-                SUBSCRIBED_PROMISES.with(|registry| registry.borrow_mut().push(self.downgrade()));
-            }
+            self.inner.borrow_mut().continuations.push(continuation);
+            self.register_progress();
         } else {
             enqueue_continuation(continuation, state);
+        }
+    }
+
+    // Register without polling: batch combinators must make every peer visible
+    // before an already-ready callback can run and wait on another peer.
+    pub(crate) fn register_progress(&self) {
+        let register = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.progress_registered || !matches!(inner.state, PromiseState::Pending) {
+                false
+            } else {
+                inner.progress_registered = true;
+                true
+            }
+        };
+        if register {
+            SUBSCRIBED_PROMISES.with(|registry| registry.borrow_mut().push(self.downgrade()));
         }
     }
 

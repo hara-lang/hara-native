@@ -917,6 +917,18 @@ pub fn iterator_from_values(values: Vec<Value>) -> Value {
     Value::Iterator(Rc::new(RefCell::new(IteratorState::new(values))))
 }
 
+// Unlike seq, constructing this view must not poll the iterator. Empty views
+// remain Seq values, and projection failures are cached on first consumption.
+fn iterator_seq_deferred(value: Value) -> Result<Value, String> {
+    if matches!(value, Value::Seq(_)) {
+        return Ok(value);
+    }
+    Ok(Value::Seq(Box::new(PSeq::new(RuntimeSeqSource {
+        source: make_iterator(value)?,
+        finished: false,
+    }))))
+}
+
 fn iterator_seq(value: Value) -> Result<Value, String> {
     if matches!(value, Value::Seq(_)) {
         return Ok(value);

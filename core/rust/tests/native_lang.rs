@@ -1,6 +1,219 @@
 use hara_native::Runtime;
 
 #[test]
+fn deferred_sequences_do_not_pull_until_consumed_and_memoize_reads() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.eval_native(
+        "(ns deferred-sequence-test)
+         (def calls (Base/atom 0))
+         (def values (Iter/seq-deferred
+                       (Iter/iter-map
+                         (fn [x] (IReset/reset calls (+ 1 (IDeref/deref calls))) (+ x 100))
+                         [1 2])))"
+    ).unwrap();
+    assert_eq!(runtime.eval_native(
+        "(try
+           [(IDeref/deref calls)
+            (Iter/iter-materialize values) (IDeref/deref calls)
+            (Iter/iter-materialize (Iter/seq-deferred values)) (IDeref/deref calls)]
+           (finally (IReset/reset calls 0)))"
+    ).unwrap(), "[0 [101 102] 2 [101 102] 2]");
+}
+
+#[test]
+fn deferred_sequences_preserve_empty_values_and_defer_cached_errors() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.eval_native(
+        "(ns deferred-sequence-error-test)
+         (def calls (Base/atom 0))
+         (def values (Iter/seq-deferred
+                       (Iter/iter-map
+                         (fn [_] (IReset/reset calls (+ 1 (IDeref/deref calls)))
+                                 (throw \"projection failed\")) [1])))"
+    ).unwrap();
+    assert_eq!(runtime.eval_native(
+        "(try
+           [(if (Iter/seq-deferred []) :truthy :falsey)
+            (Iter/iter-materialize (Iter/seq-deferred nil))
+            (Iter/seq []) (IDeref/deref calls)
+            (try (Iter/iter-materialize values) (catch error :consume))
+            (IDeref/deref calls)
+            (try (Iter/iter-materialize values) (catch error :consume))
+            (IDeref/deref calls)]
+           (finally (IReset/reset calls 0)))"
+    ).unwrap(), "[:truthy [] nil 0 :consume 1 :consume 1]");
+    assert!(runtime.eval_native("(Iter/seq-deferred)").is_err());
+    assert!(runtime.eval_native("(Iter/seq-deferred [] [])").is_err());
+}
+
+#[test]
+fn nested_promise_waits_progress_other_subscribers_without_reentering_the_active_one() {
+    use hara_native::core::Value;
+    use hara_native::task::{Promise, PromiseState};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let armed = Rc::new(Cell::new(false));
+    let calls = Rc::new(Cell::new(0));
+    let observed = Rc::new(RefCell::new(PromiseState::Pending));
+    let gate = Promise::new();
+    let first = Promise::new();
+    let second = Promise::new();
+    let destination = first.clone();
+    let waiting = gate.clone();
+    let first_armed = armed.clone();
+    let first_calls = calls.clone();
+    let first_observed = observed.clone();
+    first.set_poller(Rc::new(move || {
+        if first_armed.get() {
+            first_calls.set(first_calls.get() + 1);
+            assert_eq!(first_calls.get(), 1, "do not reenter the active Promise");
+            *first_observed.borrow_mut() = waiting.wait_state_timeout(Duration::from_millis(100));
+            destination.resolve(Value::Number(1));
+        }
+    }));
+    let destination = second.clone();
+    let releasing = gate.clone();
+    let second_armed = armed.clone();
+    second.set_poller(Rc::new(move || {
+        if second_armed.get() {
+            releasing.resolve(Value::Number(42));
+            destination.resolve(Value::Number(2));
+        }
+    }));
+    first.on_settle(Rc::new(|_| {}));
+    second.on_settle(Rc::new(|_| {}));
+    armed.set(true);
+    let unrelated = Promise::new();
+    unrelated.wait_state_timeout(Duration::from_millis(1));
+    assert_eq!(*observed.borrow(), PromiseState::Fulfilled(Value::Number(42)));
+    assert_eq!(first.state(), PromiseState::Fulfilled(Value::Number(1)));
+    assert_eq!(second.state(), PromiseState::Fulfilled(Value::Number(2)));
+    unrelated.wait_state_timeout(Duration::from_millis(1));
+    assert_eq!(calls.get(), 1, "settled work must not run again");
+}
+
+#[test]
+fn nested_promise_progress_guard_is_restored_after_a_callback_panics() {
+    use hara_native::core::Value;
+    use hara_native::task::{Promise, PromiseState};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let armed = Rc::new(Cell::new(false));
+    let promise = Promise::new();
+    let callback_armed = armed.clone();
+    promise.set_poller(Rc::new(move || {
+        if callback_armed.get() {
+            panic!("intentional progress callback failure");
+        }
+    }));
+    let observed = Rc::new(Cell::new(0));
+    let callback_observed = observed.clone();
+    promise.on_settle(Rc::new(move |state| {
+        assert_eq!(state, PromiseState::Fulfilled(Value::Number(7)));
+        callback_observed.set(callback_observed.get() + 1);
+    }));
+    armed.set(true);
+    let waiting = Promise::new();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        waiting.wait_state_timeout(Duration::from_millis(1));
+    }));
+    assert!(failure.is_err());
+    let destination = promise.clone();
+    promise.set_poller(Rc::new(move || {
+        destination.resolve(Value::Number(7));
+    }));
+    waiting.wait_state_timeout(Duration::from_millis(1));
+    // Read through the subscriber, not a direct state() call that could mask a
+    // stale identity guard by bypassing the progress registry.
+    assert_eq!(observed.get(), 1);
+}
+
+#[test]
+fn promise_all_registers_every_ready_peer_before_polling_callbacks() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.eval_native(
+        "(ns promise-all-progress-test)
+         (def release (Base/atom nil))
+         (def gate (Promise/new (fn [resolve _reject] (IReset/reset release resolve))))
+         (def first (Promise/delay 1
+                      (fn [] (IDerefTimeout/deref-timeout gate 100 -1))))
+         (def second (Promise/delay 1
+                       (fn [] ((IDeref/deref release) 7) 2)))"
+    ).unwrap();
+    // Make both timers due before all attaches its first observer. This is a
+    // deterministic readiness precondition, not an overlap timing assertion.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert_eq!(runtime.eval_native(
+        "(try
+           (let [values (IDeref/deref (Promise/all [first second]))]
+             [(INth/nth values 0) (INth/nth values 1)])
+           (finally (IReset/reset release nil)
+                    (IPromise/cancel first) (IPromise/cancel second)
+                    (IPromise/cancel gate)))"
+    ).unwrap(), "[7 2]");
+}
+
+#[test]
+fn synchronous_native_callbacks_resume_suspended_vm_functions() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.eval_native(
+        "(ns callback-suspension-test)
+         (def read-later
+           (fn [] (+ 1 (IDeref/deref (Promise/delay 2 (fn [] 40))))))"
+    ).unwrap();
+    assert_eq!(runtime.eval_native(
+        "(+ 1 (Base/apply read-later []))"
+    ).unwrap(), "42");
+}
+
+#[test]
+fn synchronous_native_callbacks_preserve_explicit_promise_results() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.eval_native(
+        "(ns callback-promise-test)
+         (def pending (Promise/new (fn [_resolve _reject] nil)))
+         (def return-promise (fn [] pending))
+         (def async-waiter (fn ^:async [] (IDeref/deref pending)))"
+    ).unwrap();
+    assert_eq!(runtime.eval_native(
+        "(try [(IPromise/state (Base/apply return-promise []))
+               (IPromise/state (Base/apply async-waiter []))]
+              (finally (IPromise/cancel pending)))"
+    ).unwrap(), "[:pending :pending]");
+}
+
+#[test]
+fn synchronous_native_callbacks_propagate_resumed_errors_and_cleanup() {
+    let mut runtime = Runtime::core();
+    runtime.set_execution_backend("direct-native").unwrap();
+    runtime.eval_native(
+        "(ns callback-error-test)
+         (def cleaned (Base/atom 0))
+         (def reject-later
+           (fn []
+             (try
+               (IDeref/deref (Promise/delay 2 (fn [] (throw \"callback rejected\"))))
+               (finally (IReset/reset cleaned 1)))))"
+    ).unwrap();
+    assert_eq!(runtime.eval_native(
+        "(try
+           [(try (Base/apply reject-later []) (catch error :caught))
+            (IDeref/deref cleaned)]
+           (finally (IReset/reset cleaned 0)))"
+    ).unwrap(), "[:caught 1]");
+    assert_eq!(runtime.eval_native("(IDeref/deref cleaned)").unwrap(), "0");
+}
+
+#[test]
 fn nested_declaration_callbacks_preserve_multimethod_registration() {
     for backend in ["interpreter", "direct-native"] {
         // A fresh thread tears down the interpreter's thread-local registry

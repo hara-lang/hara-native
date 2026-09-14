@@ -1920,6 +1920,7 @@ fn native_iter_operation(method: &str, arguments: Vec<Value>) -> Result<Value, S
     };
     match method {
         "seq" => iterator_seq(unary(method)?),
+        "seq-deferred" => iterator_seq_deferred(unary(method)?),
         "iter" => make_iterator(unary(method)?),
         "iter-finite?" => Ok(Value::Bool(iterator_is_finite(&unary(method)?))),
         "iter-materialize" => Ok(Value::Vector(iterator_to_vec(unary(method)?)?.into())),

@@ -2898,17 +2898,11 @@ fn promise_all(values: Vec<Value>) -> Promise {
     let count = values.len();
     let remaining = Rc::new(Cell::new(count));
     let results = Rc::new(RefCell::new(vec![Value::Nil; count]));
-    let mut sources = Vec::with_capacity(count);
-    for (index, value) in values.into_iter().enumerate() {
-        let source = match value {
-            Value::Promise(promise) => promise,
-            value => {
-                let promise = Promise::new();
-                promise.resolve(value);
-                promise
-            }
-        };
-        sources.push(source.clone());
+    let sources = values.into_iter().map(promise_from).collect::<Vec<_>>();
+    for source in &sources {
+        source.register_progress();
+    }
+    for (index, source) in sources.iter().enumerate() {
         let destination = output.clone();
         let remaining = remaining.clone();
         let results = results.clone();

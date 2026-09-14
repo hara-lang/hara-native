@@ -69,6 +69,20 @@ impl Machine {
                     return Ok(Value::Promise(async_result(machine)));
                 }
                 let outcome = machine.run();
+                // This is the synchronous native-call boundary. A suspended
+                // ordinary function must finish before its caller consumes the
+                // result; only an explicit Promise result or async function is
+                // a Promise-valued return. Suspension-aware callers use the
+                // separate fiber_callback below and retain their continuation.
+                #[cfg(not(target_arch = "wasm32"))]
+                let outcome = {
+                    let mut outcome = outcome;
+                    while let VmOutcome::Suspended(ref pending) = outcome {
+                        let state = pending.wait_state();
+                        outcome = machine.resume(state);
+                    }
+                    outcome
+                };
                 #[cfg(feature = "tracing-jit")]
                 if !matches!(outcome, VmOutcome::Suspended(_) | VmOutcome::Yielded(_)) {
                     store_program_jit(&callback_program, std::mem::take(&mut machine.jit));
