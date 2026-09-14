@@ -1700,6 +1700,44 @@ fn native_base_values(operation: &str, values: &[Value]) -> Result<Value, String
     }
 }
 
+fn native_algo_sort_order(value: &Value) -> Result<std::cmp::Ordering, String> {
+    numeric::numeric_compare(value, &Value::Number(0))?.ok_or_else(|| {
+        "Algo/sort comparison must return a finite number".to_string()
+    })
+}
+
+fn native_algo_sort(values: Vec<Value>) -> Result<Value, String> {
+    let [comparison, source] = values.as_slice() else {
+        return Err("Algo/sort expects a comparison and values".into());
+    };
+    let comparison = comparison.clone();
+    let mut sorted = iterator_values(source.clone())?;
+    let failure = Rc::new(RefCell::new(None::<String>));
+    let failure_for_comparison = failure.clone();
+    sorted.sort_by(|left, right| {
+        if failure_for_comparison.borrow().is_some() {
+            return std::cmp::Ordering::Equal;
+        }
+        match call_value(
+            comparison.clone(),
+            vec![left.clone(), right.clone()],
+        )
+        .and_then(|value| native_algo_sort_order(&value))
+        {
+            Ok(ordering) => ordering,
+            Err(error) => {
+                *failure_for_comparison.borrow_mut() = Some(error);
+                std::cmp::Ordering::Equal
+            }
+        }
+    });
+    let failure = failure.borrow_mut().take();
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(Value::Vector(sorted.into()))
+}
+
 fn native_algo_values(operation: &str, values: Vec<Value>) -> Result<Value, String> {
     let method = operation
         .strip_prefix("std.native.Algo/")
@@ -1722,6 +1760,7 @@ fn native_algo_values(operation: &str, values: Vec<Value>) -> Result<Value, Stri
         }));
     }
     match method {
+        "sort" => native_algo_sort(values),
         "deque" | "ordered-map" | "ordered-set" | "priority-map" | "queue" | "sorted-map"
         | "sorted-set" | "trie" => collection_constructor_values(method, values),
         _ => Err(format!("unknown Algo operation: {operation}")),

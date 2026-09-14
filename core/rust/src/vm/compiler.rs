@@ -779,24 +779,33 @@ impl Compiler {
 
     /// The pool index for a constant, interning it if new. Used directly
     /// for instruction operands (global names, struct fields); `constant`
-    /// additionally emits the load.
+    /// additionally emits the load. Numeric values are deliberately not
+    /// interned here: language equality treats `1`, `1.0`, and an equivalent
+    /// BigInteger as equal, but their representations remain observable
+    /// through `type`, `long?`, and `bigint?`.
     fn constant_index_of(&mut self, value: Value, span: &Span) -> Result<u32, CompileError> {
-        match self.constant_index.get(&value) {
-            Some(index) => Ok(*index),
-            None => {
-                if self.constants.len() >= MAX_CONSTANTS {
-                    return Err(CompileError::new(
-                        CompileErrorKind::Limit,
-                        format!("constant pool exceeds limit of {MAX_CONSTANTS}"),
-                        Some(span.start),
-                    ));
-                }
-                let index = self.constants.len() as u32;
-                self.constants.push(value.clone());
-                self.constant_index.insert(value, index);
-                Ok(index)
+        let intern = !matches!(
+            value,
+            Value::Number(_) | Value::Float(_) | Value::BigInteger(_)
+        );
+        if intern {
+            if let Some(index) = self.constant_index.get(&value) {
+                return Ok(*index);
             }
         }
+        if self.constants.len() >= MAX_CONSTANTS {
+            return Err(CompileError::new(
+                CompileErrorKind::Limit,
+                format!("constant pool exceeds limit of {MAX_CONSTANTS}"),
+                Some(span.start),
+            ));
+        }
+        let index = self.constants.len() as u32;
+        self.constants.push(value.clone());
+        if intern {
+            self.constant_index.insert(value, index);
+        }
+        Ok(index)
     }
 
     fn unsupported(&self, form: &Form, span: &Span) -> CompileError {

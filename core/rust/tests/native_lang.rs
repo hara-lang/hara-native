@@ -1,6 +1,29 @@
 use hara_native::Runtime;
 
 #[test]
+fn native_algo_sort_orders_values_stably_with_a_guest_comparator() {
+    let mut runtime = Runtime::new();
+    assert_eq!(
+        runtime
+            .eval_native(
+                "[(std.native.Algo/sort (fn [left right] (- left right)) [3 1 2])\
+                 (std.native.Algo/sort (fn [_ _] 0) [1 2 3])]"
+            )
+            .unwrap(),
+        "[[1 2 3] [1 2 3]]"
+    );
+}
+
+#[test]
+fn native_algo_sort_rejects_non_numeric_comparison_results() {
+    let mut runtime = Runtime::new();
+    let error = runtime
+        .eval_native("(std.native.Algo/sort (fn [_ _] :not-a-number) [1 2])")
+        .unwrap_err();
+    assert!(error.contains("Algo/sort comparison must return a finite number"));
+}
+
+#[test]
 fn deferred_sequences_do_not_pull_until_consumed_and_memoize_reads() {
     let mut runtime = Runtime::core();
     runtime.set_execution_backend("direct-native").unwrap();

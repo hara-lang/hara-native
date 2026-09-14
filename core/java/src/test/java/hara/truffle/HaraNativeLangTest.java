@@ -18,6 +18,26 @@ import org.junit.Test;
 /** Verifies the reversible, process-local host-value substrate for std.lang. */
 public class HaraNativeLangTest {
   @Test
+  public void nativeSortUsesStableHostOrdering() {
+    try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
+      assertEquals(
+          "[1 2 3]",
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(std.native.Algo/sort (fn [left right] 0) [1 2 3])")
+              .toString());
+      assertEquals(
+          "[3 2 1]",
+          context
+              .eval(
+                  HaraLanguage.ID,
+                  "(std.native.Algo/sort (fn [left right] (- right left)) [1 3 2])")
+              .toString());
+    }
+  }
+
+  @Test
   public void destructuredRestIsReusableAndPreservesNil() {
     try (Context context = Context.newBuilder(HaraLanguage.ID).build()) {
       assertEquals("[[false nil 3] [false nil 3]]", context.eval(HaraLanguage.ID,

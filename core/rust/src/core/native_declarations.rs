@@ -249,7 +249,7 @@ pub(crate) mod declarations {
     )]
     struct Base;
 
-    #[hara_native(namespace = "std.native", name = "Algo", methods = ["deque", "ordered-map", "ordered-set", "priority-map", "queue", "sorted-map", "sorted-set", "trie", "deque?", "ordered-map?", "ordered-set?", "priority-map?", "queue?", "sorted-map?", "sorted-set?", "trie?"], provider = native_algo_provider)]
+    #[hara_native(namespace = "std.native", name = "Algo", methods = ["sort", "deque", "ordered-map", "ordered-set", "priority-map", "queue", "sorted-map", "sorted-set", "trie", "deque?", "ordered-map?", "ordered-set?", "priority-map?", "queue?", "sorted-map?", "sorted-set?", "trie?"], provider = native_algo_provider)]
     struct Algo;
 
     #[hara_native(

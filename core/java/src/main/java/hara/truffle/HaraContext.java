@@ -3559,6 +3559,7 @@ public final class HaraContext {
     target.define("use", new UnaryBuiltin("use", this::useNamespace));
     target.define("iter", new UnaryBuiltin("iter", this::iterValue));
     target.define("seq", new VariadicBuiltin("seq", this::seqValue));
+    target.define("seq-deferred", new UnaryBuiltin("seq-deferred", this::seqDeferredValue));
     target.define("iter-finite?", new UnaryBuiltin("iter-finite?", this::isIteratorFinite));
     target.define("iter-materialize", new UnaryBuiltin("iter-materialize", this::iterMaterialize));
     target.define("iter-next?", new UnaryBuiltin("iter-next?", this::iterHasNext));
@@ -8705,6 +8706,14 @@ public final class HaraContext {
   }
 
   @TruffleBoundary
+  Object seqDeferredValue(Object value) {
+    Object target = HaraBox.unwrap(value);
+    return target instanceof hara.lang.data.Seq
+        ? target
+        : new DeferredIterator((Iterator<?>) iterValue(target));
+  }
+
+  @TruffleBoundary
   private Object isIteratorFinite(Object value) {
     Object target = HaraBox.unwrap(value);
     return !(target instanceof Iterator<?>) || target instanceof FiniteIterator;
@@ -8721,7 +8730,9 @@ public final class HaraContext {
   @TruffleBoundary
   private Object iterMaterialize(Object value) {
     Object target = HaraBox.unwrap(value);
-    if (target instanceof Iterator<?> && !((Boolean) isIteratorFinite(target))) {
+    if (target instanceof Iterator<?>
+        && !(target instanceof DeferredIterator)
+        && !((Boolean) isIteratorFinite(target))) {
       throw new HaraException("cannot materialize an infinite or unknown iterator");
     }
     Iterator<?> iterator = (Iterator<?>) iterValue(target);
@@ -9283,6 +9294,33 @@ public final class HaraContext {
 
     @Override
     public void close() {
+      Iter.close(iterator);
+    }
+  }
+
+  private static final class DeferredIterator implements CloseableIterator<Object> {
+    private final Iterator<?> iterator;
+    private boolean closed;
+
+    private DeferredIterator(Iterator<?> iterator) {
+      this.iterator = iterator;
+    }
+
+    @Override
+    public boolean hasNext() {
+      return !closed && iterator.hasNext();
+    }
+
+    @Override
+    public Object next() {
+      if (!hasNext()) throw new NoSuchElementException();
+      return iterator.next();
+    }
+
+    @Override
+    public void close() {
+      if (closed) return;
+      closed = true;
       Iter.close(iterator);
     }
   }

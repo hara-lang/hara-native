@@ -671,7 +671,17 @@ impl Compiler {
                         // NamespaceOperation; its symbols are not lexical
                         // references in the surrounding function.
                         "ns" | "ns+" | "require" => {}
-                        // Rejected by the compiler later; nothing to collect.
+                        // Definitions are structural forms, not callable
+                        // operators. A nested `def` can still refer to
+                        // lexical values in its initializer, so collect only
+                        // that expression; the name is owned by the
+                        // definition itself. `defn` and `var` do not capture
+                        // their operator or binding name here.
+                        "def" => {
+                            if let Some(initializer) = children.get(2) {
+                                self.collect_free(initializer, bound, free);
+                            }
+                        }
                         "defn" | "var" => {}
                         _ if IntrinsicOp::from_symbol(head).is_some()
                             && !self.visible_global(head) =>
