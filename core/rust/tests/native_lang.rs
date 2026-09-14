@@ -1,6 +1,55 @@
 use hara_native::Runtime;
 
 #[test]
+fn nested_declaration_callbacks_preserve_multimethod_registration() {
+    for backend in ["interpreter", "direct-native"] {
+        // A fresh thread tears down the interpreter's thread-local registry
+        // even if an assertion panics; each backend owns an isolated baseline.
+        std::thread::spawn(move || {
+        let mut runtime = Runtime::core();
+        runtime.set_execution_backend(backend).unwrap();
+        runtime.eval_native(&format!("(ns nested-multimethod-{backend})")).unwrap();
+        runtime.eval_native(
+            "(Base/with-declaration (Base/current-namespace)
+               (fn []
+                 (Base/multimethod (Base/current-namespace) 'classify (fn [value] value))))
+             (Base/with-declaration (Base/current-namespace)
+               (fn []
+                 (Base/method (Base/current-namespace) 'classify :one (fn [_] 11))
+                 (Base/with-declaration (Base/current-namespace)
+                   (fn []
+                     (Base/method (Base/current-namespace) 'classify :default (fn [_] 99))))))
+             (def install-two
+               (fn []
+                 (Base/with-declaration (Base/current-namespace)
+                   (fn []
+                     (Base/method (Base/current-namespace) 'classify :two (fn [_] 22))))))"
+        ).unwrap_or_else(|error| panic!("{backend}: {error}"));
+        assert_eq!(runtime.eval_native("[(classify :one) (classify :other)]").unwrap(),
+                   "[11 99]", "{backend}");
+        runtime.eval_native("(install-two)").unwrap();
+        assert_eq!(runtime.eval_native("[(classify :one) (classify :two) (classify :other)]").unwrap(),
+                   "[11 22 99]", "{backend}: callbacks retain the live registry");
+
+        let error = runtime.eval_native(
+            "(Base/with-declaration (Base/current-namespace)
+               (fn []
+                 (Base/with-declaration (Base/current-namespace)
+                   (fn [] (Base/multimethod (Base/current-namespace) 'aborted (fn [value] value))))
+                 (throw (ex :test/rollback {} :ex/message \"rollback\"))))"
+        ).unwrap_err();
+        assert!(error.contains("rollback"), "{backend}: {error}");
+        let error = runtime.eval_native(
+            "(Base/method (Base/current-namespace) 'aborted :default (fn [_] 0))"
+        ).unwrap_err();
+        assert!(error.contains("existing multimethod"), "{backend}: {error}");
+        assert_eq!(runtime.eval_native("[(classify :one) (classify :two)]").unwrap(),
+                   "[11 22]", "{backend}: failed declarations preserve prior behavior");
+        }).join().unwrap();
+    }
+}
+
+#[test]
 fn vars_are_ifn_receivers_and_follow_current_bindings() {
     for backend in ["interpreter", "direct-native"] {
         let mut runtime = Runtime::core();

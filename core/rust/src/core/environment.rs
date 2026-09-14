@@ -1008,8 +1008,18 @@ fn with_direct_native_context_values<R>(
 ) -> R {
     ACTIVE_DIRECT_NATIVE_MULTIMETHODS.with(|direct_native| {
         let previous_direct_native = direct_native.replace(Some(context.multimethods.clone()));
+        let shares_active_registry = previous_direct_native
+            .as_ref()
+            .is_some_and(|previous| Rc::ptr_eq(previous, &context.multimethods));
         let result = {
             let run_with_multimethods = || {
+                // Nested declaration thunks sharing this registry must use
+                // the live active map. Swapping in its last saved snapshot
+                // hides parent updates, and restoring the old parent map
+                // discards registrations made by the child.
+                if shares_active_registry {
+                    return operation();
+                }
                 ACTIVE_MULTIMETHODS.with(|active| {
                     let previous = std::mem::replace(
                         &mut *active.borrow_mut(),

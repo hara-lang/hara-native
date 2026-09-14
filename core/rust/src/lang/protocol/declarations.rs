@@ -92,7 +92,53 @@ pub fn protocol_declarations() -> &'static [ProtocolDeclaration] {
 pub fn find_protocol(name: &str) -> Option<ProtocolDeclaration> {
     protocol_declarations().iter().copied().find(|protocol| {
         protocol.name == name
-            || protocol.qualified_name() == name
-            || protocol.runtime_name() == name
+            || name.strip_prefix(protocol.namespace).is_some_and(|suffix| {
+                suffix
+                    .strip_prefix('/')
+                    .or_else(|| suffix.strip_prefix('.'))
+                    == Some(protocol.name)
+            })
     })
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    #[test]
+    fn protocol_lookup_preserves_all_registered_spellings() {
+        for declaration in protocol_declarations() {
+            for spelling in [
+                declaration.name.to_owned(),
+                declaration.qualified_name(),
+                declaration.runtime_name(),
+            ] {
+                assert_eq!(find_protocol(&spelling), Some(*declaration), "{spelling}");
+                assert_eq!(find_protocol(&format!("{spelling}extra")), None);
+                assert_eq!(find_protocol(&format!("extra{spelling}")), None);
+            }
+            for separator in ["", ":", "//", "..", "/."] {
+                let spelling = format!("{}{separator}{}", declaration.namespace, declaration.name);
+                assert_eq!(find_protocol(&spelling), None, "{spelling}");
+            }
+        }
+        assert_eq!(find_protocol(""), None);
+        assert_eq!(find_protocol("std.protocol"), None);
+    }
+
+    #[test]
+    #[ignore = "manual fixed-work lookup timing; no timing threshold"]
+    fn protocol_lookup_fixed_work_timing() {
+        let names = protocol_declarations()
+            .iter()
+            .map(|declaration| declaration.runtime_name())
+            .collect::<Vec<_>>();
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            for name in &names {
+                assert!(std::hint::black_box(find_protocol(std::hint::black_box(name))).is_some());
+            }
+        }
+        eprintln!("{} registered-name lookups: {:?}", names.len() * 100, start.elapsed());
+    }
 }
