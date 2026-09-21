@@ -189,6 +189,23 @@ impl InMemoryProductCache {
         self.products.get(key)
     }
 
+    /// Finds a product with the same compiler identity while ignoring the
+    /// derived module digests used to verify the resulting artifact.
+    ///
+    /// Compilers use this lookup before producing the artifact. The source,
+    /// compiler, ABI, options, and target identify a deterministic request;
+    /// the module digest is only available after compilation.
+    pub fn get_by_identity(&self, key: &ProductCacheKey) -> Option<&CompiledProduct> {
+        self.products.iter().find_map(|(candidate_key, product)| {
+            (candidate_key.kind == key.kind
+                && candidate_key.source_digest == key.source_digest
+                && candidate_key.compiler_id == key.compiler_id
+                && candidate_key.abi_version == key.abi_version
+                && candidate_key.options_digest == key.options_digest)
+            .then_some(product)
+        })
+    }
+
     pub fn insert(&mut self, product: CompiledProduct) -> Result<ProductCacheKey, String> {
         product.verify()?;
         let key = product.cache_key();
