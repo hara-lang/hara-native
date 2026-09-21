@@ -18,6 +18,7 @@ import java.util.function.Supplier;
 public final class HaraMetaSpace implements AutoCloseable {
   private final ConcurrentHashMap<LinkKey, CompletableFuture<RootCallTarget>> links =
       new ConcurrentHashMap<>();
+  private final Object lifecycleLock = new Object();
   private final AtomicBoolean closed = new AtomicBoolean();
 
   /**
@@ -38,11 +39,14 @@ public final class HaraMetaSpace implements AutoCloseable {
    */
   public RootCallTarget link(
       HbcProgram program, int functionIndex, Supplier<? extends RootCallTarget> compiler) {
-    ensureOpen();
     LinkKey key = key(program, functionIndex);
     Objects.requireNonNull(compiler, "compiler");
     CompletableFuture<RootCallTarget> created = new CompletableFuture<>();
-    CompletableFuture<RootCallTarget> link = links.putIfAbsent(key, created);
+    CompletableFuture<RootCallTarget> link;
+    synchronized (lifecycleLock) {
+      ensureOpen();
+      link = links.putIfAbsent(key, created);
+    }
     if (link != null) return await(link);
     try {
       RootCallTarget target = compiler.get();
@@ -68,7 +72,9 @@ public final class HaraMetaSpace implements AutoCloseable {
 
   @Override
   public void close() {
-    if (closed.compareAndSet(false, true)) links.clear();
+    synchronized (lifecycleLock) {
+      if (closed.compareAndSet(false, true)) links.clear();
+    }
   }
 
   private void ensureOpen() {
