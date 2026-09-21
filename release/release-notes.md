@@ -5,6 +5,18 @@ This release delivers the Rust CLI, JVM host, browser packages, and trusted
 provider adapters; canonical HAL, provider package manifests, HARP archives,
 and the user-facing `hara` CLI remain in the Hara source/package repositories.
 
+### Highlights
+
+- Adds context-owned HBC link metaspace storage so repeated eligible function
+  links in one host context reuse their generated call targets safely.
+- Adds deterministic compiled-product cache identity and lifecycle telemetry to
+  the native runtime.
+- The metaspace is not on the initial direct-native source namespace load path;
+  `lang.core` loading continues to use the persistent source-bytecode cache.
+  This release does not claim an initial `lang.core` load-time speedup from
+  metaspace.
+
+
 ### Delivered artifacts
 
 - Native CLI archives for Linux x86_64, Linux ARM64, macOS Intel, and Apple
