@@ -9,7 +9,6 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import com.oracle.truffle.api.RootCallTarget;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 import hara.truffle.bytecode.HbcBytecodeRootNode;
@@ -200,14 +199,14 @@ public class HaraMetaSpaceTest {
   }
 
   private static RootCallTarget target() {
-    return Truffle.getRuntime()
-        .createCallTarget(
-            new RootNode(null) {
-              @Override
-              public Object execute(VirtualFrame frame) {
-                return null;
-              }
-            });
+    RootNode root =
+        new RootNode(null) {
+          @Override
+          public Object execute(VirtualFrame frame) {
+            return null;
+          }
+        };
+    return root.getCallTarget();
   }
 
   private static void await(CountDownLatch latch) {
