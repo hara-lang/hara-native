@@ -188,6 +188,7 @@
 						<testInclude>hara/truffle/RustProducedArtifactFixtureTest.java</testInclude>
 						<testInclude>hara/truffle/HaraServerTest.java</testInclude>
 						<testInclude>hara/truffle/HaraMetaSpaceTest.java</testInclude>
+						<testInclude>hara/truffle/HaraMetaSpaceBenchmark.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
 						<testInclude>hara/lang/context/ContextRuntimeTest.java</testInclude>
 						<testInclude>hara/lang/data/PointerTest.java</testInclude>
