@@ -106,11 +106,16 @@ fn measure_bytecode(
     let started = Instant::now();
     let cold_product = runtime.compile_bytecode_product(source)?;
     let prepare_ns = elapsed_ns(started);
+    let cache_hits_before_warm = runtime.compiled_product_cache_hits();
     let started = Instant::now();
     let warm_product = runtime.compile_bytecode_product(source)?;
     let cached_prepare_ns = elapsed_ns(started);
+    let cache_hits_after_warm = runtime.compiled_product_cache_hits();
     if cold_product != warm_product {
         return Err("compiled-product cache returned different bytes".to_owned());
+    }
+    if cache_hits_after_warm <= cache_hits_before_warm {
+        return Err("compiled-product cache did not record a warm hit".to_owned());
     }
     let program = std::rc::Rc::new(vm::decode_program(&warm_product.bytes)?);
     let artifact_bytes = warm_product.bytes.len();
@@ -136,6 +141,7 @@ fn measure_bytecode(
         "prepare_ns": prepare_ns,
         "cached_prepare_ns": cached_prepare_ns,
         "product_cache_entries": runtime.compiled_product_cache_len(),
+        "product_cache_hits": cache_hits_after_warm,
         "product_cache_reused": true,
         "first_ns": first_ns,
         "samples_ns": samples_ns,
@@ -161,11 +167,16 @@ fn measure_whole_wasm(
     let started = Instant::now();
     let cold_product = runtime.compile_whole_wasm_product(source)?;
     let prepare_ns = elapsed_ns(started);
+    let cache_hits_before_warm = runtime.compiled_product_cache_hits();
     let started = Instant::now();
     let warm_product = runtime.compile_whole_wasm_product(source)?;
     let cached_prepare_ns = elapsed_ns(started);
+    let cache_hits_after_warm = runtime.compiled_product_cache_hits();
     if cold_product != warm_product {
         return Err("compiled-product cache returned different bytes".to_owned());
+    }
+    if cache_hits_after_warm <= cache_hits_before_warm {
+        return Err("compiled-product cache did not record a warm hit".to_owned());
     }
     let artifact = warm_product.bytes.clone();
     let decoded = decode_artifact(&artifact)?;
@@ -191,6 +202,7 @@ fn measure_whole_wasm(
         "prepare_ns": prepare_ns,
         "cached_prepare_ns": cached_prepare_ns,
         "product_cache_entries": runtime.compiled_product_cache_len(),
+        "product_cache_hits": cache_hits_after_warm,
         "product_cache_reused": true,
         "first_ns": first_ns,
         "samples_ns": samples_ns,

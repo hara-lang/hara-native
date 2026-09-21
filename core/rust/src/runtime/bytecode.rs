@@ -351,6 +351,12 @@ impl Runtime {
         self.product_cache.borrow().len()
     }
 
+    /// Returns the number of successful compiled-product cache lookups.
+    #[cfg(feature = "bytecode-vm")]
+    pub fn compiled_product_cache_hits(&self) -> usize {
+        self.product_cache.borrow().cache_hits()
+    }
+
     /// Drops all immutable compiled products retained by this runtime.
     #[cfg(feature = "bytecode-vm")]
     pub fn clear_compiled_product_cache(&self) {
@@ -1016,9 +1022,11 @@ mod product_cache_tests {
             .expect("cached source must compile");
         assert_eq!(first, second);
         assert_eq!(runtime.compiled_product_cache_len(), 1);
+        assert_eq!(runtime.compiled_product_cache_hits(), 1);
 
         runtime.clear_compiled_product_cache();
         assert_eq!(runtime.compiled_product_cache_len(), 0);
+        assert_eq!(runtime.compiled_product_cache_hits(), 0);
         let after_clear = runtime
             .compile_bytecode_product("(+ 19 23)")
             .expect("source must recompile after clearing");
