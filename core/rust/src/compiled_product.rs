@@ -309,6 +309,24 @@ mod tests {
     }
 
     #[test]
+    fn cache_can_find_a_deterministic_product_before_module_digest_is_known() {
+        let mut cache = InMemoryProductCache::default();
+        let first = product(b"first");
+        let key = cache.insert(first.clone()).unwrap();
+        let lookup = ProductCacheKey {
+            kind: key.kind,
+            source_digest: key.source_digest.clone(),
+            module_digests: Vec::new(),
+            compiler_id: key.compiler_id.clone(),
+            abi_version: key.abi_version.clone(),
+            options_digest: key.options_digest.clone(),
+        };
+
+        assert_eq!(cache.get_by_identity(&lookup), Some(&first));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
     fn cache_rejects_tampered_products() {
         let mut product = product(b"valid");
         product.bytes.push(0);

@@ -62,32 +62,33 @@ pub fn compile_cached(
     target: CompileTarget,
     cache: &mut InMemoryProductCache,
 ) -> Result<CompiledArtifact, String> {
-    let hbc = compile_hbc(source)?;
     let (kind, abi_version) = target.product_identity();
-    let module_digests = vec![sha256_hex(&hbc)];
-    let key = ProductCacheKey::with_module_digests(
+    let source_digest = sha256_hex(source.as_bytes());
+    let compiler_id = format!("hara-compiler/{}", env!("CARGO_PKG_VERSION"));
+    let lookup_key = ProductCacheKey::new(
         kind,
-        sha256_hex(source.as_bytes()),
-        format!("hara-compiler/{}", env!("CARGO_PKG_VERSION")),
+        source_digest.clone(),
+        compiler_id.clone(),
         abi_version,
         b"{}",
-        module_digests,
     );
-    if let Some(product) = cache.get(&key) {
+    if let Some(product) = cache.get_by_identity(&lookup_key) {
         return Ok(CompiledArtifact {
             target,
             product: product.clone(),
         });
     }
+    let hbc = compile_hbc(source)?;
+    let module_digests = vec![sha256_hex(&hbc)];
     let bytes = match target {
         CompileTarget::HbcModule => hbc.clone(),
         CompileTarget::WholeWasm => compile_whole_wasm(&hbc)?,
     };
     let product = CompiledProduct::new(
         kind,
-        sha256_hex(source.as_bytes()),
-        vec![sha256_hex(&hbc)],
-        format!("hara-compiler/{}", env!("CARGO_PKG_VERSION")),
+        source_digest,
+        module_digests,
+        compiler_id,
         abi_version,
         b"{}",
         bytes,
