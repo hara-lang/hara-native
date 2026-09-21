@@ -77,9 +77,7 @@ impl SourceBytecodeCache {
         let fingerprint = if let Some(fingerprint) = cached_fingerprint {
             fingerprint
         } else {
-            let fingerprint = catalog
-                .content_fingerprint_dependencies(&[namespace])
-                .ok();
+            let fingerprint = catalog.content_fingerprint_dependencies(&[namespace]).ok();
             self.dependency_fingerprints
                 .borrow_mut()
                 .insert(namespace.into(), fingerprint);
@@ -114,11 +112,7 @@ impl SourceBytecodeCache {
         Self::path_for_in(directory, namespace, source).with_extension("ns")
     }
 
-    fn load(
-        &self,
-        namespace: &str,
-        source: &str,
-    ) -> Option<SourceBytecodeCacheEntry> {
+    fn load(&self, namespace: &str, source: &str) -> Option<SourceBytecodeCacheEntry> {
         let directory = self.directory_for(namespace)?;
         let suffix = directory
             .file_name()
@@ -133,9 +127,9 @@ impl SourceBytecodeCache {
         );
         for directory in directories {
             let path = Self::path_for_in(&directory, namespace, source);
-            let Ok(namespace_form) = std::fs::read_to_string(Self::namespace_path_for(
-                &directory, namespace, source,
-            )) else {
+            let Ok(namespace_form) =
+                std::fs::read_to_string(Self::namespace_path_for(&directory, namespace, source))
+            else {
                 continue;
             };
             let Ok(bytes) = std::fs::read(path) else {
@@ -147,7 +141,9 @@ impl SourceBytecodeCache {
             if program.namespace.as_deref() == Some(namespace) {
                 return Some(SourceBytecodeCacheEntry {
                     namespace_form,
-                    program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program)),
+                    program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(
+                        program,
+                    )),
                 });
             }
         }
@@ -181,12 +177,16 @@ impl SourceBytecodeCache {
             return;
         };
         if program.constants.len() != decoded.constants.len()
-            || !program.constants.iter().zip(&decoded.constants).all(|(before, after)| {
-                match (core::value_to_form(before), core::value_to_form(after)) {
-                    (Ok(before), Ok(after)) => before == after,
-                    _ => false,
-                }
-            })
+            || !program
+                .constants
+                .iter()
+                .zip(&decoded.constants)
+                .all(|(before, after)| {
+                    match (core::value_to_form(before), core::value_to_form(after)) {
+                        (Ok(before), Ok(after)) => before == after,
+                        _ => false,
+                    }
+                })
         {
             return;
         }
@@ -284,7 +284,12 @@ impl Runtime {
             "hbc0",
             options.as_bytes(),
         );
-        if let Some(product) = self.product_cache.borrow().get_by_identity(&lookup_key).cloned() {
+        if let Some(product) = self
+            .product_cache
+            .borrow()
+            .get_by_identity(&lookup_key)
+            .cloned()
+        {
             return Ok(product);
         }
         let program = self.compile_bytecode(source)?;
@@ -942,7 +947,10 @@ mod source_cache_tests {
         let loaded = cache
             .load(namespace, source)
             .expect("stored source must be readable");
-        assert_eq!(loaded.program.program().namespace.as_deref(), Some(namespace));
+        assert_eq!(
+            loaded.program.program().namespace.as_deref(),
+            Some(namespace)
+        );
         assert_eq!(loaded.namespace_form, "(ns example.cache)");
         assert!(cache.load(namespace, "(+ 1 3)").is_none());
         assert!(cache.load("example.other", source).is_none());
@@ -957,8 +965,10 @@ mod source_cache_tests {
         program.namespace = Some(namespace.to_owned());
         let cache = SourceBytecodeCache::new(&root.0, [9; 32]);
         cache.store(namespace, source, "(ns example.quoted-metadata)", &program);
-        assert!(cache.load(namespace, source).is_none(),
-                "quoted definition metadata must not be discarded by a cache hit");
+        assert!(
+            cache.load(namespace, source).is_none(),
+            "quoted definition metadata must not be discarded by a cache hit"
+        );
     }
 
     #[test]

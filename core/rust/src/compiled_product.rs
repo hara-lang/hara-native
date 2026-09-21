@@ -202,7 +202,7 @@ impl InMemoryProductCache {
                 && candidate_key.compiler_id == key.compiler_id
                 && candidate_key.abi_version == key.abi_version
                 && candidate_key.options_digest == key.options_digest)
-            .then_some(product)
+                .then_some(product)
         })
     }
 
@@ -237,7 +237,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompiledProduct, CompiledProductKind, InMemoryProductCache};
+    use super::{CompiledProduct, CompiledProductKind, InMemoryProductCache, ProductCacheKey};
 
     fn product(bytes: &[u8]) -> CompiledProduct {
         CompiledProduct::new(
