@@ -8,7 +8,6 @@ import hara.truffle.HaraLanguage;
 public final class HbcStaticCall {
   private final HbcProgram program;
   private final int functionIndex;
-  private volatile RootCallTarget nativeTarget;
 
   public HbcStaticCall(HbcProgram program, int functionIndex) {
     this.program = program;
@@ -26,10 +25,6 @@ public final class HbcStaticCall {
   public RootCallTarget nativeTarget(HaraLanguage language) {
     HaraContext context = HaraLanguage.currentContext();
     if (context != null && !context.hbcNativeExecutionAllowed()) return null;
-    RootCallTarget target = nativeTarget;
-    if (target != null) return target;
-    target = HbcBytecodeRootNode.compileFunction(language, program, functionIndex);
-    if (target != null) nativeTarget = target;
-    return target;
+    return HbcBytecodeRootNode.compileFunction(language, program, functionIndex);
   }
 }

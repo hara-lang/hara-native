@@ -1287,7 +1287,6 @@ public final class HbcMachine {
     final int prototype;
     final Object[] captures;
     final String namespace;
-    private volatile RootCallTarget nativeTarget;
 
     HbcClosure(HbcProgram program, HaraContext context, int prototype, Object[] captures) {
       this.program = program;
@@ -1300,15 +1299,11 @@ public final class HbcMachine {
     @TruffleBoundary
     Object invoke(Object[] arguments) {
       Function function = program.functions().get(prototype);
-      RootCallTarget target = context.hbcNativeExecutionAllowed() ? nativeTarget : null;
-      if (target == null) {
-        if (context.hbcNativeExecutionAllowed()) {
-          target =
-              HbcBytecodeRootNode.compileFunction(
-                  HaraLanguage.currentLanguage(), program, prototype);
-          if (target != null) nativeTarget = target;
-        }
-      }
+      RootCallTarget target =
+          context.hbcNativeExecutionAllowed()
+              ? HbcBytecodeRootNode.compileFunction(
+                  HaraLanguage.currentLanguage(), program, prototype)
+              : null;
       if (target != null) return target.call(arguments);
       if (function.asyncFunction()) {
         return context.hbcAsync(() -> call(program, context, prototype, arguments, captures));

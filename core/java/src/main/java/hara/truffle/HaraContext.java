@@ -180,6 +180,7 @@ public final class HaraContext {
   private HaraProtocol ifnProtocol;
   private Map<String, HaraProtocol> protocolDeclarations = Map.of();
   private final AtomicLong gensymCounter = new AtomicLong();
+  private final HaraMetaSpace metaSpace = new HaraMetaSpace();
   HaraContext(TruffleLanguage.Env environment) {
     this.environment = environment;
     this.evaluationRuntime =
@@ -391,6 +392,11 @@ public final class HaraContext {
     evaluationRuntime.installHbcTypes(schemaTypes, functionTypes, inferredFunctionTypes);
   }
 
+  /** Returns the context-owned link storage for generated HBC call targets. */
+  public HaraMetaSpace metaSpace() {
+    return metaSpace;
+  }
+
   TruffleLanguage.Env environment() {
     return environment;
   }
@@ -403,6 +409,7 @@ public final class HaraContext {
   }
 
   void closeContext() {
+    metaSpace.close();
     instrumentationRuntime.close();
     evaluationRuntime.close();
     closeExtensions();

@@ -187,6 +187,7 @@
 						<testInclude>hara/truffle/HaraNativeCapabilityProfileConformanceTest.java</testInclude>
 						<testInclude>hara/truffle/RustProducedArtifactFixtureTest.java</testInclude>
 						<testInclude>hara/truffle/HaraServerTest.java</testInclude>
+						<testInclude>hara/truffle/HaraMetaSpaceTest.java</testInclude>
 						<testInclude>hara/truffle/bytecode/HbcCodecTest.java</testInclude>
 						<testInclude>hara/lang/context/ContextRuntimeTest.java</testInclude>
 						<testInclude>hara/lang/data/PointerTest.java</testInclude>
@@ -279,6 +280,7 @@
 						<include>hara/truffle/HaraNativeCapabilityProfileConformanceTest.java</include>
 						<include>hara/truffle/RustProducedArtifactFixtureTest.java</include>
 						<include>hara/truffle/HaraServerTest.java</include>
+						<include>hara/truffle/HaraMetaSpaceTest.java</include>
 						<include>hara/truffle/bytecode/HbcCodecTest.java</include>
 						<include>hara/lang/context/ContextRuntimeTest.java</include>
 						<include>hara/lang/data/PointerTest.java</include>
