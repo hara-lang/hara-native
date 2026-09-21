@@ -11,7 +11,7 @@ use hara_native::{vm, Runtime};
 use serde_json::{json, Value};
 
 #[cfg(feature = "whole-wasm")]
-use hara_native::whole_wasm::{compile_artifact, decode_artifact, NativeModule};
+use hara_native::whole_wasm::{decode_artifact, NativeModule};
 
 fn usage() -> &'static str {
     "hara-native-benchmark-worker TIER WORKLOAD SOURCE_HEX EXPECTED WINDOWS CALLS"
@@ -104,9 +104,21 @@ fn measure_bytecode(
 ) -> Result<Value, String> {
     let mut runtime = Runtime::core();
     let started = Instant::now();
-    let program = runtime.compile_bytecode(source)?;
-    let artifact_bytes = vm::encode_program(program.as_ref())?.len();
+    let cold_product = runtime.compile_bytecode_product(source)?;
     let prepare_ns = elapsed_ns(started);
+    let cache_hits_before_warm = runtime.compiled_product_cache_hits();
+    let started = Instant::now();
+    let warm_product = runtime.compile_bytecode_product(source)?;
+    let cached_prepare_ns = elapsed_ns(started);
+    let cache_hits_after_warm = runtime.compiled_product_cache_hits();
+    if cold_product != warm_product {
+        return Err("compiled-product cache returned different bytes".to_owned());
+    }
+    if cache_hits_after_warm <= cache_hits_before_warm {
+        return Err("compiled-product cache did not record a warm hit".to_owned());
+    }
+    let program = std::rc::Rc::new(vm::decode_program(&warm_product.bytes)?);
+    let artifact_bytes = warm_product.bytes.len();
 
     let mut call = || {
         runtime
@@ -117,7 +129,9 @@ fn measure_bytecode(
     let first_result = call()?;
     let first_ns = elapsed_ns(started);
     verify_result(first_result, expected)?;
+    let jit_after_first = telemetry_json(&program);
     let samples_ns = sample_calls(&mut call, expected, windows, calls)?;
+    let jit_after_warm = telemetry_json(&program);
 
     Ok(json!({
         "status": "ok",
@@ -125,12 +139,18 @@ fn measure_bytecode(
         "workload": workload,
         "result": expected,
         "prepare_ns": prepare_ns,
+        "cached_prepare_ns": cached_prepare_ns,
+        "product_cache_entries": runtime.compiled_product_cache_len(),
+        "product_cache_hits": cache_hits_after_warm,
+        "product_cache_reused": true,
         "first_ns": first_ns,
         "samples_ns": samples_ns,
         "calls_per_window": calls,
         "artifact_bytes": artifact_bytes,
         "native_entry": Value::Null,
-        "jit": telemetry_json(&program),
+        "jit": jit_after_warm.clone(),
+        "jit_after_first": jit_after_first,
+        "jit_after_warm": jit_after_warm,
     }))
 }
 
@@ -143,9 +163,22 @@ fn measure_whole_wasm(
     windows: usize,
     calls: usize,
 ) -> Result<Value, String> {
+    let mut runtime = Runtime::core();
     let started = Instant::now();
-    let program = vm::compile_source(source).map_err(|error| error.to_string())?;
-    let artifact = compile_artifact(&program)?;
+    let cold_product = runtime.compile_whole_wasm_product(source)?;
+    let prepare_ns = elapsed_ns(started);
+    let cache_hits_before_warm = runtime.compiled_product_cache_hits();
+    let started = Instant::now();
+    let warm_product = runtime.compile_whole_wasm_product(source)?;
+    let cached_prepare_ns = elapsed_ns(started);
+    let cache_hits_after_warm = runtime.compiled_product_cache_hits();
+    if cold_product != warm_product {
+        return Err("compiled-product cache returned different bytes".to_owned());
+    }
+    if cache_hits_after_warm <= cache_hits_before_warm {
+        return Err("compiled-product cache did not record a warm hit".to_owned());
+    }
+    let artifact = warm_product.bytes.clone();
     let decoded = decode_artifact(&artifact)?;
     let native_entry = decoded
         .capabilities
@@ -153,7 +186,6 @@ fn measure_whole_wasm(
         .copied()
         .unwrap_or(false);
     let mut module = NativeModule::load(&artifact)?;
-    let prepare_ns = elapsed_ns(started);
 
     let mut call = || module.call_entry_i64().map(|value| value.to_string());
     let started = Instant::now();
@@ -168,6 +200,10 @@ fn measure_whole_wasm(
         "workload": workload,
         "result": expected,
         "prepare_ns": prepare_ns,
+        "cached_prepare_ns": cached_prepare_ns,
+        "product_cache_entries": runtime.compiled_product_cache_len(),
+        "product_cache_hits": cache_hits_after_warm,
+        "product_cache_reused": true,
         "first_ns": first_ns,
         "samples_ns": samples_ns,
         "calls_per_window": calls,

@@ -27,13 +27,37 @@ fn hot_loop_overflow_deopts_to_promoted_integer_arithmetic() {
 
 #[test]
 fn compiled_traces_survive_repeated_execution_of_one_program() {
+    crate::vm::machine::clear_cached_jits();
     let program =
         crate::compile_bytecode("(loop [i 0 acc 0] (if (< i 5000) (recur (+ i 1) (+ acc i)) acc))")
             .unwrap();
     assert_eq!(crate::execute_bytecode(&program).unwrap(), "12497500");
     assert!(crate::vm::machine::cached_trace_count(&program) > 0);
+    assert_eq!(crate::vm::machine::cached_jit_count(), 1);
     assert_eq!(crate::execute_bytecode(&program).unwrap(), "12497500");
     assert!(crate::vm::machine::cached_trace_count(&program) > 0);
+    assert_eq!(crate::vm::machine::cached_jit_count(), 1);
+    crate::vm::machine::clear_cached_jits();
+}
+
+#[test]
+fn compiled_code_metaspace_can_be_cleared_and_rebuilt() {
+    crate::vm::machine::clear_cached_jits();
+    let program =
+        crate::compile_bytecode("(loop [i 0 acc 0] (if (< i 5000) (recur (+ i 1) (+ acc i)) acc))")
+            .unwrap();
+
+    assert_eq!(crate::execute_bytecode(&program).unwrap(), "12497500");
+    assert!(crate::vm::machine::cached_trace_count(&program) > 0);
+    assert_eq!(crate::vm::machine::cached_jit_count(), 1);
+
+    crate::vm::machine::clear_cached_jits();
+    assert_eq!(crate::vm::machine::cached_jit_count(), 0);
+    assert_eq!(crate::vm::machine::cached_trace_count(&program), 0);
+
+    assert_eq!(crate::execute_bytecode(&program).unwrap(), "12497500");
+    assert!(crate::vm::machine::cached_trace_count(&program) > 0);
+    crate::vm::machine::clear_cached_jits();
 }
 
 #[test]

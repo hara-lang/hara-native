@@ -96,6 +96,9 @@ struct CachedJit {
 
 #[cfg(feature = "tracing-jit")]
 thread_local! {
+    // This thread-local cache is the Rust VM's compiled-code metaspace. It
+    // stores only optimization state; Programs, stores, and guest values stay
+    // owned by the executing context.
     static PROGRAM_JITS: RefCell<HashMap<usize, CachedJit>> = RefCell::new(HashMap::new());
 }
 
@@ -956,6 +959,20 @@ pub(crate) fn active_jit_telemetry() -> Vec<crate::jit::JitTelemetry> {
 #[cfg(feature = "tracing-jit")]
 pub(crate) fn cached_jit_telemetry(program: &Rc<Program>) -> crate::jit::JitTelemetry {
     cached_jit_runtime(program, crate::jit::runtime::JitRuntime::telemetry).unwrap_or_default()
+}
+
+#[cfg(all(test, feature = "tracing-jit"))]
+pub(crate) fn cached_jit_count() -> usize {
+    PROGRAM_JITS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|_, cached| cached.program.strong_count() > 0);
+        cache.len()
+    })
+}
+
+#[cfg(all(test, feature = "tracing-jit"))]
+pub(crate) fn clear_cached_jits() {
+    PROGRAM_JITS.with(|cache| cache.borrow_mut().clear());
 }
 
 /// Executes a validated program's entry function.

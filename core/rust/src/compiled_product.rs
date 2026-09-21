@@ -5,6 +5,7 @@
 //! description of the bytes they exchange.
 
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
 use std::collections::HashMap;
 
 pub const COMPILED_PRODUCT_MANIFEST_SCHEMA: &str = "hara.compiled-product.manifest/0-alpha";
@@ -182,11 +183,37 @@ impl CompiledProduct {
 #[derive(Default)]
 pub struct InMemoryProductCache {
     products: HashMap<ProductCacheKey, CompiledProduct>,
+    cache_hits: Cell<usize>,
 }
 
 impl InMemoryProductCache {
     pub fn get(&self, key: &ProductCacheKey) -> Option<&CompiledProduct> {
-        self.products.get(key)
+        let product = self.products.get(key);
+        if product.is_some() {
+            self.record_hit();
+        }
+        product
+    }
+
+    /// Finds a product with the same compiler identity while ignoring the
+    /// derived module digests used to verify the resulting artifact.
+    ///
+    /// Compilers use this lookup before producing the artifact. The source,
+    /// compiler, ABI, options, and target identify a deterministic request;
+    /// the module digest is only available after compilation.
+    pub fn get_by_identity(&self, key: &ProductCacheKey) -> Option<&CompiledProduct> {
+        let product = self.products.iter().find_map(|(candidate_key, product)| {
+            (candidate_key.kind == key.kind
+                && candidate_key.source_digest == key.source_digest
+                && candidate_key.compiler_id == key.compiler_id
+                && candidate_key.abi_version == key.abi_version
+                && candidate_key.options_digest == key.options_digest)
+                .then_some(product)
+        });
+        if product.is_some() {
+            self.record_hit();
+        }
+        product
     }
 
     pub fn insert(&mut self, product: CompiledProduct) -> Result<ProductCacheKey, String> {
@@ -208,8 +235,17 @@ impl InMemoryProductCache {
         self.products.is_empty()
     }
 
+    pub fn cache_hits(&self) -> usize {
+        self.cache_hits.get()
+    }
+
     pub fn clear(&mut self) {
         self.products.clear();
+        self.cache_hits.set(0);
+    }
+
+    fn record_hit(&self) {
+        self.cache_hits.set(self.cache_hits.get().saturating_add(1));
     }
 }
 
@@ -220,7 +256,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompiledProduct, CompiledProductKind, InMemoryProductCache};
+    use super::{CompiledProduct, CompiledProductKind, InMemoryProductCache, ProductCacheKey};
 
     fn product(bytes: &[u8]) -> CompiledProduct {
         CompiledProduct::new(
@@ -289,6 +325,24 @@ mod tests {
         );
 
         assert_ne!(first.cache_key(), second.cache_key());
+    }
+
+    #[test]
+    fn cache_can_find_a_deterministic_product_before_module_digest_is_known() {
+        let mut cache = InMemoryProductCache::default();
+        let first = product(b"first");
+        let key = cache.insert(first.clone()).unwrap();
+        let lookup = ProductCacheKey {
+            kind: key.kind,
+            source_digest: key.source_digest.clone(),
+            module_digests: Vec::new(),
+            compiler_id: key.compiler_id.clone(),
+            abi_version: key.abi_version.clone(),
+            options_digest: key.options_digest.clone(),
+        };
+
+        assert_eq!(cache.get_by_identity(&lookup), Some(&first));
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]

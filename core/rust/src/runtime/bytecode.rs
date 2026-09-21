@@ -77,9 +77,7 @@ impl SourceBytecodeCache {
         let fingerprint = if let Some(fingerprint) = cached_fingerprint {
             fingerprint
         } else {
-            let fingerprint = catalog
-                .content_fingerprint_dependencies(&[namespace])
-                .ok();
+            let fingerprint = catalog.content_fingerprint_dependencies(&[namespace]).ok();
             self.dependency_fingerprints
                 .borrow_mut()
                 .insert(namespace.into(), fingerprint);
@@ -114,11 +112,7 @@ impl SourceBytecodeCache {
         Self::path_for_in(directory, namespace, source).with_extension("ns")
     }
 
-    fn load(
-        &self,
-        namespace: &str,
-        source: &str,
-    ) -> Option<SourceBytecodeCacheEntry> {
+    fn load(&self, namespace: &str, source: &str) -> Option<SourceBytecodeCacheEntry> {
         let directory = self.directory_for(namespace)?;
         let suffix = directory
             .file_name()
@@ -133,9 +127,9 @@ impl SourceBytecodeCache {
         );
         for directory in directories {
             let path = Self::path_for_in(&directory, namespace, source);
-            let Ok(namespace_form) = std::fs::read_to_string(Self::namespace_path_for(
-                &directory, namespace, source,
-            )) else {
+            let Ok(namespace_form) =
+                std::fs::read_to_string(Self::namespace_path_for(&directory, namespace, source))
+            else {
                 continue;
             };
             let Ok(bytes) = std::fs::read(path) else {
@@ -147,7 +141,9 @@ impl SourceBytecodeCache {
             if program.namespace.as_deref() == Some(namespace) {
                 return Some(SourceBytecodeCacheEntry {
                     namespace_form,
-                    program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program)),
+                    program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(
+                        program,
+                    )),
                 });
             }
         }
@@ -181,12 +177,16 @@ impl SourceBytecodeCache {
             return;
         };
         if program.constants.len() != decoded.constants.len()
-            || !program.constants.iter().zip(&decoded.constants).all(|(before, after)| {
-                match (core::value_to_form(before), core::value_to_form(after)) {
-                    (Ok(before), Ok(after)) => before == after,
-                    _ => false,
-                }
-            })
+            || !program
+                .constants
+                .iter()
+                .zip(&decoded.constants)
+                .all(|(before, after)| {
+                    match (core::value_to_form(before), core::value_to_form(after)) {
+                        (Ok(before), Ok(after)) => before == after,
+                        _ => false,
+                    }
+                })
         {
             return;
         }
@@ -270,27 +270,30 @@ pub fn eval_bytecode_native(source: &str) -> Result<String, String> {
 
 impl Runtime {
     #[cfg(feature = "bytecode-vm")]
-    pub(crate) fn compile_bytecode_product(
+    pub fn compile_bytecode_product(
         &self,
         source: &str,
     ) -> Result<crate::compiled_product::CompiledProduct, String> {
         let source_digest = crate::compiled_product::sha256_hex(source.as_bytes());
         let compiler_id = format!("hara-runtime/{}", env!("CARGO_PKG_VERSION"));
         let options = format!("target=HBC0;namespace={}", self.current_namespace());
-        let program = self.compile_bytecode(source)?;
-        let bytes = vm::encode_program(program.as_ref())?;
-        let module_digest = crate::compiled_product::sha256_hex(&bytes);
-        let key = crate::compiled_product::ProductCacheKey::with_module_digests(
+        let lookup_key = crate::compiled_product::ProductCacheKey::new(
             crate::compiled_product::CompiledProductKind::HbcModule,
             source_digest.clone(),
             compiler_id.clone(),
             "hbc0",
             options.as_bytes(),
-            vec![module_digest],
         );
-        if let Some(product) = self.product_cache.borrow().get(&key).cloned() {
+        if let Some(product) = self
+            .product_cache
+            .borrow()
+            .get_by_identity(&lookup_key)
+            .cloned()
+        {
             return Ok(product);
         }
+        let program = self.compile_bytecode(source)?;
+        let bytes = vm::encode_program(program.as_ref())?;
         let product = crate::compiled_product::CompiledProduct::new(
             crate::compiled_product::CompiledProductKind::HbcModule,
             source_digest,
@@ -305,7 +308,7 @@ impl Runtime {
     }
 
     #[cfg(feature = "whole-wasm")]
-    pub(crate) fn compile_whole_wasm_product(
+    pub fn compile_whole_wasm_product(
         &self,
         source: &str,
     ) -> Result<crate::compiled_product::CompiledProduct, String> {
@@ -339,6 +342,25 @@ impl Runtime {
         );
         self.product_cache.borrow_mut().insert(product.clone())?;
         Ok(product)
+    }
+
+    /// Returns the number of immutable compiled products retained by this
+    /// runtime.
+    #[cfg(feature = "bytecode-vm")]
+    pub fn compiled_product_cache_len(&self) -> usize {
+        self.product_cache.borrow().len()
+    }
+
+    /// Returns the number of successful compiled-product cache lookups.
+    #[cfg(feature = "bytecode-vm")]
+    pub fn compiled_product_cache_hits(&self) -> usize {
+        self.product_cache.borrow().cache_hits()
+    }
+
+    /// Drops all immutable compiled products retained by this runtime.
+    #[cfg(feature = "bytecode-vm")]
+    pub fn clear_compiled_product_cache(&self) {
+        self.product_cache.borrow_mut().clear();
     }
 
     /// Installs the typed native driver behind `std.native.Kernel/*`.
@@ -931,7 +953,10 @@ mod source_cache_tests {
         let loaded = cache
             .load(namespace, source)
             .expect("stored source must be readable");
-        assert_eq!(loaded.program.program().namespace.as_deref(), Some(namespace));
+        assert_eq!(
+            loaded.program.program().namespace.as_deref(),
+            Some(namespace)
+        );
         assert_eq!(loaded.namespace_form, "(ns example.cache)");
         assert!(cache.load(namespace, "(+ 1 3)").is_none());
         assert!(cache.load("example.other", source).is_none());
@@ -946,8 +971,10 @@ mod source_cache_tests {
         program.namespace = Some(namespace.to_owned());
         let cache = SourceBytecodeCache::new(&root.0, [9; 32]);
         cache.store(namespace, source, "(ns example.quoted-metadata)", &program);
-        assert!(cache.load(namespace, source).is_none(),
-                "quoted definition metadata must not be discarded by a cache hit");
+        assert!(
+            cache.load(namespace, source).is_none(),
+            "quoted definition metadata must not be discarded by a cache hit"
+        );
     }
 
     #[test]
@@ -975,5 +1002,35 @@ mod source_cache_tests {
         let client = SourceBytecodeCache::with_catalog(&client_root, Some(&fallback), catalog);
 
         assert!(client.load(namespace, cached_source).is_some());
+    }
+}
+
+#[cfg(all(test, feature = "bytecode-vm"))]
+mod product_cache_tests {
+    use crate::Runtime;
+
+    #[test]
+    fn runtime_reuses_and_clears_compiled_products() {
+        let runtime = Runtime::core();
+        let first = runtime
+            .compile_bytecode_product("(+ 19 23)")
+            .expect("source must compile");
+        assert_eq!(runtime.compiled_product_cache_len(), 1);
+
+        let second = runtime
+            .compile_bytecode_product("(+ 19 23)")
+            .expect("cached source must compile");
+        assert_eq!(first, second);
+        assert_eq!(runtime.compiled_product_cache_len(), 1);
+        assert_eq!(runtime.compiled_product_cache_hits(), 1);
+
+        runtime.clear_compiled_product_cache();
+        assert_eq!(runtime.compiled_product_cache_len(), 0);
+        assert_eq!(runtime.compiled_product_cache_hits(), 0);
+        let after_clear = runtime
+            .compile_bytecode_product("(+ 19 23)")
+            .expect("source must recompile after clearing");
+        assert_eq!(after_clear, first);
+        assert_eq!(runtime.compiled_product_cache_len(), 1);
     }
 }

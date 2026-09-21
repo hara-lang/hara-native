@@ -34,26 +34,37 @@ public abstract class HbcBytecodeRootNode extends RootNode implements BytecodeRo
   }
 
   public static RootCallTarget compile(HaraLanguage language, HbcProgram program) {
-    HbcCodegenPlan plan = HbcCodegenPlan.analyze(program);
     HaraContext context = HaraLanguage.currentContext();
-    if (!plan.entryEligible() || !context.hbcNativeExecutionAllowed()) {
+    if (!context.hbcNativeExecutionAllowed()) {
       return compileFallback(language, program);
     }
-    return compileNative(language, plan, program.entry());
+    RootCallTarget linked = context.metaSpace().get(program, program.entry());
+    if (linked != null) return linked;
+    HbcCodegenPlan plan = HbcCodegenPlan.analyze(program);
+    if (!plan.entryEligible()) return compileFallback(language, program);
+    return context
+        .metaSpace()
+        .link(program, program.entry(), () -> compileNative(language, plan, program.entry()));
   }
 
   /** Returns a native call target for an eligible HBC prototype, or {@code null} for fallback. */
   public static RootCallTarget compileFunction(
       HaraLanguage language, HbcProgram program, int functionIndex) {
-    HbcCodegenPlan plan = HbcCodegenPlan.analyze(program);
     HaraContext context = HaraLanguage.currentContext();
-    if (functionIndex < 0
-        || functionIndex >= plan.functions().size()
-        || !plan.functions().get(functionIndex).eligible()
-        || !context.hbcNativeExecutionAllowed()) {
+    if (!context.hbcNativeExecutionAllowed()) {
       return null;
     }
-    return compileNative(language, plan, functionIndex);
+    RootCallTarget linked = context.metaSpace().get(program, functionIndex);
+    if (linked != null) return linked;
+    HbcCodegenPlan plan = HbcCodegenPlan.analyze(program);
+    if (functionIndex < 0
+        || functionIndex >= plan.functions().size()
+        || !plan.functions().get(functionIndex).eligible()) {
+      return null;
+    }
+    return context
+        .metaSpace()
+        .link(program, functionIndex, () -> compileNative(language, plan, functionIndex));
   }
 
   private static RootCallTarget compileFallback(HaraLanguage language, HbcProgram program) {
