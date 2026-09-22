@@ -73,6 +73,31 @@ public class HbxBundleCodecTest {
   }
 
   @Test
+  public void eagerBytecodeLoadingUsesTheContextLinker() {
+    HbxBundleCodec.Module eager =
+        new HbxBundleCodec.Module(
+            "fixture/hbx/meta",
+            "(ns fixture.hbx.meta)",
+            digest(7),
+            List.of(),
+            true,
+            HbcCodec.encode(program()));
+
+    try (Context polyglot = Context.newBuilder(HaraLanguage.ID).build()) {
+      polyglot.eval(HaraLanguage.ID, "nil");
+      polyglot.enter();
+      try {
+        HaraContext context = HaraLanguage.currentContext();
+        context.installBytecodeBundle(HbxBundleCodec.encode(List.of(eager)));
+
+        assertEquals(1, context.metaSpace().size());
+      } finally {
+        polyglot.leave();
+      }
+    }
+  }
+
+  @Test
   public void failedEagerInstallRestoresTheContextAndBundleIndex() {
     HbxBundleCodec.Module good =
         new HbxBundleCodec.Module(
