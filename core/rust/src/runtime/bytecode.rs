@@ -822,7 +822,7 @@ fn load_direct_native_namespace(
             artifact,
         } => DirectNativeBytecodeModule {
             namespace_form: namespace_form.clone(),
-            artifact: artifact.clone(),
+            image: DirectNativeBytecodeImage::Artifact(artifact.clone()),
             namespace_prepared: false,
         },
     };
