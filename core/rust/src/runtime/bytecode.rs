@@ -17,9 +17,19 @@ pub(crate) struct SourceBytecodeCache {
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+struct DirectNativeBytecodeModule {
+    namespace_form: String,
+    artifact: Vec<u8>,
+    /// Source compilation evaluates the namespace declaration to configure
+    /// the compiler. The resulting artifact must not evaluate that
+    /// declaration a second time when it enters the common loader.
+    namespace_prepared: bool,
+}
+
+#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 struct SourceBytecodeCacheEntry {
     namespace_form: String,
-    program: crate::direct_native::ValidatedProgram,
+    artifact: Vec<u8>,
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -141,9 +151,7 @@ impl SourceBytecodeCache {
             if program.namespace.as_deref() == Some(namespace) {
                 return Some(SourceBytecodeCacheEntry {
                     namespace_form,
-                    program: crate::direct_native::ValidatedProgram::from_artifact(Rc::new(
-                        program,
-                    )),
+                    artifact: bytes,
                 });
             }
         }
@@ -165,31 +173,9 @@ impl SourceBytecodeCache {
         if path.is_file() && namespace_path.is_file() {
             return;
         }
-        let Ok(bytes) = crate::vm::encode_program(program) else {
+        let Some(bytes) = portable_artifact(program) else {
             return;
         };
-        // HTA intentionally serializes data without process-local metadata.
-        // Source constants are executable syntax too: losing metadata on a
-        // quoted def can silently turn a dynamic Var into an ordinary Var.
-        // Keep such programs live and recompile next time instead of caching
-        // a different program. Unsupported syntax comparisons also fail closed.
-        let Ok(decoded) = crate::vm::decode_program(&bytes) else {
-            return;
-        };
-        if program.constants.len() != decoded.constants.len()
-            || !program
-                .constants
-                .iter()
-                .zip(&decoded.constants)
-                .all(|(before, after)| {
-                    match (core::value_to_form(before), core::value_to_form(after)) {
-                        (Ok(before), Ok(after)) => before == after,
-                        _ => false,
-                    }
-                })
-        {
-            return;
-        }
         if std::fs::create_dir_all(&directory).is_err() {
             return;
         }
@@ -206,6 +192,32 @@ impl SourceBytecodeCache {
         let _ = std::fs::rename(namespace_temporary, namespace_path);
         let _ = std::fs::rename(program_temporary, path);
     }
+}
+
+#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+fn portable_artifact(program: &crate::vm::Program) -> Option<Vec<u8>> {
+    let bytes = crate::vm::encode_program(program).ok()?;
+    // HTA intentionally serializes data without process-local metadata.
+    // Source constants are executable syntax too: losing metadata on a
+    // quoted def can silently turn a dynamic Var into an ordinary Var. Keep
+    // such programs out of the artifact pathway instead of loading a
+    // different program from the one that was compiled.
+    let decoded = crate::vm::decode_program(&bytes).ok()?;
+    if program.constants.len() != decoded.constants.len()
+        || !program
+            .constants
+            .iter()
+            .zip(&decoded.constants)
+            .all(|(before, after)| {
+                match (core::value_to_form(before), core::value_to_form(after)) {
+                    (Ok(before), Ok(after)) => before == after,
+                    _ => false,
+                }
+            })
+    {
+        return None;
+    }
+    Some(bytes)
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -788,7 +800,7 @@ fn load_direct_native_namespace(
 ) -> Result<(), String> {
     let profile = std::env::var_os("HARA_NATIVE_PROFILE_NAMESPACE_LOADS").is_some();
     let started = std::time::Instant::now();
-    let program = match &resource {
+    let module = match &resource {
         core::NamespaceResource::Source(_) => {
             compile_direct_native_source_namespace(name, &resource, environment, source_cache)?
         }
@@ -799,23 +811,13 @@ fn load_direct_native_namespace(
         core::NamespaceResource::Bytecode {
             namespace_form,
             artifact,
-        } => {
-            for (index, form) in kernel::parse_forms(&namespace_form)?
-                .into_iter()
-                .enumerate()
-            {
-                let namespace_value = core::form_to_value(&form)?;
-                core::eval_bytecode_management_in(&namespace_value, environment)
-                    .map_err(|error| format!("{name}: namespace form {}: {error}", index + 1))?;
-            }
-            let registry = core::namespace_registry()?;
-            registry.set_current(name);
-            let mut program = vm::decode_program(&artifact)
-                .map_err(|error| format!("{name}: direct-native artifact: {error}"))?;
-            program.namespace = Some(name.to_owned());
-            crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program))
-        }
+        } => DirectNativeBytecodeModule {
+            namespace_form: namespace_form.clone(),
+            artifact: artifact.clone(),
+            namespace_prepared: false,
+        },
     };
+    let program = load_direct_native_bytecode_module(name, module, environment)?;
     let result = engine
         .execute_blocking_validated_with_multimethods(program, multimethods.clone())
         .map(|_| ())
@@ -832,34 +834,56 @@ fn load_direct_native_namespace(
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+fn load_direct_native_bytecode_module(
+    name: &str,
+    module: DirectNativeBytecodeModule,
+    environment: &mut HashMap<String, core::Value>,
+) -> Result<crate::direct_native::ValidatedProgram, String> {
+    if !module.namespace_prepared {
+        for (index, form) in kernel::parse_forms(&module.namespace_form)?
+            .into_iter()
+            .enumerate()
+        {
+            let namespace_value = core::form_to_value(&form)?;
+            core::eval_bytecode_management_in(&namespace_value, environment)
+                .map_err(|error| format!("{name}: namespace form {}: {error}", index + 1))?;
+        }
+    }
+    let registry = core::namespace_registry()?;
+    registry.set_current(name);
+    let mut program = vm::decode_program(&module.artifact)
+        .map_err(|error| format!("{name}: direct-native artifact: {error}"))?;
+    if let Some(namespace) = program.namespace.as_deref() {
+        if namespace != name {
+            return Err(format!(
+                "{name}: direct-native artifact namespace mismatch: {namespace}"
+            ));
+        }
+    } else {
+        program.namespace = Some(name.to_owned());
+    }
+    Ok(crate::direct_native::ValidatedProgram::from_artifact(
+        Rc::new(program),
+    ))
+}
+
+#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 fn compile_direct_native_source_namespace(
     name: &str,
     resource: &core::NamespaceResource,
     environment: &mut HashMap<String, core::Value>,
     source_cache: Option<&SourceBytecodeCache>,
-) -> Result<crate::direct_native::ValidatedProgram, String> {
+) -> Result<DirectNativeBytecodeModule, String> {
     let source = core::read_source_resource(resource, name)?;
     if let Some(entry) = source_cache.and_then(|cache| cache.load(name, &source)) {
         if std::env::var_os("HARA_NATIVE_PROFILE_NAMESPACE_LOADS").is_some() {
             eprintln!("PROFILE source-cache {name}=hit");
         }
-        let forms = kernel::read_forms(&entry.namespace_form).map_err(|error| error.to_string())?;
-        let namespace = forms
-            .first()
-            .filter(|form| {
-                matches!(
-                    core::form_without_metadata(&form.form),
-                    kernel::Form::List(items)
-                        if matches!(items.first(), Some(kernel::Form::Symbol(operator)) if operator == "ns" || operator == "ns+")
-                )
-            })
-            .ok_or_else(|| format!("{name}: cached namespace declaration is invalid"))?;
-        let namespace_value = core::form_to_value(&namespace.form)?;
-        core::eval_bytecode_management_in(&namespace_value, environment)
-            .map_err(|error| format!("{name}: namespace declaration: {error}"))?;
-        let registry = core::namespace_registry()?;
-        registry.set_current(name);
-        return Ok(entry.program);
+        return Ok(DirectNativeBytecodeModule {
+            namespace_form: entry.namespace_form,
+            artifact: entry.artifact,
+            namespace_prepared: false,
+        });
     }
     if std::env::var_os("HARA_NATIVE_PROFILE_NAMESPACE_LOADS").is_some() {
         eprintln!("PROFILE source-cache {name}=miss");
@@ -901,9 +925,18 @@ fn compile_direct_native_source_namespace(
     if let (Some(cache), Some(namespace_form)) = (source_cache, namespace_form.as_deref()) {
         cache.store(name, &source, namespace_form, &program);
     }
-    Ok(crate::direct_native::ValidatedProgram::from_compiler(
-        Rc::new(program),
-    ))
+    let artifact = portable_artifact(&program).ok_or_else(|| {
+        format!(
+            "{name}: direct-native compilation did not produce a portable HBC0 artifact"
+        )
+    })?;
+    Ok(DirectNativeBytecodeModule {
+        namespace_form: namespace_form.unwrap_or_default(),
+        artifact,
+        // The source compiler evaluated the namespace declaration above so it
+        // could construct the correct generated namespace configuration.
+        namespace_prepared: true,
+    })
 }
 
 #[cfg(all(
@@ -953,8 +986,10 @@ mod source_cache_tests {
         let loaded = cache
             .load(namespace, source)
             .expect("stored source must be readable");
+        let loaded_program = crate::vm::decode_program(&loaded.artifact)
+            .expect("stored artifact must remain decodable");
         assert_eq!(
-            loaded.program.program().namespace.as_deref(),
+            loaded_program.namespace.as_deref(),
             Some(namespace)
         );
         assert_eq!(loaded.namespace_form, "(ns example.cache)");
