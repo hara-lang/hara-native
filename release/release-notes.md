@@ -9,12 +9,13 @@ and the user-facing `hara` CLI remain in the Hara source/package repositories.
 
 - Adds context-owned HBC link metaspace storage so repeated eligible function
   links in one host context reuse their generated call targets safely.
+- Routes source and packaged namespaces through one HBC0/HBX0 loading boundary:
+  source materializes bytecode, then the host linker/execution tier loads it.
 - Adds deterministic compiled-product cache identity and lifecycle telemetry to
   the native runtime.
-- The metaspace is not on the initial direct-native source namespace load path;
-  `lang.core` loading continues to use the persistent source-bytecode cache.
-  This release does not claim an initial `lang.core` load-time speedup from
-  metaspace.
+- JVM HBX loading now reaches metaspace for eligible HBC links. The release
+  does not claim an end-to-end cold-load speedup for `lang.core`; eligibility
+  and host-specific setup still determine whether a module is linked natively.
 
 
 ### Delivered artifacts
