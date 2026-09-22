@@ -17,9 +17,18 @@ pub(crate) struct SourceBytecodeCache {
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
+enum DirectNativeBytecodeImage {
+    Artifact(Vec<u8>),
+    /// A compiler result whose process-local metadata cannot be represented
+    /// by HBC0. This is deliberately not cacheable; it still uses the same
+    /// namespace/link loader after materialization.
+    Compiler(Rc<crate::vm::Program>),
+}
+
+#[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
 struct DirectNativeBytecodeModule {
     namespace_form: String,
-    artifact: Vec<u8>,
+    image: DirectNativeBytecodeImage,
     /// Source compilation evaluates the namespace declaration to configure
     /// the compiler. The resulting artifact must not evaluate that
     /// declaration a second time when it enters the common loader.
@@ -851,20 +860,26 @@ fn load_direct_native_bytecode_module(
     }
     let registry = core::namespace_registry()?;
     registry.set_current(name);
-    let mut program = vm::decode_program(&module.artifact)
-        .map_err(|error| format!("{name}: direct-native artifact: {error}"))?;
-    if let Some(namespace) = program.namespace.as_deref() {
-        if namespace != name {
-            return Err(format!(
-                "{name}: direct-native artifact namespace mismatch: {namespace}"
-            ));
+    let program = match module.image {
+        DirectNativeBytecodeImage::Artifact(artifact) => {
+            let mut program = vm::decode_program(&artifact)
+                .map_err(|error| format!("{name}: direct-native artifact: {error}"))?;
+            if let Some(namespace) = program.namespace.as_deref() {
+                if namespace != name {
+                    return Err(format!(
+                        "{name}: direct-native artifact namespace mismatch: {namespace}"
+                    ));
+                }
+            } else {
+                program.namespace = Some(name.to_owned());
+            }
+            crate::direct_native::ValidatedProgram::from_artifact(Rc::new(program))
         }
-    } else {
-        program.namespace = Some(name.to_owned());
-    }
-    Ok(crate::direct_native::ValidatedProgram::from_artifact(
-        Rc::new(program),
-    ))
+        DirectNativeBytecodeImage::Compiler(program) => {
+            crate::direct_native::ValidatedProgram::from_compiler(program)
+        }
+    };
+    Ok(program)
 }
 
 #[cfg(all(feature = "direct-native", not(target_arch = "wasm32")))]
@@ -881,7 +896,7 @@ fn compile_direct_native_source_namespace(
         }
         return Ok(DirectNativeBytecodeModule {
             namespace_form: entry.namespace_form,
-            artifact: entry.artifact,
+            image: DirectNativeBytecodeImage::Artifact(entry.artifact),
             namespace_prepared: false,
         });
     }
@@ -925,14 +940,12 @@ fn compile_direct_native_source_namespace(
     if let (Some(cache), Some(namespace_form)) = (source_cache, namespace_form.as_deref()) {
         cache.store(name, &source, namespace_form, &program);
     }
-    let artifact = portable_artifact(&program).ok_or_else(|| {
-        format!(
-            "{name}: direct-native compilation did not produce a portable HBC0 artifact"
-        )
-    })?;
+    let image = portable_artifact(&program)
+        .map(DirectNativeBytecodeImage::Artifact)
+        .unwrap_or_else(|| DirectNativeBytecodeImage::Compiler(Rc::new(program)));
     Ok(DirectNativeBytecodeModule {
         namespace_form: namespace_form.unwrap_or_default(),
-        artifact,
+        image,
         // The source compiler evaluated the namespace declaration above so it
         // could construct the correct generated namespace configuration.
         namespace_prepared: true,
