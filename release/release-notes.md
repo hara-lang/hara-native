@@ -5,6 +5,19 @@ This release delivers the Rust CLI, JVM host, browser packages, and trusted
 provider adapters; canonical HAL, provider package manifests, HARP archives,
 and the user-facing `hara` CLI remain in the Hara source/package repositories.
 
+### Highlights
+
+- Adds context-owned HBC link metaspace storage so repeated eligible function
+  links in one host context reuse their generated call targets safely.
+- Routes source and packaged namespaces through one HBC0/HBX0 loading boundary:
+  source materializes bytecode, then the host linker/execution tier loads it.
+- Adds deterministic compiled-product cache identity and lifecycle telemetry to
+  the native runtime.
+- JVM HBX loading now reaches metaspace for eligible HBC links. The release
+  does not claim an end-to-end cold-load speedup for `lang.core`; eligibility
+  and host-specific setup still determine whether a module is linked natively.
+
+
 ### Delivered artifacts
 
 - Native CLI archives for Linux x86_64, Linux ARM64, macOS Intel, and Apple
