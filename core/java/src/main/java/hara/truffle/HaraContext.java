@@ -40,6 +40,7 @@ import hara.lang.protocol.IConj;
 import hara.lang.protocol.ICons;
 import hara.lang.protocol.IEmpty;
 import hara.lang.protocol.IPushLast;
+import hara.truffle.bytecode.HbcBytecodeRootNode;
 import hara.truffle.bytecode.HbcProgram;
 import hara.lang.protocol.INth;
 import hara.lang.protocol.IPromise;
@@ -2130,7 +2131,11 @@ public final class HaraContext {
       currentNamespace = namespace(module.namespace());
       installHbcTypes(
           program.schemaTypes(), program.functionTypes(), program.inferredFunctionTypes());
-      HbcMachine.execute(program, this);
+      // Bundle loading and ordinary HBC evaluation must enter through the
+      // same linker. The linker may select the generated Truffle tier or its
+      // portable-machine fallback, while retaining the program identity in
+      // this context's metaspace when the generated tier is eligible.
+      HbcBytecodeRootNode.compile(HaraLanguage.currentLanguage(), program).call();
       if (FOUNDATION_NAMESPACE.equals(target)) captureSequenceIntrinsics();
       if (trace) System.err.println("HBX0 load done " + target);
       return namespaces.get(target);
